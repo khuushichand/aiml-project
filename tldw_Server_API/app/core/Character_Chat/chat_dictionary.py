@@ -93,7 +93,15 @@ _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS = (
 
 # Whitelisted field names for dynamic UPDATE statements (SQL injection prevention)
 _DICTIONARY_UPDATE_FIELDS = frozenset({
-    "name", "description", "is_active", "default_token_budget", "updated_at", "version"
+    "name",
+    "description",
+    "category",
+    "tags",
+    "included_dictionary_ids",
+    "is_active",
+    "default_token_budget",
+    "updated_at",
+    "version",
 })
 _ENTRY_UPDATE_FIELDS = frozenset({
     "key", "content", "is_regex", "probability", "max_replacements",
@@ -526,6 +534,9 @@ class ChatDictionaryService:
                             id SERIAL PRIMARY KEY,
                             name TEXT NOT NULL UNIQUE,
                             description TEXT,
+                            category TEXT,
+                            tags TEXT,
+                            included_dictionary_ids TEXT,
                             is_active BOOLEAN DEFAULT TRUE,
                             default_token_budget INTEGER NULL,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -580,6 +591,25 @@ class ChatDictionaryService:
                         )
                         """
                     )
+
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS dictionary_version_history (
+                            id SERIAL PRIMARY KEY,
+                            dictionary_id INTEGER NOT NULL,
+                            revision INTEGER NOT NULL,
+                            source_dictionary_version INTEGER NULL,
+                            change_type TEXT NOT NULL,
+                            summary TEXT NULL,
+                            entry_count INTEGER DEFAULT 0,
+                            dictionary_snapshot TEXT NOT NULL,
+                            entries_snapshot TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(dictionary_id, revision),
+                            FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
                 else:
                     conn.execute(
                         """
@@ -587,6 +617,9 @@ class ChatDictionaryService:
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             name TEXT NOT NULL UNIQUE,
                             description TEXT,
+                            category TEXT,
+                            tags TEXT,
+                            included_dictionary_ids TEXT,
                             is_active BOOLEAN DEFAULT 1,
                             default_token_budget INTEGER,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -642,6 +675,25 @@ class ChatDictionaryService:
                         """
                     )
 
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS dictionary_version_history (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            dictionary_id INTEGER NOT NULL,
+                            revision INTEGER NOT NULL,
+                            source_dictionary_version INTEGER,
+                            change_type TEXT NOT NULL,
+                            summary TEXT,
+                            entry_count INTEGER DEFAULT 0,
+                            dictionary_snapshot TEXT NOT NULL,
+                            entries_snapshot TEXT NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(dictionary_id, revision),
+                            FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_dict_entries_dict_id ON dictionary_entries(dictionary_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_dict_entries_group ON dictionary_entries(group_name)")
@@ -653,11 +705,17 @@ class ChatDictionaryService:
                     "CREATE INDEX IF NOT EXISTS idx_dict_transform_activity_dictionary "
                     "ON dictionary_transform_activity(dictionary_id, created_at)"
                 )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_dict_version_history_lookup "
+                    "ON dictionary_version_history(dictionary_id, revision DESC)"
+                )
 
                 self._ensure_entry_sort_order_column(conn)
                 self._ensure_entry_usage_columns(conn)
                 self._ensure_dictionary_usage_columns(conn)
                 self._ensure_dictionary_default_token_budget_column(conn)
+                self._ensure_dictionary_metadata_columns(conn)
+                self._ensure_dictionary_version_history_table(conn)
                 self._normalize_all_entry_sort_orders(conn)
 
                 conn.commit()
@@ -850,6 +908,133 @@ class ChatDictionaryService:
                 return
             raise
 
+    def _ensure_dictionary_metadata_columns(self, conn: Any) -> None:
+        """Ensure chat_dictionaries has metadata columns for category/tags."""
+        try:
+            if self.db.backend_type == BackendType.POSTGRESQL:
+                category_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'chat_dictionaries'
+                      AND column_name = 'category'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not category_row:
+                    conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN category TEXT NULL")
+
+                tags_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'chat_dictionaries'
+                      AND column_name = 'tags'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not tags_row:
+                    conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN tags TEXT NULL")
+
+                includes_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'chat_dictionaries'
+                      AND column_name = 'included_dictionary_ids'
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if not includes_row:
+                    conn.execute(
+                        "ALTER TABLE chat_dictionaries ADD COLUMN included_dictionary_ids TEXT NULL"
+                    )
+                return
+
+            rows = conn.execute("PRAGMA table_info(chat_dictionaries)").fetchall()
+            column_names: set[str] = set()
+            for row in rows:
+                if isinstance(row, dict):
+                    name = row.get("name")
+                elif hasattr(row, "_mapping"):
+                    name = row._mapping.get("name")
+                else:
+                    name = row[1] if len(row) > 1 else None
+                if isinstance(name, str):
+                    column_names.add(name)
+
+            if "category" not in column_names:
+                conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN category TEXT")
+            if "tags" not in column_names:
+                conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN tags TEXT")
+            if "included_dictionary_ids" not in column_names:
+                conn.execute("ALTER TABLE chat_dictionaries ADD COLUMN included_dictionary_ids TEXT")
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            message = str(e).lower()
+            if "duplicate column" in message or "already exists" in message:
+                return
+            raise
+
+    def _ensure_dictionary_version_history_table(self, conn: Any) -> None:
+        """Ensure dictionary version-history table and indexes exist."""
+        try:
+            if self.db.backend_type == BackendType.POSTGRESQL:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS dictionary_version_history (
+                        id SERIAL PRIMARY KEY,
+                        dictionary_id INTEGER NOT NULL,
+                        revision INTEGER NOT NULL,
+                        source_dictionary_version INTEGER NULL,
+                        change_type TEXT NOT NULL,
+                        summary TEXT NULL,
+                        entry_count INTEGER DEFAULT 0,
+                        dictionary_snapshot TEXT NOT NULL,
+                        entries_snapshot TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(dictionary_id, revision),
+                        FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dict_version_history_lookup
+                    ON dictionary_version_history(dictionary_id, revision DESC)
+                    """
+                )
+                return
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dictionary_version_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dictionary_id INTEGER NOT NULL,
+                    revision INTEGER NOT NULL,
+                    source_dictionary_version INTEGER,
+                    change_type TEXT NOT NULL,
+                    summary TEXT,
+                    entry_count INTEGER DEFAULT 0,
+                    dictionary_snapshot TEXT NOT NULL,
+                    entries_snapshot TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(dictionary_id, revision),
+                    FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_dict_version_history_lookup
+                ON dictionary_version_history(dictionary_id, revision DESC)
+                """
+            )
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            message = str(e).lower()
+            if "already exists" in message:
+                return
+            raise
+
     def _normalize_all_entry_sort_orders(self, conn: Any) -> None:
         """Normalize sort_order values to a contiguous 1..N sequence per dictionary."""
         dict_rows = conn.execute("SELECT id FROM chat_dictionaries").fetchall()
@@ -901,6 +1086,9 @@ class ChatDictionaryService:
         name: str,
         description: Optional[str] = None,
         default_token_budget: Optional[int] = None,
+        category: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        included_dictionary_ids: Optional[list[int]] = None,
     ) -> int:
         """
         Create a new chat dictionary for the user.
@@ -917,11 +1105,30 @@ class ChatDictionaryService:
         """
         try:
             with self.db.get_connection() as conn:
+                normalized_includes = self._validate_included_dictionary_ids(
+                    conn,
+                    dictionary_id=None,
+                    included_dictionary_ids=included_dictionary_ids or [],
+                )
                 insert_sql = """
-                    INSERT INTO chat_dictionaries (name, description, default_token_budget)
-                    VALUES (?, ?, ?)
+                    INSERT INTO chat_dictionaries (
+                        name,
+                        description,
+                        category,
+                        tags,
+                        included_dictionary_ids,
+                        default_token_budget
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """
-                params = (name, description, self._coerce_positive_int(default_token_budget))
+                params = (
+                    name,
+                    description,
+                    self._normalize_dictionary_category(category),
+                    self._serialize_dictionary_tags(tags),
+                    self._serialize_included_dictionary_ids(normalized_includes),
+                    self._coerce_positive_int(default_token_budget),
+                )
                 if self.db.backend_type == BackendType.POSTGRESQL:
                     insert_sql += " RETURNING id"
 
@@ -945,6 +1152,13 @@ class ChatDictionaryService:
                 if dictionary_id is None:
                     raise CharactersRAGDBError("Database did not return a dictionary id.")
 
+                self._create_dictionary_version_snapshot(
+                    conn,
+                    int(dictionary_id),
+                    change_type="create",
+                    summary="Dictionary created",
+                    include_deleted=True,
+                )
                 conn.commit()
                 logger.info(f"Created dictionary '{name}' with ID {dictionary_id}")
                 self._invalidate_cache()
@@ -990,7 +1204,7 @@ class ChatDictionaryService:
 
                 row = cursor.fetchone()
                 if row:
-                    return dict(row)
+                    return self._normalize_dictionary_row(dict(row))
                 return None
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
@@ -1017,7 +1231,7 @@ class ChatDictionaryService:
                 query += " ORDER BY name"
 
                 cursor = conn.execute(query, tuple(params))
-                return [dict(row) for row in cursor.fetchall()]
+                return [self._normalize_dictionary_row(dict(row)) for row in cursor.fetchall()]
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries: {e}")
@@ -1056,10 +1270,320 @@ class ChatDictionaryService:
                 query += " ORDER BY d.name"
 
                 cursor = conn.execute(query, tuple(params))
-                return [dict(row) for row in cursor.fetchall()]
+                return [self._normalize_dictionary_row(dict(row)) for row in cursor.fetchall()]
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries with counts: {e}")
             raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}") from e
+
+    @staticmethod
+    def _normalize_dictionary_category(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @classmethod
+    def _normalize_dictionary_tags(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        raw_values: list[Any]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = [part.strip() for part in stripped.split(",")]
+            if isinstance(parsed, (list, tuple, set)):
+                raw_values = list(parsed)
+            else:
+                raw_values = [parsed]
+        elif isinstance(value, (list, tuple, set)):
+            raw_values = list(value)
+        else:
+            return []
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in raw_values:
+            if item is None:
+                continue
+            tag = str(item).strip()
+            if not tag:
+                continue
+            dedupe_key = tag.lower()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            normalized.append(tag)
+        return normalized[:20]
+
+    @staticmethod
+    def _normalize_included_dictionary_ids(value: Any) -> list[int]:
+        if value is None:
+            return []
+        raw_values: list[Any]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = [part.strip() for part in stripped.split(",")]
+            if isinstance(parsed, (list, tuple, set)):
+                raw_values = list(parsed)
+            else:
+                raw_values = [parsed]
+        elif isinstance(value, (list, tuple, set)):
+            raw_values = list(value)
+        else:
+            return []
+
+        normalized: list[int] = []
+        seen: set[int] = set()
+        for raw in raw_values:
+            if raw is None or isinstance(raw, bool):
+                continue
+            try:
+                dictionary_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if dictionary_id <= 0 or dictionary_id in seen:
+                continue
+            seen.add(dictionary_id)
+            normalized.append(dictionary_id)
+        return normalized[:50]
+
+    @classmethod
+    def _serialize_included_dictionary_ids(cls, value: Any) -> Optional[str]:
+        normalized = cls._normalize_included_dictionary_ids(value)
+        if not normalized:
+            return None
+        return json.dumps(normalized)
+
+    def _validate_included_dictionary_ids(
+        self,
+        conn: Any,
+        *,
+        dictionary_id: Optional[int],
+        included_dictionary_ids: list[int],
+    ) -> list[int]:
+        normalized = self._normalize_included_dictionary_ids(included_dictionary_ids)
+        if not normalized:
+            return []
+
+        if dictionary_id is not None:
+            dictionary_id_int = int(dictionary_id)
+            if dictionary_id_int in normalized:
+                raise InputError("Dictionary cannot include itself")
+        else:
+            dictionary_id_int = None
+
+        placeholders = ", ".join("?" for _ in normalized)
+        rows = conn.execute(
+            f"""
+            SELECT id
+            FROM chat_dictionaries
+            WHERE deleted = ? AND id IN ({placeholders})
+            """,
+            tuple([False, *normalized]),
+        ).fetchall()
+        found_ids: set[int] = set()
+        for row in rows:
+            if isinstance(row, dict):
+                raw_id = row.get("id")
+            elif hasattr(row, "_mapping"):
+                raw_id = row._mapping.get("id")
+            else:
+                raw_id = row[0] if row else None
+            if raw_id is not None:
+                found_ids.add(int(raw_id))
+        missing_ids = [dictionary_ref for dictionary_ref in normalized if dictionary_ref not in found_ids]
+        if missing_ids:
+            raise InputError(f"Included dictionaries not found: {missing_ids}")
+
+        if dictionary_id_int is None:
+            return normalized
+
+        existing_rows = conn.execute(
+            """
+            SELECT id, included_dictionary_ids
+            FROM chat_dictionaries
+            WHERE deleted = ?
+            """,
+            (False,),
+        ).fetchall()
+        include_map: dict[int, list[int]] = {}
+        for row in existing_rows:
+            row_dict = dict(row)
+            row_dictionary_id = self._coerce_positive_int(row_dict.get("id"))
+            if row_dictionary_id is None:
+                continue
+            include_map[row_dictionary_id] = self._normalize_included_dictionary_ids(
+                row_dict.get("included_dictionary_ids")
+            )
+        include_map[dictionary_id_int] = normalized
+
+        visiting: set[int] = set()
+        visited: set[int] = set()
+        path: list[int] = []
+
+        def _visit(current_dictionary_id: int) -> None:
+            if current_dictionary_id in visited:
+                return
+            if current_dictionary_id in visiting:
+                cycle_start_index = path.index(current_dictionary_id) if current_dictionary_id in path else 0
+                cycle_path = path[cycle_start_index:] + [current_dictionary_id]
+                raise InputError(
+                    f"Dictionary include cycle detected: {' -> '.join(str(item) for item in cycle_path)}"
+                )
+            visiting.add(current_dictionary_id)
+            path.append(current_dictionary_id)
+            for included_id in include_map.get(current_dictionary_id, []):
+                if included_id not in include_map:
+                    continue
+                _visit(included_id)
+            path.pop()
+            visiting.remove(current_dictionary_id)
+            visited.add(current_dictionary_id)
+
+        _visit(dictionary_id_int)
+        return normalized
+
+    @classmethod
+    def _serialize_dictionary_tags(cls, value: Any) -> Optional[str]:
+        normalized = cls._normalize_dictionary_tags(value)
+        if not normalized:
+            return None
+        return json.dumps(normalized)
+
+    @classmethod
+    def _normalize_dictionary_row(cls, row: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(row)
+        normalized["category"] = cls._normalize_dictionary_category(normalized.get("category"))
+        normalized["tags"] = cls._normalize_dictionary_tags(normalized.get("tags"))
+        normalized["included_dictionary_ids"] = cls._normalize_included_dictionary_ids(
+            normalized.get("included_dictionary_ids")
+        )
+        return normalized
+
+    @staticmethod
+    def _json_serialize_default(value: Any) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    def _build_entry_snapshot_payload(self, row_dict: dict[str, Any]) -> dict[str, Any]:
+        entry = ChatDictionaryEntry.from_dict(row_dict).to_dict()
+        entry["dictionary_id"] = row_dict.get("dictionary_id")
+        entry["sort_order"] = row_dict.get("sort_order")
+        entry["usage_count"] = int(row_dict.get("usage_count") or 0)
+        entry["last_used_at"] = row_dict.get("last_used_at")
+        entry["created_at"] = row_dict.get("created_at")
+        entry["updated_at"] = row_dict.get("updated_at")
+        if not entry.get("group") and row_dict.get("group_name"):
+            entry["group"] = row_dict.get("group_name")
+        return entry
+
+    def _fetch_snapshot_state(
+        self,
+        conn: Any,
+        dictionary_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+        where_clause = "id = ?"
+        params: list[Any] = [int(dictionary_id)]
+        if not include_deleted:
+            where_clause += " AND deleted = ?"
+            params.append(False)
+
+        dictionary_row = conn.execute(
+            f"SELECT * FROM chat_dictionaries WHERE {where_clause} LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        if not dictionary_row:
+            return None, []
+
+        dictionary_payload = self._normalize_dictionary_row(dict(dictionary_row))
+
+        entry_rows = conn.execute(
+            """
+            SELECT *
+            FROM dictionary_entries
+            WHERE dictionary_id = ?
+            ORDER BY COALESCE(sort_order, id), id
+            """,
+            (int(dictionary_id),),
+        ).fetchall()
+        entries_payload = [
+            self._build_entry_snapshot_payload(dict(entry_row))
+            for entry_row in entry_rows
+        ]
+        return dictionary_payload, entries_payload
+
+    def _create_dictionary_version_snapshot(
+        self,
+        conn: Any,
+        dictionary_id: int,
+        *,
+        change_type: str,
+        summary: Optional[str] = None,
+        include_deleted: bool = False,
+    ) -> Optional[int]:
+        dictionary_payload, entries_payload = self._fetch_snapshot_state(
+            conn,
+            dictionary_id,
+            include_deleted=include_deleted,
+        )
+        if dictionary_payload is None:
+            return None
+
+        revision_row = conn.execute(
+            """
+            SELECT COALESCE(MAX(revision), 0) + 1 AS next_revision
+            FROM dictionary_version_history
+            WHERE dictionary_id = ?
+            """,
+            (int(dictionary_id),),
+        ).fetchone()
+        if isinstance(revision_row, dict):
+            next_revision_raw = revision_row.get("next_revision")
+        elif hasattr(revision_row, "_mapping"):
+            next_revision_raw = revision_row._mapping.get("next_revision")
+        else:
+            next_revision_raw = revision_row[0] if revision_row else 1
+        next_revision = int(next_revision_raw or 1)
+
+        conn.execute(
+            """
+            INSERT INTO dictionary_version_history
+            (
+                dictionary_id,
+                revision,
+                source_dictionary_version,
+                change_type,
+                summary,
+                entry_count,
+                dictionary_snapshot,
+                entries_snapshot
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(dictionary_id),
+                next_revision,
+                self._coerce_positive_int(dictionary_payload.get("version")),
+                str(change_type).strip() or "unspecified",
+                summary.strip() if isinstance(summary, str) and summary.strip() else None,
+                len(entries_payload),
+                json.dumps(dictionary_payload, default=self._json_serialize_default),
+                json.dumps(entries_payload, default=self._json_serialize_default),
+            ),
+        )
+        return next_revision
 
     @staticmethod
     def _coerce_dictionary_id(value: Any) -> Optional[int]:
@@ -1252,8 +1776,14 @@ class ChatDictionaryService:
         dictionary_id: Optional[int] = None,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        category: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        included_dictionary_ids: Optional[list[int]] = None,
         is_active: Optional[bool] = None,
         default_token_budget: Optional[int] = None,
+        update_category: bool = False,
+        update_tags: bool = False,
+        update_included_dictionary_ids: bool = False,
         update_default_token_budget: bool = False,
         expected_version: Optional[int] = None,
         **kwargs,
@@ -1282,19 +1812,42 @@ class ChatDictionaryService:
                 expected_version = kwargs.get("version")
             updates: list[str] = []
             params: list[Any] = []
+            changed_fields: list[str] = []
 
             if name is not None:
                 updates.append("name = ?")
                 params.append(name)
+                changed_fields.append("name")
             if description is not None:
                 updates.append("description = ?")
                 params.append(description)
+                changed_fields.append("description")
+            if update_category:
+                updates.append("category = ?")
+                params.append(self._normalize_dictionary_category(category))
+                changed_fields.append("category")
+            if update_tags:
+                updates.append("tags = ?")
+                params.append(self._serialize_dictionary_tags(tags))
+                changed_fields.append("tags")
+            if update_included_dictionary_ids:
+                with self.db.get_connection() as conn:
+                    normalized_includes = self._validate_included_dictionary_ids(
+                        conn,
+                        dictionary_id=int(dictionary_id) if dictionary_id is not None else None,
+                        included_dictionary_ids=included_dictionary_ids or [],
+                    )
+                updates.append("included_dictionary_ids = ?")
+                params.append(self._serialize_included_dictionary_ids(normalized_includes))
+                changed_fields.append("included_dictionary_ids")
             if is_active is not None:
                 updates.append("is_active = ?")
                 params.append(bool(is_active))
+                changed_fields.append("is_active")
             if update_default_token_budget:
                 updates.append("default_token_budget = ?")
                 params.append(self._coerce_positive_int(default_token_budget))
+                changed_fields.append("default_token_budget")
 
             if not updates:
                 return True
@@ -1314,9 +1867,16 @@ class ChatDictionaryService:
                     f"UPDATE chat_dictionaries SET {set_clause} WHERE {where_clause}",
                     tuple(params),
                 )
-                conn.commit()
 
                 if cursor.rowcount > 0:
+                    summary = "Updated fields: " + ", ".join(changed_fields) if changed_fields else "Dictionary updated"
+                    self._create_dictionary_version_snapshot(
+                        conn,
+                        int(dictionary_id),
+                        change_type="update",
+                        summary=summary,
+                    )
+                    conn.commit()
                     logger.info(f"Updated dictionary {dictionary_id}")
                     self._invalidate_cache()
                     return True
@@ -1366,6 +1926,29 @@ class ChatDictionaryService:
         """
         try:
             with self.db.get_connection() as conn:
+                existing_row = conn.execute(
+                    "SELECT id, deleted FROM chat_dictionaries WHERE id = ?",
+                    (dictionary_id,),
+                ).fetchone()
+                if not existing_row:
+                    return False
+                if isinstance(existing_row, dict):
+                    is_deleted = bool(existing_row.get("deleted"))
+                elif hasattr(existing_row, "_mapping"):
+                    is_deleted = bool(existing_row._mapping.get("deleted"))
+                else:
+                    is_deleted = bool(existing_row[1]) if len(existing_row) > 1 else False
+                if is_deleted and not hard_delete:
+                    return False
+
+                self._create_dictionary_version_snapshot(
+                    conn,
+                    int(dictionary_id),
+                    change_type="delete",
+                    summary="Hard deleted dictionary" if hard_delete else "Soft deleted dictionary",
+                    include_deleted=True,
+                )
+
                 if hard_delete:
                     cursor = conn.execute("DELETE FROM chat_dictionaries WHERE id = ?", (dictionary_id,))
                 else:
@@ -1420,6 +2003,7 @@ class ChatDictionaryService:
             entry_type = kwargs.get("type")
             enabled = kwargs.get("enabled", True)
             case_sensitive = kwargs.get("case_sensitive", True)
+            record_snapshot = bool(kwargs.get("record_snapshot", True))
 
             if pattern is None or pattern == "":
                 raise ValueError("Pattern cannot be empty")
@@ -1522,6 +2106,13 @@ class ChatDictionaryService:
                 if entry_id is None:
                     raise CharactersRAGDBError("Database did not return a dictionary entry id.")
 
+                if record_snapshot:
+                    self._create_dictionary_version_snapshot(
+                        conn,
+                        int(dictionary_id),
+                        change_type="entry_add",
+                        summary=f"Added entry {int(entry_id)}",
+                    )
                 conn.commit()
 
                 logger.info(f"Added entry {entry_id} to dictionary {dictionary_id}")
@@ -1709,6 +2300,127 @@ class ChatDictionaryService:
             logger.error(f"Error fetching dictionary entry objects: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary entry objects: {e}") from e
 
+    def _resolve_processing_dictionary_order(
+        self,
+        dictionary_id: Optional[int],
+    ) -> list[int]:
+        """
+        Resolve dictionary processing order with include/inheritance semantics.
+
+        Included dictionaries are processed before the including dictionary.
+        For global processing, active root dictionaries are traversed in
+        alphabetical order (name, id).
+        """
+        target_dictionary_id = self._coerce_positive_int(dictionary_id)
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, name, included_dictionary_ids
+                    FROM chat_dictionaries
+                    WHERE deleted = ? AND is_active = ?
+                    ORDER BY LOWER(name), id
+                    """,
+                    (False, True),
+                ).fetchall()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error loading dictionary processing graph: {e}")
+            raise CharactersRAGDBError(
+                f"Error loading dictionary processing graph: {e}"
+            ) from e
+
+        dictionary_rows: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            row_dict = dict(row)
+            row_id = self._coerce_positive_int(row_dict.get("id"))
+            if row_id is None:
+                continue
+            dictionary_rows[row_id] = row_dict
+
+        if target_dictionary_id is not None and target_dictionary_id not in dictionary_rows:
+            return []
+
+        include_map: dict[int, list[int]] = {}
+        for row_id, row_dict in dictionary_rows.items():
+            includes = self._normalize_included_dictionary_ids(row_dict.get("included_dictionary_ids"))
+            include_map[row_id] = [
+                included_id for included_id in includes if included_id in dictionary_rows
+            ]
+
+        if target_dictionary_id is not None:
+            root_ids = [target_dictionary_id]
+        else:
+            root_ids = [
+                self._coerce_positive_int(dict(row).get("id"))
+                for row in rows
+                if self._coerce_positive_int(dict(row).get("id")) is not None
+            ]
+
+        visiting: set[int] = set()
+        visited: set[int] = set()
+        ordered: list[int] = []
+        path: list[int] = []
+
+        def _visit(current_dictionary_id: int) -> None:
+            if current_dictionary_id in visited:
+                return
+            if current_dictionary_id in visiting:
+                cycle_start_index = path.index(current_dictionary_id) if current_dictionary_id in path else 0
+                cycle_path = path[cycle_start_index:] + [current_dictionary_id]
+                raise InputError(
+                    f"Dictionary include cycle detected: {' -> '.join(str(item) for item in cycle_path)}"
+                )
+            visiting.add(current_dictionary_id)
+            path.append(current_dictionary_id)
+            for included_id in include_map.get(current_dictionary_id, []):
+                _visit(included_id)
+            path.pop()
+            visiting.remove(current_dictionary_id)
+            visited.add(current_dictionary_id)
+            ordered.append(current_dictionary_id)
+
+        for root_dictionary_id in root_ids:
+            if root_dictionary_id is None:
+                continue
+            _visit(root_dictionary_id)
+        return ordered
+
+    def _get_entry_objects_for_processing_order(
+        self,
+        dictionary_order: list[int],
+        group: Optional[str],
+    ) -> list[ChatDictionaryEntry]:
+        if not dictionary_order:
+            return []
+
+        entries: list[ChatDictionaryEntry] = []
+        try:
+            with self.db.get_connection() as conn:
+                for dictionary_id in dictionary_order:
+                    query = (
+                        "SELECT e.* FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id "
+                        "WHERE d.deleted = ? AND e.enabled = ? AND e.dictionary_id = ?"
+                    )
+                    params: list[Any] = [False, True, int(dictionary_id)]
+                    if group:
+                        query += " AND e.group_name = ?"
+                        params.append(group)
+                    query += " ORDER BY COALESCE(e.sort_order, e.id), e.id"
+
+                    rows = conn.execute(query, tuple(params)).fetchall()
+                    for row in rows:
+                        row_dict = dict(row)
+                        entry = ChatDictionaryEntry.from_dict(row_dict)
+                        setattr(entry, "dictionary_id", int(dictionary_id))
+                        entries.append(entry)
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error loading entries for composed processing order: {e}")
+            raise CharactersRAGDBError(
+                f"Error loading entries for composed processing order: {e}"
+            ) from e
+
+        return entries
+
     def update_entry(
         self,
         entry_id: int,
@@ -1739,6 +2451,7 @@ class ChatDictionaryService:
             entry_type = kwargs.get("type")
             enabled = kwargs.get("enabled")
             case_sensitive = kwargs.get("case_sensitive")
+            record_snapshot = bool(kwargs.get("record_snapshot", True))
 
             if pattern is not None:
                 entry = ChatDictionaryEntry(pattern, "test")
@@ -1799,11 +2512,29 @@ class ChatDictionaryService:
             params.append(entry_id)
 
             with self.db.get_connection() as conn:
+                dictionary_id_row = conn.execute(
+                    "SELECT dictionary_id FROM dictionary_entries WHERE id = ?",
+                    (entry_id,),
+                ).fetchone()
+                if isinstance(dictionary_id_row, dict):
+                    dictionary_id_for_entry = dictionary_id_row.get("dictionary_id")
+                elif hasattr(dictionary_id_row, "_mapping"):
+                    dictionary_id_for_entry = dictionary_id_row._mapping.get("dictionary_id")
+                else:
+                    dictionary_id_for_entry = dictionary_id_row[0] if dictionary_id_row else None
+
                 set_clause = _build_safe_update_clause(updates, _ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(f"UPDATE dictionary_entries SET {set_clause} WHERE id = ?", tuple(params))
-                conn.commit()
 
                 if cursor.rowcount > 0:
+                    if record_snapshot and dictionary_id_for_entry is not None:
+                        self._create_dictionary_version_snapshot(
+                            conn,
+                            int(dictionary_id_for_entry),
+                            change_type="entry_update",
+                            summary=f"Updated entry {int(entry_id)}",
+                        )
+                    conn.commit()
                     logger.info(f"Updated dictionary entry {entry_id}")
                     self._invalidate_cache()
                     return True
@@ -1813,7 +2544,7 @@ class ChatDictionaryService:
             logger.error(f"Error updating dictionary entry: {e}")
             raise CharactersRAGDBError(f"Error updating dictionary entry: {e}") from e
 
-    def delete_entry(self, entry_id: int) -> bool:
+    def delete_entry(self, entry_id: int, *, record_snapshot: bool = True) -> bool:
         """
         Delete a dictionary entry.
 
@@ -1825,10 +2556,28 @@ class ChatDictionaryService:
         """
         try:
             with self.db.get_connection() as conn:
+                dictionary_id_row = conn.execute(
+                    "SELECT dictionary_id FROM dictionary_entries WHERE id = ?",
+                    (entry_id,),
+                ).fetchone()
+                if isinstance(dictionary_id_row, dict):
+                    dictionary_id_for_entry = dictionary_id_row.get("dictionary_id")
+                elif hasattr(dictionary_id_row, "_mapping"):
+                    dictionary_id_for_entry = dictionary_id_row._mapping.get("dictionary_id")
+                else:
+                    dictionary_id_for_entry = dictionary_id_row[0] if dictionary_id_row else None
+
                 cursor = conn.execute("DELETE FROM dictionary_entries WHERE id = ?", (entry_id,))
-                conn.commit()
 
                 if cursor.rowcount > 0:
+                    if record_snapshot and dictionary_id_for_entry is not None:
+                        self._create_dictionary_version_snapshot(
+                            conn,
+                            int(dictionary_id_for_entry),
+                            change_type="entry_delete",
+                            summary=f"Deleted entry {int(entry_id)}",
+                        )
+                    conn.commit()
                     logger.info(f"Deleted dictionary entry {entry_id}")
                     self._invalidate_cache()
                     return True
@@ -1838,7 +2587,13 @@ class ChatDictionaryService:
             logger.error(f"Error deleting dictionary entry: {e}")
             raise CharactersRAGDBError(f"Error deleting dictionary entry: {e}") from e
 
-    def reorder_entries(self, dictionary_id: int, entry_ids: list[int]) -> int:
+    def reorder_entries(
+        self,
+        dictionary_id: int,
+        entry_ids: list[int],
+        *,
+        record_snapshot: bool = True,
+    ) -> int:
         """
         Persist a new execution order for all entries in a dictionary.
 
@@ -1901,6 +2656,13 @@ class ChatDictionaryService:
                         (order_index, entry_id, dictionary_id),
                     )
 
+                if record_snapshot:
+                    self._create_dictionary_version_snapshot(
+                        conn,
+                        int(dictionary_id),
+                        change_type="entry_reorder",
+                        summary=f"Reordered {len(normalized_entry_ids)} entries",
+                    )
                 conn.commit()
                 self._invalidate_cache()
                 return len(normalized_entry_ids)
@@ -1926,6 +2688,44 @@ class ChatDictionaryService:
                     WHERE id = ? AND deleted = ?
                     """,
                     (dictionary_id, False),
+                )
+                conn.commit()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            return
+
+    def _record_dictionary_usage_for_processing(self, dictionary_ids: list[int]) -> None:
+        """Persist usage metrics for all dictionaries participating in a processing run."""
+        normalized_ids = sorted(
+            {
+                dictionary_id
+                for dictionary_id in (
+                    self._coerce_positive_int(candidate_id) for candidate_id in dictionary_ids
+                )
+                if dictionary_id is not None
+            }
+        )
+        if not normalized_ids:
+            return
+
+        now = datetime.now(timezone.utc)
+        if hasattr(self, "_usage_counts"):
+            for dictionary_id in normalized_ids:
+                self._usage_counts[dictionary_id] = self._usage_counts.get(dictionary_id, 0) + 1
+        if hasattr(self, "_last_used_at"):
+            for dictionary_id in normalized_ids:
+                self._last_used_at[dictionary_id] = now
+
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        try:
+            with self.db.get_connection() as conn:
+                conn.execute(
+                    f"""
+                    UPDATE chat_dictionaries
+                    SET usage_count = COALESCE(usage_count, 0) + 1,
+                        last_used_at = CURRENT_TIMESTAMP
+                    WHERE deleted = ? AND id IN ({placeholders})
+                    """,
+                    tuple([False, *normalized_ids]),
                 )
                 conn.commit()
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
@@ -2009,6 +2809,48 @@ class ChatDictionaryService:
                 return min(budgets)
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             return None
+
+    def _resolve_default_token_budget_for_dictionary_ids(
+        self,
+        dictionary_ids: list[int],
+    ) -> Optional[int]:
+        normalized_ids = [
+            dictionary_id
+            for dictionary_id in (self._coerce_positive_int(item) for item in dictionary_ids)
+            if dictionary_id is not None
+        ]
+        if not normalized_ids:
+            return None
+
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT default_token_budget
+                    FROM chat_dictionaries
+                    WHERE deleted = ? AND is_active = ?
+                      AND id IN ({placeholders})
+                      AND default_token_budget IS NOT NULL
+                    """,
+                    tuple([False, True, *normalized_ids]),
+                ).fetchall()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
+            return None
+
+        budgets: list[int] = []
+        for row in rows:
+            if isinstance(row, dict):
+                raw_budget = row.get("default_token_budget")
+            elif hasattr(row, "_mapping"):
+                raw_budget = row._mapping.get("default_token_budget")
+            else:
+                raw_budget = row[0] if len(row) > 0 else None
+            coerced = self._coerce_positive_int(raw_budget)
+            if coerced is not None:
+                budgets.append(coerced)
+
+        return min(budgets) if budgets else None
 
     def record_transform_activity(
         self,
@@ -2254,9 +3096,6 @@ class ChatDictionaryService:
         # Support alias max_tokens
         if token_budget is None and "max_tokens" in kwargs:
             token_budget = kwargs.get("max_tokens")
-        effective_token_budget = self._coerce_positive_int(token_budget)
-        if effective_token_budget is None:
-            effective_token_budget = self._resolve_default_token_budget(dictionary_id)
 
         raw_chat_id = kwargs.get("chat_id")
         chat_id = str(raw_chat_id).strip() if isinstance(raw_chat_id, str) and raw_chat_id.strip() else None
@@ -2267,8 +3106,21 @@ class ChatDictionaryService:
             )
 
         original_text = text
+        processing_dictionary_ids = self._resolve_processing_dictionary_order(dictionary_id)
+
+        effective_token_budget = self._coerce_positive_int(token_budget)
+        if effective_token_budget is None:
+            effective_token_budget = self._resolve_default_token_budget_for_dictionary_ids(
+                processing_dictionary_ids
+            )
+        if effective_token_budget is None:
+            effective_token_budget = self._resolve_default_token_budget(dictionary_id)
+
         # Get applicable entries as objects
-        entries = self.get_entry_objects(dictionary_id, group, active_only=True)
+        entries = self._get_entry_objects_for_processing_order(
+            processing_dictionary_ids,
+            group,
+        )
 
         if not entries:
             empty_stats = {
@@ -2307,14 +3159,8 @@ class ChatDictionaryService:
         dictionary_replacements: dict[int, int] = {}
         dictionary_entries_used: dict[int, set[int]] = {}
 
-        # Track usage
-        if dictionary_id is not None:
-            try:
-                self._usage_counts[dictionary_id] = self._usage_counts.get(dictionary_id, 0) + 1
-                self._last_used_at[dictionary_id] = datetime.now(timezone.utc)
-                self._record_dictionary_usage(dictionary_id)
-            except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
-                pass
+        # Track usage for all dictionaries included in this processing pass.
+        self._record_dictionary_usage_for_processing(processing_dictionary_ids)
 
         for _iteration in range(max_iterations):
             iteration_replacements = 0
@@ -2467,6 +3313,7 @@ class ChatDictionaryService:
                         type=type_val,
                         probability=prob_val,
                         enabled=enabled_val,
+                        record_snapshot=False,
                     )
 
             for line in lines:
@@ -2489,7 +3336,21 @@ class ChatDictionaryService:
                         continue
                     if ":" in s:
                         k, v = s.split(":", 1)
-                        self.add_entry(dict_id, pattern=k.strip(), replacement=v.strip())
+                        self.add_entry(
+                            dict_id,
+                            pattern=k.strip(),
+                            replacement=v.strip(),
+                            record_snapshot=False,
+                        )
+
+            with self.db.get_connection() as conn:
+                self._create_dictionary_version_snapshot(
+                    conn,
+                    int(dict_id),
+                    change_type="import_markdown",
+                    summary="Imported dictionary from markdown",
+                )
+                conn.commit()
 
             return dict_id
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
@@ -2866,6 +3727,11 @@ class ChatDictionaryService:
         return {
             "name": info["name"],
             "description": info.get("description"),
+            "category": self._normalize_dictionary_category(info.get("category")),
+            "tags": self._normalize_dictionary_tags(info.get("tags")),
+            "included_dictionary_ids": self._normalize_included_dictionary_ids(
+                info.get("included_dictionary_ids")
+            ),
             "default_token_budget": self._coerce_positive_int(info.get("default_token_budget")),
             "entries": entries,
         }
@@ -2873,10 +3739,16 @@ class ChatDictionaryService:
     def import_from_json(self, data: dict[str, Any]) -> int:
         name = data.get("name") or "Imported Dictionary"
         description = data.get("description")
+        category = data.get("category")
+        tags = data.get("tags")
+        included_dictionary_ids = data.get("included_dictionary_ids")
         default_token_budget = self._coerce_positive_int(data.get("default_token_budget"))
         dict_id = self.create_dictionary(
             name=name,
             description=description,
+            category=category,
+            tags=tags,
+            included_dictionary_ids=included_dictionary_ids,
             default_token_budget=default_token_budget,
         )
         try:
@@ -2891,7 +3763,16 @@ class ChatDictionaryService:
                     max_replacements=e.get("max_replacements", 1),
                     enabled=e.get("enabled", True),
                     case_sensitive=e.get("case_sensitive", True),
+                    record_snapshot=False,
                 )
+            with self.db.get_connection() as conn:
+                self._create_dictionary_version_snapshot(
+                    conn,
+                    int(dict_id),
+                    change_type="import_json",
+                    summary="Imported dictionary from JSON",
+                )
+                conn.commit()
             return dict_id
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             self.delete_dictionary(dict_id, hard_delete=True)
@@ -2951,7 +3832,14 @@ class ChatDictionaryService:
                 raise InputError(f"Source dictionary {source_dict_id} not found")
 
             # Create new dictionary
-            new_dict_id = self.create_dictionary(name=new_name, description=f"Cloned from {source_dict['name']}")
+            new_dict_id = self.create_dictionary(
+                name=new_name,
+                description=f"Cloned from {source_dict['name']}",
+                category=source_dict.get("category"),
+                tags=source_dict.get("tags"),
+                included_dictionary_ids=source_dict.get("included_dictionary_ids"),
+                default_token_budget=self._coerce_positive_int(source_dict.get("default_token_budget")),
+            )
 
             # Get all entries from source dictionary (include inactive)
             entries = self.get_entries(source_dict_id, active_only=False)
@@ -2982,6 +3870,12 @@ class ChatDictionaryService:
                                 bool(e.get("case_sensitive", 1)),
                             ),
                         )
+                    self._create_dictionary_version_snapshot(
+                        conn,
+                        int(new_dict_id),
+                        change_type="clone",
+                        summary=f"Cloned from dictionary {int(source_dict_id)}",
+                    )
                     conn.commit()
 
             logger.info(
@@ -3032,6 +3926,303 @@ class ChatDictionaryService:
                 if hasattr(self, "_last_used_at") and self._last_used_at.get(dictionary_id)
                 else None
             ),
+        }
+
+    def list_dictionary_versions(
+        self,
+        dictionary_id: int,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """List dictionary version snapshots in reverse chronological order."""
+        safe_limit = max(1, min(int(limit), 100))
+        safe_offset = max(0, int(offset))
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        revision,
+                        source_dictionary_version,
+                        change_type,
+                        summary,
+                        entry_count,
+                        created_at
+                    FROM dictionary_version_history
+                    WHERE dictionary_id = ?
+                    ORDER BY revision DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (int(dictionary_id), safe_limit, safe_offset),
+                ).fetchall()
+                count_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM dictionary_version_history
+                    WHERE dictionary_id = ?
+                    """,
+                    (int(dictionary_id),),
+                ).fetchone()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error listing dictionary versions: {e}")
+            raise CharactersRAGDBError(f"Error listing dictionary versions: {e}") from e
+
+        if isinstance(count_row, dict):
+            total_raw = count_row.get("total")
+        elif hasattr(count_row, "_mapping"):
+            total_raw = count_row._mapping.get("total")
+        else:
+            total_raw = count_row[0] if count_row else 0
+        total = int(total_raw or 0)
+
+        versions: list[dict[str, Any]] = []
+        for row in rows:
+            row_dict = dict(row)
+            versions.append(
+                {
+                    "revision": int(row_dict.get("revision") or 0),
+                    "source_dictionary_version": self._coerce_positive_int(
+                        row_dict.get("source_dictionary_version")
+                    ),
+                    "change_type": str(row_dict.get("change_type") or "unspecified"),
+                    "summary": row_dict.get("summary"),
+                    "entry_count": int(row_dict.get("entry_count") or 0),
+                    "created_at": row_dict.get("created_at"),
+                }
+            )
+        return versions, total
+
+    def get_dictionary_version(
+        self,
+        dictionary_id: int,
+        revision: int,
+    ) -> Optional[dict[str, Any]]:
+        """Return a specific dictionary revision snapshot."""
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT
+                        revision,
+                        source_dictionary_version,
+                        change_type,
+                        summary,
+                        entry_count,
+                        dictionary_snapshot,
+                        entries_snapshot,
+                        created_at
+                    FROM dictionary_version_history
+                    WHERE dictionary_id = ? AND revision = ?
+                    LIMIT 1
+                    """,
+                    (int(dictionary_id), int(revision)),
+                ).fetchone()
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error reading dictionary version: {e}")
+            raise CharactersRAGDBError(f"Error reading dictionary version: {e}") from e
+
+        if not row:
+            return None
+
+        row_dict = dict(row)
+        try:
+            dictionary_snapshot_raw = row_dict.get("dictionary_snapshot") or "{}"
+            entries_snapshot_raw = row_dict.get("entries_snapshot") or "[]"
+            dictionary_snapshot = self._normalize_dictionary_row(json.loads(dictionary_snapshot_raw))
+            entries_snapshot = json.loads(entries_snapshot_raw)
+            if not isinstance(entries_snapshot, list):
+                entries_snapshot = []
+        except (TypeError, ValueError, json.JSONDecodeError) as e:
+            raise CharactersRAGDBError(f"Invalid dictionary version snapshot payload: {e}") from e
+
+        return {
+            "dictionary_id": int(dictionary_id),
+            "revision": int(row_dict.get("revision") or revision),
+            "source_dictionary_version": self._coerce_positive_int(
+                row_dict.get("source_dictionary_version")
+            ),
+            "change_type": str(row_dict.get("change_type") or "unspecified"),
+            "summary": row_dict.get("summary"),
+            "entry_count": int(row_dict.get("entry_count") or len(entries_snapshot)),
+            "dictionary": dictionary_snapshot,
+            "entries": entries_snapshot,
+            "created_at": row_dict.get("created_at"),
+        }
+
+    def revert_dictionary_to_revision(self, dictionary_id: int, revision: int) -> dict[str, Any]:
+        """Restore dictionary metadata/entries from a stored revision snapshot."""
+        snapshot = self.get_dictionary_version(dictionary_id, revision)
+        if not snapshot:
+            raise InputError(f"Revision {revision} not found for dictionary {dictionary_id}")
+
+        dictionary_snapshot = snapshot.get("dictionary") or {}
+        entries_snapshot = snapshot.get("entries") or []
+        if not isinstance(dictionary_snapshot, dict) or not isinstance(entries_snapshot, list):
+            raise InputError("Invalid revision snapshot payload")
+
+        tags_serialized = self._serialize_dictionary_tags(dictionary_snapshot.get("tags"))
+        category = self._normalize_dictionary_category(dictionary_snapshot.get("category"))
+        included_dictionary_ids = self._normalize_included_dictionary_ids(
+            dictionary_snapshot.get("included_dictionary_ids")
+        )
+        default_token_budget = self._coerce_positive_int(dictionary_snapshot.get("default_token_budget"))
+
+        try:
+            with self.db.get_connection() as conn:
+                existing_row = conn.execute(
+                    "SELECT id FROM chat_dictionaries WHERE id = ? AND deleted = ?",
+                    (int(dictionary_id), False),
+                ).fetchone()
+                if not existing_row:
+                    raise InputError(f"Dictionary {dictionary_id} not found")
+
+                validated_includes = self._validate_included_dictionary_ids(
+                    conn,
+                    dictionary_id=int(dictionary_id),
+                    included_dictionary_ids=included_dictionary_ids,
+                )
+
+                conn.execute(
+                    """
+                    UPDATE chat_dictionaries
+                    SET
+                        name = ?,
+                        description = ?,
+                        category = ?,
+                        tags = ?,
+                        included_dictionary_ids = ?,
+                        is_active = ?,
+                        default_token_budget = ?,
+                        updated_at = CURRENT_TIMESTAMP,
+                        version = version + 1
+                    WHERE id = ? AND deleted = ?
+                    """,
+                    (
+                        dictionary_snapshot.get("name"),
+                        dictionary_snapshot.get("description"),
+                        category,
+                        tags_serialized,
+                        self._serialize_included_dictionary_ids(validated_includes),
+                        bool(dictionary_snapshot.get("is_active", True)),
+                        default_token_budget,
+                        int(dictionary_id),
+                        False,
+                    ),
+                )
+
+                conn.execute("DELETE FROM dictionary_entries WHERE dictionary_id = ?", (int(dictionary_id),))
+
+                for index, raw_entry in enumerate(entries_snapshot, start=1):
+                    if not isinstance(raw_entry, dict):
+                        continue
+                    pattern = str(raw_entry.get("pattern") or raw_entry.get("key") or "").strip()
+                    if not pattern:
+                        continue
+                    replacement = raw_entry.get("replacement") or raw_entry.get("content") or ""
+                    entry_type = str(raw_entry.get("type") or "").strip().lower()
+                    is_regex = bool(entry_type == "regex")
+                    if not entry_type:
+                        is_regex = bool(raw_entry.get("is_regex", False))
+
+                    timed_effects = raw_entry.get("timed_effects")
+                    timed_effects_json = json.dumps(
+                        timed_effects if isinstance(timed_effects, dict) else {"sticky": 0, "cooldown": 0, "delay": 0}
+                    )
+                    probability_raw = raw_entry.get("probability", 1.0)
+                    try:
+                        probability_value = float(probability_raw)
+                    except (TypeError, ValueError):
+                        probability_value = 1.0
+                    max_replacements_raw = raw_entry.get("max_replacements", 0)
+                    try:
+                        max_replacements_value = int(max_replacements_raw or 0)
+                    except (TypeError, ValueError):
+                        max_replacements_value = 0
+
+                    usage_count_raw = raw_entry.get("usage_count", 0)
+                    try:
+                        usage_count = int(usage_count_raw or 0)
+                    except (TypeError, ValueError):
+                        usage_count = 0
+
+                    sort_order_raw = raw_entry.get("sort_order")
+                    try:
+                        sort_order = int(sort_order_raw) if sort_order_raw is not None else index
+                    except (TypeError, ValueError):
+                        sort_order = index
+
+                    conn.execute(
+                        """
+                        INSERT INTO dictionary_entries
+                        (
+                            dictionary_id,
+                            key,
+                            content,
+                            is_regex,
+                            probability,
+                            max_replacements,
+                            group_name,
+                            timed_effects,
+                            enabled,
+                            case_sensitive,
+                            sort_order,
+                            usage_count,
+                            last_used_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            int(dictionary_id),
+                            pattern,
+                            replacement,
+                            is_regex,
+                            probability_value,
+                            max_replacements_value,
+                            raw_entry.get("group") or raw_entry.get("group_name"),
+                            timed_effects_json,
+                            bool(raw_entry.get("enabled", True)),
+                            bool(raw_entry.get("case_sensitive", True)),
+                            sort_order,
+                            usage_count,
+                            raw_entry.get("last_used_at"),
+                        ),
+                    )
+
+                created_revision = self._create_dictionary_version_snapshot(
+                    conn,
+                    int(dictionary_id),
+                    change_type="revert",
+                    summary=f"Reverted to revision {int(revision)}",
+                )
+                conn.commit()
+        except ConflictError:
+            raise
+        except InputError:
+            raise
+        except sqlite3.IntegrityError as e:
+            if _is_unique_violation(e):
+                raise ConflictError(
+                    f"Dictionary name '{dictionary_snapshot.get('name')}' already exists",
+                    "chat_dictionaries",
+                    dictionary_snapshot.get("name"),
+                ) from e
+            raise CharactersRAGDBError(f"Error reverting dictionary revision: {e}") from e
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error reverting dictionary revision: {e}")
+            raise CharactersRAGDBError(f"Error reverting dictionary revision: {e}") from e
+
+        self._invalidate_cache()
+        current_dictionary = self.get_dictionary(dictionary_id)
+        current_dictionary_version = self._coerce_positive_int(
+            current_dictionary.get("version") if current_dictionary else None
+        ) or 1
+        return {
+            "dictionary_id": int(dictionary_id),
+            "reverted_to_revision": int(revision),
+            "current_dictionary_version": int(current_dictionary_version),
+            "current_revision": int(created_revision or revision),
+            "message": f"Dictionary reverted to revision {int(revision)}",
         }
 
     def close(self):

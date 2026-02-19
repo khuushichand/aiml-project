@@ -6,7 +6,6 @@ import pytest
 pytestmark = pytest.mark.unit
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-import torch
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.dia_adapter import DiaAdapter
@@ -103,12 +102,12 @@ class TestDiaAdapterMock:
     async def test_device_selection(self):
         """Test device selection for inference"""
         # Test CUDA selection
-        with patch('torch.cuda.is_available', return_value=True):
+        with patch('tldw_Server_API.app.core.TTS.adapters.dia_adapter._torch_cuda_available', return_value=True):
             adapter = DiaAdapter({"dia_device": "cuda"})
             assert adapter.device == "cuda"
 
         # Test CPU fallback
-        with patch('torch.cuda.is_available', return_value=False):
+        with patch('tldw_Server_API.app.core.TTS.adapters.dia_adapter._torch_cuda_available', return_value=False):
             adapter = DiaAdapter({"dia_device": "cuda"})
             assert adapter.device == "cpu"
 
@@ -123,9 +122,13 @@ class TestDiaAdapterMock:
 
         # Mock model loading
         with patch('tldw_Server_API.app.core.TTS.adapters.dia_adapter.DiaAdapter._load_dia_model', return_value=True):
-            success = await adapter.initialize()
-            # Will fail without actual model, but resource manager should be called
-            mock_get_manager.assert_called()
+            with patch(
+                'tldw_Server_API.app.core.TTS.adapters.dia_adapter._get_torch',
+                return_value=MagicMock(),
+            ):
+                success = await adapter.initialize()
+                # Will fail without actual model, but resource manager should be called
+                mock_get_manager.assert_called()
 
     async def test_generation_without_initialization(self):
         """Test generation fails without initialization"""
@@ -137,8 +140,9 @@ class TestDiaAdapterMock:
             format=AudioFormat.WAV
         )
 
-        with pytest.raises(Exception):  # Should raise provider not configured
-            await adapter.generate(request)
+        with patch.object(adapter, "ensure_initialized", new=AsyncMock(return_value=False)):
+            with pytest.raises(Exception):  # Should raise provider not configured
+                await adapter.generate(request)
 
     async def test_cleanup_on_close(self):
         """Test resource cleanup on close"""
@@ -150,15 +154,16 @@ class TestDiaAdapterMock:
         adapter._initialized = True
         adapter._status = ProviderStatus.AVAILABLE
 
-        with patch('torch.cuda.is_available', return_value=True):
-            with patch('torch.cuda.empty_cache') as mock_empty_cache:
+        fake_torch = MagicMock()
+        with patch('tldw_Server_API.app.core.TTS.adapters.dia_adapter._torch_cuda_available', return_value=True):
+            with patch('tldw_Server_API.app.core.TTS.adapters.dia_adapter._get_torch', return_value=fake_torch):
                 await adapter.close()
 
                 assert adapter.model is None
                 assert adapter.processor is None
                 assert adapter._initialized is False
                 assert adapter._status == ProviderStatus.DISABLED
-                mock_empty_cache.assert_called_once()
+                fake_torch.cuda.empty_cache.assert_called_once()
 
     async def test_dialogue_request_preparation(self):
         """Test preparation of dialogue requests"""

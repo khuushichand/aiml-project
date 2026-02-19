@@ -6,7 +6,6 @@ import pytest
 pytestmark = pytest.mark.unit
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-import torch
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.higgs_adapter import HiggsAdapter
@@ -33,7 +32,7 @@ class TestHiggsAdapterMock:
 
     async def test_initialization_configuration(self):
         """Test initialization with configuration"""
-        with patch('torch.cuda.is_available', return_value=True):
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._torch_cuda_available', return_value=True):
             adapter = HiggsAdapter({
                 "higgs_model_path": "bosonai/higgs-audio-v2",
                 "higgs_tokenizer_path": "bosonai/higgs-tokenizer",
@@ -148,8 +147,12 @@ class TestHiggsAdapterMock:
 
         adapter = HiggsAdapter({})
 
-        with pytest.raises(TTSInsufficientMemoryError):
-            await adapter.initialize()
+        with patch(
+            'tldw_Server_API.app.core.TTS.adapters.higgs_adapter._get_torch',
+            return_value=MagicMock(),
+        ):
+            with pytest.raises(TTSInsufficientMemoryError):
+                await adapter.initialize()
 
     async def test_voice_reference_validation(self):
         """Test voice reference validation"""
@@ -169,19 +172,19 @@ class TestHiggsAdapterMock:
     async def test_device_selection(self):
         """Test device selection for inference"""
         # Test CUDA selection
-        with patch('torch.cuda.is_available', return_value=True):
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._torch_cuda_available', return_value=True):
             adapter = HiggsAdapter({"higgs_device": "cuda"})
             assert adapter.device == "cuda"
 
         # Test CPU fallback
-        with patch('torch.cuda.is_available', return_value=False):
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._torch_cuda_available', return_value=False):
             adapter = HiggsAdapter({"higgs_device": "cuda"})
             assert adapter.device == "cpu"
 
     async def test_fp16_configuration(self):
         """Test FP16 configuration"""
         # FP16 only on CUDA
-        with patch('torch.cuda.is_available', return_value=True):
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._torch_cuda_available', return_value=True):
             adapter = HiggsAdapter({
                 "higgs_device": "cuda",
                 "higgs_use_fp16": True
@@ -215,14 +218,18 @@ class TestHiggsAdapterMock:
                 return real_import(name, *args, **kwargs)
 
             with patch('builtins.__import__', side_effect=fake_import):
-                success = await adapter.initialize()
+                with patch(
+                    'tldw_Server_API.app.core.TTS.adapters.higgs_adapter._get_torch',
+                    return_value=MagicMock(),
+                ):
+                    success = await adapter.initialize()
 
         assert not success
         assert adapter.status == ProviderStatus.NOT_CONFIGURED
 
     async def test_cleanup_on_close(self):
         """Test resource cleanup on close"""
-        with patch('torch.cuda.is_available', return_value=True):
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._torch_cuda_available', return_value=True):
             adapter = HiggsAdapter({"higgs_device": "cuda"})
 
         # Mock resources
@@ -230,14 +237,15 @@ class TestHiggsAdapterMock:
         adapter._initialized = True
         adapter._status = ProviderStatus.AVAILABLE
 
-        with patch('torch.cuda.is_available', return_value=True):
-            with patch('torch.cuda.empty_cache') as mock_empty_cache:
+        fake_torch = MagicMock()
+        with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._torch_cuda_available', return_value=True):
+            with patch('tldw_Server_API.app.core.TTS.adapters.higgs_adapter._get_torch', return_value=fake_torch):
                 await adapter.close()
 
                 assert adapter.serve_engine is None
                 assert adapter._initialized is False
                 assert adapter._status == ProviderStatus.DISABLED
-                mock_empty_cache.assert_called_once()
+                fake_torch.cuda.empty_cache.assert_called_once()
 
     async def test_generation_without_initialization(self):
         """Test generation fails without initialization"""

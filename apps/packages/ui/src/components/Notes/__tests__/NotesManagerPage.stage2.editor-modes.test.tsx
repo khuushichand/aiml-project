@@ -81,7 +81,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 }))
 
 vi.mock("@/services/note-keywords", () => ({
-  getAllNoteKeywords: vi.fn(async () => []),
+  getAllNoteKeywordStats: vi.fn(async () => []),
   searchNoteKeywords: vi.fn(async () => [])
 }))
 
@@ -199,7 +199,7 @@ describe("NotesManagerPage stage 2 editor modes", () => {
     expect(screen.getByPlaceholderText(textareaPlaceholder)).toBeInTheDocument()
     expect(screen.getByText("Preview (Markdown + LaTeX)")).toBeInTheDocument()
     expect(screen.getByText("Markdown + LaTeX supported")).toBeInTheDocument()
-  })
+  }, 10000)
 
   it("auto-resizes editor textarea with bounded height", async () => {
     renderPage()

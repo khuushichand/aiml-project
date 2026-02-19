@@ -292,7 +292,7 @@ export const FlashcardCreateDrawer: React.FC<FlashcardCreateDrawerProps> = ({
                   label: d.name,
                   value: d.id
                 }))}
-                dropdownRender={(menu) => (
+                popupRender={(menu) => (
                   <>
                     {menu}
                     <Divider className="!my-2" />

@@ -346,6 +346,23 @@ export const api = {
   deleteOrgByokKey: (orgId: string, provider: string) => requestJson(`/admin/orgs/${orgId}/byok-keys/${provider}`, {
     method: 'DELETE',
   }),
+  getOpenAIOAuthStatus: () => requestJson('/users/keys/openai/oauth/status'),
+  startOpenAIOAuth: (data?: { credential_fields?: Record<string, unknown>; return_path?: string }) =>
+    requestJson('/users/keys/openai/oauth/authorize', {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+  refreshOpenAIOAuth: () => requestJson('/users/keys/openai/oauth/refresh', {
+    method: 'POST',
+  }),
+  disconnectOpenAIOAuth: () => requestJson('/users/keys/openai/oauth', {
+    method: 'DELETE',
+  }),
+  switchOpenAICredentialSource: (authSource: 'api_key' | 'oauth') =>
+    requestJson('/users/keys/openai/source', {
+      method: 'POST',
+      body: JSON.stringify({ auth_source: authSource }),
+    }),
 
   // ============================================
   // Budgets

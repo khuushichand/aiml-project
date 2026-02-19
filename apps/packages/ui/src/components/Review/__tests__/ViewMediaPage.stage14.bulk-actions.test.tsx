@@ -331,6 +331,28 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
     )
   })
 
+  it('places ingest jobs and library stats after the results flow in the sidebar', () => {
+    renderMediaPage()
+
+    const resultsList = screen.getByTestId('results-list')
+    const bottomUtilities = screen.getByTestId('media-sidebar-bottom-utilities')
+    const ingestJobsPanel = screen.getByTestId('media-ingest-jobs-panel')
+    const libraryStatsPanel = screen.getByTestId('media-library-stats-panel')
+
+    expect(
+      resultsList.compareDocumentPosition(bottomUtilities) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      bottomUtilities.compareDocumentPosition(ingestJobsPanel) & Node.DOCUMENT_POSITION_CONTAINED_BY
+    ).toBeTruthy()
+    expect(
+      resultsList.compareDocumentPosition(ingestJobsPanel) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      ingestJobsPanel.compareDocumentPosition(libraryStatsPanel) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
   it('adds keywords in bulk mode for selected media items', async () => {
     renderMediaPage()
 

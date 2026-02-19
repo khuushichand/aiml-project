@@ -19,6 +19,7 @@
 - [ ] WebUI/extension parity validated for shared UI fixes
 - [ ] For Flashcards UI changes: tabs remain `Study` / `Manage` / `Transfer` and secondary create CTAs route through manager create-entry path
 - [ ] For Flashcards drawer changes: use `FLASHCARDS_DRAWER_WIDTH_PX` and keep footer action order `Cancel -> secondary -> primary`
+- [ ] For Flashcards help/copy/import UX changes: update `Docs/User_Guides/Flashcards_Study_Guide.md` and keep in-app help links pointed at guide section anchors
 
 ## Risk & Rollback
 

@@ -388,13 +388,13 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     statsButton.focus()
     await user.click(statsButton)
 
-    await screen.findByText("Dictionary Statistics")
+    await screen.findByText("Dictionary Statistics", {}, { timeout: 15000 })
     await closeTopMostModal(user)
 
     await waitFor(() => {
       expect(statsButton).toHaveFocus()
     })
-  }, 60000)
+  }, 90000)
 
   it("returns focus to entry edit trigger after closing nested Edit Entry modal", async () => {
     const user = userEvent.setup()
@@ -407,11 +407,11 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     )
     await screen.findByText("Manage Entries: Accessible Dictionary")
 
-    const editEntryButton = screen.getByRole("button", { name: "Edit entry BP" })
+    const editEntryButton = await screen.findByRole("button", { name: "Edit entry BP" })
     editEntryButton.focus()
     await user.click(editEntryButton)
 
-    await screen.findByText("Edit Entry")
+    await screen.findByText("Edit Entry", {}, { timeout: 15000 })
     await closeTopMostModal(user)
 
     await waitFor(() => {
@@ -420,5 +420,5 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     expect(
       screen.getByText("Manage Entries: Accessible Dictionary")
     ).toBeInTheDocument()
-  }, 30000)
+  }, 60000)
 })

@@ -2,7 +2,10 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ReviewTab } from "../ReviewTab"
 import { clearSetting } from "@/services/settings/registry"
-import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
+import {
+  FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING,
+  FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING
+} from "@/services/settings/ui-settings"
 import {
   useDecksQuery,
   useCramQueueQuery,
@@ -84,6 +87,7 @@ describe("ReviewTab analytics summary", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
+    await clearSetting(FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [{ id: 9, name: "Biology" }],
       isLoading: false

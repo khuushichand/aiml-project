@@ -3,14 +3,22 @@ import uuid
 import io
 import zipfile
 import sqlite3
+import os
 from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
 
+# Keep this module self-contained and deterministic by disabling optional
+# reading-digest startup paths that pull heavyweight STT deps during app import.
+os.environ.setdefault("READING_DIGEST_JOBS_WORKER_ENABLED", "0")
+os.environ.setdefault("READING_DIGEST_SCHEDULER_ENABLED", "0")
+os.environ.setdefault("TEST_MODE", "1")
+
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 from tldw_Server_API.tests.test_config import TestConfig
 
 # Explicit auth headers for single-user mode (required by get_request_user)
@@ -133,6 +141,43 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
                 conn.close()
     finally:
         zf.close()
+
+
+def test_generate_flashcards_endpoint_returns_generated_cards(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    async def fake_generate_adapter(config, context):
+        assert config.get("text") == "Cell respiration summary"
+        assert config.get("num_cards") == 2
+        return {
+            "flashcards": [
+                {"front": "ATP stands for?", "back": "Adenosine triphosphate", "tags": ["bio"]},
+                {"front": "Where does glycolysis occur?", "back": "Cytoplasm", "tags": "biology metabolism"},
+            ],
+            "count": 2,
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.run_flashcard_generate_adapter",
+        fake_generate_adapter,
+    )
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/generate",
+        json={
+            "text": "Cell respiration summary",
+            "num_cards": 2,
+            "card_type": "basic",
+            "difficulty": "medium",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["flashcards"][0]["front"] == "ATP stands for?"
+    assert payload["flashcards"][1]["tags"] == ["biology", "metabolism"]
 
 
 def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcards_db: TestClient):
@@ -1074,6 +1119,114 @@ def test_import_json_unicode_preserved(client_with_flashcards_db: TestClient):
     assert r2.status_code == 200
     items = r2.json().get('items', [])
     assert any('😀' in (it.get('front') or '') for it in items)
+
+
+def test_import_apkg_file_basic(client_with_flashcards_db: TestClient):
+    payload_rows = [
+        {
+            "deck_name": "APKG Deck",
+            "model_type": "basic",
+            "front": "APKG Q1",
+            "back": "APKG A1",
+            "extra": "extra 1",
+            "tags_json": json.dumps(["apkg", "basic"]),
+        },
+        {
+            "deck_name": "APKG Deck",
+            "model_type": "basic_reverse",
+            "front": "APKG Q2",
+            "back": "APKG A2",
+            "extra": "extra 2",
+            "tags_json": json.dumps(["apkg", "reverse"]),
+            "reverse": True,
+        },
+        {
+            "deck_name": "APKG Deck",
+            "model_type": "cloze",
+            "front": "APKG {{c1::cloze}}",
+            "back": "",
+            "extra": "cloze extra",
+            "tags_json": json.dumps(["apkg", "cloze"]),
+        },
+    ]
+    apkg = export_apkg_from_rows(payload_rows)
+    files = {
+        "file": ("flashcards.apkg", apkg, "application/apkg"),
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("imported") == 3
+    assert data.get("errors") == []
+
+    r2 = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert r2.status_code == 200
+    items = r2.json().get("items", [])
+    by_front = {item.get("front"): item for item in items}
+    assert "APKG Q1" in by_front
+    assert "APKG Q2" in by_front
+    assert "APKG {{c1::cloze}}" in by_front
+    assert by_front["APKG Q2"].get("model_type") == "basic_reverse"
+    assert by_front["APKG Q2"].get("reverse") is True
+    assert by_front["APKG {{c1::cloze}}"].get("model_type") == "cloze"
+    assert by_front["APKG {{c1::cloze}}"].get("is_cloze") is True
+
+
+def test_import_apkg_preserves_scheduling_fields(client_with_flashcards_db: TestClient):
+    payload_rows = [
+        {
+            "deck_name": "SchedDeck",
+            "model_type": "basic",
+            "front": "New Card",
+            "back": "A0",
+            "ef": 2.5,
+            "interval_days": 0,
+            "repetitions": 0,
+            "lapses": 0,
+            "due_at": None,
+        },
+        {
+            "deck_name": "SchedDeck",
+            "model_type": "basic",
+            "front": "Review Card",
+            "back": "A1",
+            "ef": 2.1,
+            "interval_days": 14,
+            "repetitions": 5,
+            "lapses": 2,
+            "due_at": None,
+        },
+    ]
+    apkg = export_apkg_from_rows(payload_rows)
+    files = {
+        "file": ("sched.apkg", apkg, "application/apkg"),
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert r.json().get("imported") == 2
+
+    r2 = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert r2.status_code == 200
+    by_front = {item.get("front"): item for item in r2.json().get("items", [])}
+    assert by_front["New Card"].get("repetitions") == 0
+    assert by_front["New Card"].get("interval_days") == 0
+    assert by_front["New Card"].get("due_at") is None
+
+    review = by_front["Review Card"]
+    assert review.get("repetitions") == 5
+    assert review.get("interval_days") == 14
+    assert review.get("lapses") == 2
+    assert pytest.approx(review.get("ef"), rel=1e-3) == 2.1
+    assert review.get("due_at") is not None
+
+
+def test_import_apkg_invalid_archive_returns_400(client_with_flashcards_db: TestClient):
+    files = {
+        "file": ("bad.apkg", b"not a zip archive", "application/apkg"),
+    }
+    r = client_with_flashcards_db.post("/api/v1/flashcards/import/apkg", files=files, headers=AUTH_HEADERS)
+    assert r.status_code == 400
+    assert "Invalid APKG archive" in r.json().get("detail", "")
 
 
 def test_export_csv_preserves_quotes_and_no_extra_separators(client_with_flashcards_db: TestClient):

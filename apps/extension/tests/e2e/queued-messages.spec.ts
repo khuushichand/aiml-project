@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import {
@@ -10,7 +11,7 @@ import {
 test.describe('Queued messages banners', () => {
   test('Playground shows queued banner when connected with queued messages', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Force connection store into a connected state and seed a queued message
     await waitForConnectionStore(page, 'queued-playground-banner')
@@ -51,7 +52,7 @@ test.describe('Queued messages banners', () => {
 
   test('Playground Clear queue empties queue without sending messages', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Force connection store into a connected state and seed a queued message
     await waitForConnectionStore(page, 'queued-playground-clear')
@@ -92,7 +93,7 @@ test.describe('Queued messages banners', () => {
 
   test('Sidepanel shows queued banner and clears queue when sending', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = await launchWithExtension(extPath) as any
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, extPath) as any
     const page = await openSidepanel()
 
     // Seed connection + queued messages via exposed stores
@@ -131,7 +132,7 @@ test.describe('Queued messages banners', () => {
 
   test('Sidepanel queues messages while disconnected and shows offline placeholder', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = (await launchWithExtension(
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, 
       extPath
     )) as any
     const page = await openSidepanel()

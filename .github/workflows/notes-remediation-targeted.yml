@@ -1,0 +1,104 @@
+name: Notes Remediation Targeted Gates
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - "apps/packages/ui/src/components/Notes/**"
+      - "apps/packages/ui/src/components/Common/NotesDock/**"
+      - "apps/packages/ui/package.json"
+      - "apps/packages/ui/vitest.config.ts"
+      - "apps/bun.lock"
+      - "tldw_Server_API/app/api/v1/endpoints/notes.py"
+      - "tldw_Server_API/app/api/v1/schemas/notes_schemas.py"
+      - "tldw_Server_API/tests/Notes/**"
+      - "tldw_Server_API/tests/Notes_NEW/**"
+      - "Docs/Plans/IMPLEMENTATION_PLAN_notes_page_gap_remediation_2026_02_19.md"
+      - ".github/workflows/notes-remediation-targeted.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/packages/ui/src/components/Notes/**"
+      - "apps/packages/ui/src/components/Common/NotesDock/**"
+      - "apps/packages/ui/package.json"
+      - "apps/packages/ui/vitest.config.ts"
+      - "apps/bun.lock"
+      - "tldw_Server_API/app/api/v1/endpoints/notes.py"
+      - "tldw_Server_API/app/api/v1/schemas/notes_schemas.py"
+      - "tldw_Server_API/tests/Notes/**"
+      - "tldw_Server_API/tests/Notes_NEW/**"
+      - "Docs/Plans/IMPLEMENTATION_PLAN_notes_page_gap_remediation_2026_02_19.md"
+      - ".github/workflows/notes-remediation-targeted.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notes-remediation-targeted-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  notes-ui-remediation:
+    name: Notes UI Remediation Vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install workspace dependencies
+        working-directory: apps
+        run: bun install --frozen-lockfile
+
+      - name: Run remediation-critical Notes UI tests
+        working-directory: apps/packages/ui
+        env:
+          CI: "true"
+        run: |
+          bunx vitest run \
+            src/components/Notes/__tests__/NotesManagerPage.stage1.editor-reliability.test.tsx \
+            src/components/Notes/__tests__/NotesManagerPage.stage11.search-filtering.test.tsx \
+            src/components/Notes/__tests__/NotesManagerPage.stage32.delete-undo.test.tsx \
+            src/components/Notes/__tests__/NotesManagerPage.stage39.organization-model.test.tsx \
+            src/components/Notes/__tests__/NotesManagerPage.stage4.revision-attachments.test.tsx \
+            src/components/Common/NotesDock/__tests__/NotesDockPanel.stage4.cache-sync.test.tsx
+
+  notes-backend-remediation:
+    name: Notes Backend Remediation Pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: .
+      TEST_MODE: "true"
+      TLDW_TEST_MODE: "1"
+      DISABLE_HEAVY_STARTUP: "1"
+      MINIMAL_TEST_APP: "1"
+      PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Setup Python and dependencies
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: "3.12"
+          use-uv: "true"
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Run remediation-critical Notes backend tests
+        run: |
+          python -m pytest -q \
+            tldw_Server_API/tests/Notes/test_notes_api_integration.py \
+            tldw_Server_API/tests/Notes_NEW/unit/test_keyword_management_db.py

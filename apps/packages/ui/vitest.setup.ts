@@ -1,10 +1,14 @@
 import "@testing-library/jest-dom/vitest"
 import { cleanup } from "@testing-library/react"
-import { afterAll, afterEach, beforeAll } from "vitest"
+import { afterAll, afterEach, beforeAll, vi } from "vitest"
 
 const originalGetComputedStyle = window.getComputedStyle.bind(window)
+const originalConsoleLog = console.log.bind(console)
+const originalConsoleDebug = console.debug.bind(console)
+const originalConsoleInfo = console.info.bind(console)
 const originalConsoleWarn = console.warn.bind(console)
 const originalConsoleError = console.error.bind(console)
+const originalMutationObserver = window.MutationObserver
 
 const TEXTAREA_STYLE_FALLBACKS: Record<string, string> = {
   "letter-spacing": "normal",
@@ -104,7 +108,20 @@ const SUPPRESSED_WARNING_PATTERNS = [
   /\[antd:\s*List\]\s+The `List` component is deprecated\./i,
   /React Router Future Flag Warning/i,
   /Instance created by `useForm` is not connected to any Form element/i,
-  /Not implemented:\s*navigation to another Document/i
+  /Not implemented:\s*navigation to another Document/i,
+  /Failed to load seen stats:\s*Network error/i,
+  /WorkspacePlayground render error.*chat pane crash/i,
+  /Failed to create thread:\s*Default character unavailable/i,
+  /Failed to persist chat message:\s*save failed/i,
+  /Streaming search failed, falling back to standard search:\s*stream endpoint unavailable/i,
+  /Export failed:\s*HTTP undefined: thread not found/i,
+  /\[WorldBooks\]\s+Import parse failed/i,
+  /\[WorldBooks\]\s+Import validation failed/i,
+  /Skipped Kobold entry/i,
+  /(^|\s)boom(\s|$)/i,
+  /(^|\s)still broken(\s|$)/i,
+  /(^|\s)prompt body crash(\s|$)/i,
+  /(^|\s)chat pane crash(\s|$)/i
 ]
 
 const shouldSuppressConsoleOutput = (args: unknown[]): boolean => {
@@ -119,10 +136,44 @@ const shouldSuppressConsoleOutput = (args: unknown[]): boolean => {
   return SUPPRESSED_WARNING_PATTERNS.some((pattern) => pattern.test(combined))
 }
 
+class MutationObserverFallback {
+  constructor(_callback: MutationCallback) {}
+  observe(): void {}
+  disconnect(): void {}
+  takeRecords(): MutationRecord[] {
+    return []
+  }
+}
+
+const resolveMutationObserver = (): typeof MutationObserver =>
+  typeof originalMutationObserver === "function" ? originalMutationObserver : MutationObserverFallback
+
+const ensureMutationObserver = (): void => {
+  if (typeof window.MutationObserver === "function") return
+  const replacement = resolveMutationObserver()
+  ;(window as any).MutationObserver = replacement
+  ;(globalThis as any).MutationObserver = replacement
+}
+
 window.getComputedStyle = ((element: Element, _pseudoElt?: string | null) =>
   withTextareaStyleFallback(element, originalGetComputedStyle(element))) as typeof window.getComputedStyle
 
 beforeAll(() => {
+  console.log = (...args: unknown[]) => {
+    if (shouldSuppressConsoleOutput(args)) return
+    originalConsoleLog(...args)
+  }
+
+  console.debug = (...args: unknown[]) => {
+    if (shouldSuppressConsoleOutput(args)) return
+    originalConsoleDebug(...args)
+  }
+
+  console.info = (...args: unknown[]) => {
+    if (shouldSuppressConsoleOutput(args)) return
+    originalConsoleInfo(...args)
+  }
+
   console.warn = (...args: unknown[]) => {
     if (shouldSuppressConsoleOutput(args)) return
     originalConsoleWarn(...args)
@@ -132,9 +183,14 @@ beforeAll(() => {
     if (shouldSuppressConsoleOutput(args)) return
     originalConsoleError(...args)
   }
+
+  ensureMutationObserver()
 })
 
 afterAll(() => {
+  console.log = originalConsoleLog
+  console.debug = originalConsoleDebug
+  console.info = originalConsoleInfo
   console.warn = originalConsoleWarn
   console.error = originalConsoleError
 })
@@ -175,5 +231,9 @@ if (typeof window.ResizeObserver === "undefined") {
 }
 
 afterEach(() => {
+  if (vi.isFakeTimers()) {
+    vi.useRealTimers()
+  }
+  ensureMutationObserver()
   cleanup()
 })

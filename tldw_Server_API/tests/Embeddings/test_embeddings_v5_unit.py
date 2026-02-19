@@ -512,6 +512,105 @@ class TestErrorHandling:
         detail = response.json().get("detail", {})
         assert detail.get("error_code") == "missing_provider_credentials"
 
+    @pytest.mark.unit
+    def test_openai_oauth_401_retries_with_forced_refresh(self, setup, monkeypatch):
+        """OpenAI OAuth auth failures should force-refresh BYOK once and retry."""
+        def override_user():
+            return setup.regular_user
+
+        app.dependency_overrides[get_request_user] = override_user
+        monkeypatch.setenv("USE_REAL_OPENAI_IN_TESTS", "1")
+
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+        import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_ep
+
+        forced_refresh_flags: list[bool] = []
+
+        async def _resolve(provider, *_args, **kwargs):
+            forced = bool(kwargs.get("force_oauth_refresh", False))
+            forced_refresh_flags.append(forced)
+            api_key = "oauth-refreshed-key" if forced else "oauth-initial-key"
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=api_key,
+                app_config=None,
+                credential_fields={},
+                source="user",
+                allowlisted=True,
+                auth_source="oauth",
+            )
+
+        call_count = {"count": 0}
+
+        async def _fake_batch_async(*, texts, provider, model_id, dimensions=None, api_key=None, metadata=None, **_kwargs):
+            _ = (provider, model_id, dimensions, api_key, metadata)
+            call_count["count"] += 1
+            if call_count["count"] == 1:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="expired oauth access token")
+            return [[0.1, 0.2, 0.3] for _ in texts]
+
+        monkeypatch.setattr(emb_ep, "resolve_byok_credentials", _resolve, raising=True)
+        monkeypatch.setattr(emb_ep, "create_embeddings_batch_async", _fake_batch_async, raising=True)
+
+        response = setup.client.post(
+            "/api/v1/embeddings",
+            headers={**setup.auth_headers, "x-provider": "openai"},
+            json={
+                "input": "test text",
+                "model": "text-embedding-3-small",
+            },
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert call_count["count"] == 2
+        assert forced_refresh_flags[:2] == [False, True]
+
+    @pytest.mark.unit
+    def test_openai_oauth_second_401_returns_reconnect_required(self, setup, monkeypatch):
+        """Second OpenAI OAuth auth failure should return reconnect-required 401."""
+        def override_user():
+            return setup.regular_user
+
+        app.dependency_overrides[get_request_user] = override_user
+        monkeypatch.setenv("USE_REAL_OPENAI_IN_TESTS", "1")
+
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+        import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_ep
+
+        async def _resolve(provider, *_args, **kwargs):
+            forced = bool(kwargs.get("force_oauth_refresh", False))
+            api_key = "oauth-refreshed-key" if forced else "oauth-initial-key"
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=api_key,
+                app_config=None,
+                credential_fields={},
+                source="user",
+                allowlisted=True,
+                auth_source="oauth",
+            )
+
+        async def _fake_batch_async(*, texts, provider, model_id, dimensions=None, api_key=None, metadata=None, **_kwargs):
+            _ = (texts, provider, model_id, dimensions, api_key, metadata)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="oauth auth failure")
+
+        monkeypatch.setattr(emb_ep, "resolve_byok_credentials", _resolve, raising=True)
+        monkeypatch.setattr(emb_ep, "create_embeddings_batch_async", _fake_batch_async, raising=True)
+
+        response = setup.client.post(
+            "/api/v1/embeddings",
+            headers={**setup.auth_headers, "x-provider": "openai"},
+            json={
+                "input": "test text",
+                "model": "text-embedding-3-small",
+            },
+        )
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "oauth_reconnect_required"
+        assert detail.get("reconnect_required") is True
+
 
 class TestMockedFlow:
     """Test complete flow with mocked embeddings"""

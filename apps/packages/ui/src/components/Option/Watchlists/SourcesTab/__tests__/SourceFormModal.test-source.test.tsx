@@ -1,0 +1,190 @@
+import React from "react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { describe, expect, it, vi, beforeEach } from "vitest"
+import { SourceFormModal } from "../SourceFormModal"
+
+const formApi = {
+  setFieldsValue: vi.fn(),
+  resetFields: vi.fn(),
+  validateFields: vi.fn()
+}
+
+const mocks = vi.hoisted(() => ({
+  testWatchlistSource: vi.fn(),
+  testWatchlistSourceDraft: vi.fn(),
+  messageInfo: vi.fn(),
+  messageSuccess: vi.fn(),
+  messageWarning: vi.fn(),
+  messageError: vi.fn()
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (_key: string, defaultValue?: unknown, values?: Record<string, unknown>) => {
+      if (typeof defaultValue !== "string") return _key
+      if (!values) return defaultValue
+      return defaultValue.replace(/\{\{(\w+)\}\}/g, (_match, token) => {
+        const value = values[token]
+        return value == null ? "" : String(value)
+      })
+    }
+  })
+}))
+
+vi.mock("antd", () => {
+  const FormComponent = ({ children }: any) => <form>{children}</form>
+  FormComponent.Item = ({ label, extra, children }: any) => (
+    <div>
+      {label ? <label>{label}</label> : null}
+      {extra ? <div>{extra}</div> : null}
+      {children}
+    </div>
+  )
+  FormComponent.useForm = () => [formApi]
+
+  return {
+    Form: FormComponent,
+    Input: ({ placeholder }: any) => <input placeholder={placeholder} />,
+    Modal: ({ open, title, children }: any) => (open ? <div><h2>{title}</h2>{children}</div> : null),
+    Select: ({ options = [] }: any) => (
+      <div>
+        {options.map((option: any) => (
+          <span key={String(option.value)}>{String(option.label)}</span>
+        ))}
+      </div>
+    ),
+    Button: ({ children, onClick, disabled }: any) => (
+      <button type="button" disabled={disabled} onClick={onClick}>
+        {children}
+      </button>
+    ),
+    Alert: ({ message, description }: any) => (
+      <div>
+        <span>{message}</span>
+        <span>{description}</span>
+      </div>
+    ),
+    message: {
+      info: (...args: unknown[]) => mocks.messageInfo(...args),
+      success: (...args: unknown[]) => mocks.messageSuccess(...args),
+      warning: (...args: unknown[]) => mocks.messageWarning(...args),
+      error: (...args: unknown[]) => mocks.messageError(...args)
+    }
+  }
+})
+
+vi.mock("@/services/watchlists", () => ({
+  testWatchlistSource: (...args: unknown[]) => mocks.testWatchlistSource(...args),
+  testWatchlistSourceDraft: (...args: unknown[]) => mocks.testWatchlistSourceDraft(...args)
+}))
+
+describe("SourceFormModal test-source preflight", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    formApi.validateFields.mockResolvedValue({
+      url: "https://example.com/feed.xml",
+      source_type: "rss"
+    })
+  })
+
+  it("tests a saved feed and renders summary", async () => {
+    mocks.testWatchlistSource.mockResolvedValue({
+      items: [],
+      total: 2,
+      ingestable: 2,
+      filtered: 0
+    })
+
+    render(
+      <SourceFormModal
+        open
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        initialValues={{
+          id: 123,
+          name: "Saved Feed",
+          url: "https://example.com/feed.xml",
+          source_type: "rss",
+          active: true,
+          tags: [],
+          created_at: "2026-02-18T00:00:00Z"
+        } as any}
+        existingTags={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Test Feed" }))
+
+    await waitFor(() => {
+      expect(mocks.testWatchlistSource).toHaveBeenCalledWith(123, { limit: 10 })
+      expect(mocks.testWatchlistSourceDraft).not.toHaveBeenCalled()
+      expect(mocks.messageSuccess).toHaveBeenCalledWith(
+        "Test succeeded: found 2 preview items."
+      )
+      expect(screen.getByText("Test Summary")).toBeInTheDocument()
+    })
+  })
+
+  it("tests unsaved draft feeds without requiring save", async () => {
+    mocks.testWatchlistSourceDraft.mockResolvedValue({
+      items: [],
+      total: 1,
+      ingestable: 1,
+      filtered: 0
+    })
+
+    render(
+      <SourceFormModal
+        open
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        existingTags={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Test Feed" }))
+
+    await waitFor(() => {
+      expect(mocks.testWatchlistSourceDraft).toHaveBeenCalledWith(
+        {
+          url: "https://example.com/feed.xml",
+          source_type: "rss"
+        },
+        { limit: 10 }
+      )
+      expect(mocks.testWatchlistSource).not.toHaveBeenCalled()
+      expect(mocks.messageSuccess).toHaveBeenCalledWith(
+        "Test succeeded: found 1 preview item."
+      )
+    })
+
+    expect(
+      screen.getByText("Run Test Feed to validate URL/type connectivity before saving.")
+    ).toBeInTheDocument()
+  })
+
+  it("shows inline remediation guidance when draft preflight fails", async () => {
+    mocks.testWatchlistSourceDraft.mockRejectedValue(
+      new Error("invalid_youtube_rss_url: channel feed required")
+    )
+
+    render(
+      <SourceFormModal
+        open
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        existingTags={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Test Feed" }))
+
+    await waitFor(() => {
+      expect(mocks.messageError).toHaveBeenCalledWith("Source test failed")
+      expect(screen.getByText("Source test failed")).toBeInTheDocument()
+      expect(
+        screen.getByText(/Use a canonical YouTube feed URL \(channel_id or playlist_id\) and retry\./)
+      ).toBeInTheDocument()
+    })
+  })
+})

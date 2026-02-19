@@ -295,6 +295,33 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
     ).toBeInTheDocument()
   })
 
+  it("guards against non-array studio project settings payloads", () => {
+    const baseImpl = useQueryMock.getMockImplementation()
+    useQueryMock.mockImplementation((options: any) => {
+      const key = String(options?.queryKey?.[1] || "")
+      if (key === "settings-projects") {
+        return {
+          data: {
+            data: { error: "invalid_shape" }
+          },
+          isLoading: false
+        }
+      }
+      return baseImpl?.(options)
+    })
+
+    render(
+      <MemoryRouter>
+        <StudioTabContainer />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByTestId("select-option-none")).toHaveTextContent(
+      "No default project"
+    )
+    expect(screen.queryByTestId("select-option-11")).not.toBeInTheDocument()
+  })
+
   it("renders full-text mobile selector labels with project prerequisite hint", () => {
     state.isMobile = true
 

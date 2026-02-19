@@ -23,6 +23,9 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     DictionaryEntryResponse,
     DictionaryEntryUpdate,
     DictionaryActivityListResponse,
+    DictionaryVersionDetailResponse,
+    DictionaryVersionListResponse,
+    DictionaryVersionRevertResponse,
     DictionaryListResponse,
     DictionaryStatistics,
     EntryListResponse,
@@ -399,14 +402,19 @@ async def create_chat_dictionary(
     service = ChatDictionaryService(db)
     try:
         dict_id = service.create_dictionary(
-            dictionary.name,
-            dictionary.description,
-            dictionary.default_token_budget,
+            name=dictionary.name,
+            description=dictionary.description,
+            default_token_budget=dictionary.default_token_budget,
+            category=dictionary.category,
+            tags=dictionary.tags,
+            included_dictionary_ids=dictionary.included_dictionary_ids,
         )
         dict_data = service.get_dictionary(dict_id)
         entries = service.get_entries(dictionary_id=dict_id) if dict_data else []
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error creating dictionary: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
@@ -544,8 +552,14 @@ async def update_chat_dictionary(
             dictionary_id,
             name=update.name,
             description=update.description,
+            category=update.category,
+            tags=update.tags,
+            included_dictionary_ids=update.included_dictionary_ids,
             is_active=update.is_active,
             default_token_budget=update.default_token_budget,
+            update_category=("category" in update.model_fields_set),
+            update_tags=("tags" in update.model_fields_set),
+            update_included_dictionary_ids=("included_dictionary_ids" in update.model_fields_set),
             update_default_token_budget=("default_token_budget" in update.model_fields_set),
             expected_version=update.version,
         )
@@ -554,6 +568,8 @@ async def update_chat_dictionary(
         entries = service.get_entries(dictionary_id=dictionary_id) if success else []
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
@@ -1045,6 +1061,12 @@ async def import_dictionary(
 
 
 @router.get(
+    "/dictionaries/{dictionary_id}/export/markdown",
+    response_model=ExportDictionaryResponse,
+    include_in_schema=False,
+    tags=["chat-dictionaries"],
+)
+@router.get(
     "/dictionaries/{dictionary_id}/export",
     response_model=ExportDictionaryResponse,
     summary="Export dictionary to markdown",
@@ -1178,6 +1200,136 @@ async def list_dictionary_activity(
         raise
     except Exception as e:
         logger.error(f"Error listing dictionary activity: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get(
+    "/dictionaries/{dictionary_id}/versions",
+    response_model=DictionaryVersionListResponse,
+    summary="List dictionary version history",
+    description="Return paginated revision history snapshots for a dictionary.",
+    tags=["chat-dictionaries"],
+)
+async def list_dictionary_versions(
+    dictionary_id: int,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of versions to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryVersionListResponse:
+    """Return paginated dictionary version history."""
+    service = ChatDictionaryService(db)
+    try:
+        dict_data = service.get_dictionary(dictionary_id)
+        if not dict_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+        versions, total = service.list_dictionary_versions(
+            dictionary_id,
+            limit=limit,
+            offset=offset,
+        )
+        return DictionaryVersionListResponse(
+            dictionary_id=dictionary_id,
+            versions=[
+                {
+                    **version,
+                    "created_at": coerce_datetime(version.get("created_at")),
+                }
+                for version in versions
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing dictionary versions: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.get(
+    "/dictionaries/{dictionary_id}/versions/{revision}",
+    response_model=DictionaryVersionDetailResponse,
+    summary="Get dictionary version snapshot",
+    description="Return metadata and entry payload for a specific dictionary revision.",
+    tags=["chat-dictionaries"],
+)
+async def get_dictionary_version(
+    dictionary_id: int,
+    revision: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryVersionDetailResponse:
+    """Get a specific dictionary revision snapshot."""
+    service = ChatDictionaryService(db)
+    try:
+        snapshot = service.get_dictionary_version(dictionary_id, revision)
+        if not snapshot:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary revision not found")
+
+        entries_payload = snapshot.get("entries") if isinstance(snapshot.get("entries"), list) else []
+        entry_responses = [
+            _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
+            for entry_data in entries_payload
+            if isinstance(entry_data, dict)
+        ]
+
+        dictionary_payload = dict(snapshot.get("dictionary") or {})
+        dictionary_payload.setdefault("id", int(dictionary_id))
+        dictionary_payload.setdefault("entry_count", len(entry_responses))
+        dictionary_payload.setdefault("used_by_chat_count", 0)
+        dictionary_payload.setdefault("used_by_active_chat_count", 0)
+        dictionary_payload.setdefault("used_by_chat_refs", [])
+        dictionary_payload["entry_count"] = len(entry_responses)
+        if dictionary_payload.get("created_at") is None:
+            dictionary_payload["created_at"] = datetime.datetime.now(datetime.timezone.utc)
+        if dictionary_payload.get("updated_at") is None:
+            dictionary_payload["updated_at"] = datetime.datetime.now(datetime.timezone.utc)
+        if dictionary_payload.get("version") is None:
+            dictionary_payload["version"] = 1
+
+        return DictionaryVersionDetailResponse(
+            dictionary_id=dictionary_id,
+            revision=int(snapshot.get("revision") or revision),
+            source_dictionary_version=snapshot.get("source_dictionary_version"),
+            change_type=str(snapshot.get("change_type") or "unspecified"),
+            summary=snapshot.get("summary"),
+            created_at=coerce_datetime(snapshot.get("created_at")),
+            dictionary=ChatDictionaryResponse(**dictionary_payload),
+            entries=entry_responses,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading dictionary revision: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+
+@router.post(
+    "/dictionaries/{dictionary_id}/versions/{revision}/revert",
+    response_model=DictionaryVersionRevertResponse,
+    summary="Revert dictionary to a previous revision",
+    description="Restore dictionary metadata and entries from a specific version-history revision.",
+    tags=["chat-dictionaries"],
+)
+async def revert_dictionary_version(
+    dictionary_id: int,
+    revision: int,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> DictionaryVersionRevertResponse:
+    """Revert dictionary to a previous version snapshot."""
+    service = ChatDictionaryService(db)
+    try:
+        result = service.revert_dictionary_to_revision(dictionary_id, revision)
+        return DictionaryVersionRevertResponse(**result)
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except InputError as e:
+        detail = str(e)
+        status_code_value = status.HTTP_404_NOT_FOUND if "not found" in detail.lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code_value, detail=detail) from e
+    except Exception as e:
+        logger.error(f"Error reverting dictionary revision: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 

@@ -17,6 +17,12 @@ Example key generation:
 python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
 ```
 
+## OpenAI OAuth First-Time Setup
+
+For the first-time OpenAI account-linking flow (operator prerequisites + user walkthrough), see:
+
+- `Docs/User_Guides/OpenAI_OAuth_First_Time_Setup.md`
+
 ## Provider Allowlist
 
 BYOK respects an allowlist at both write time and runtime:

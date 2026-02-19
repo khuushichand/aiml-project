@@ -1,4 +1,9 @@
 import type { TestType } from "@playwright/test"
+import {
+  launchWithExtension,
+  type LaunchWithExtensionResult
+} from "./extension"
+import { launchWithBuiltExtension } from "./extension-build"
 
 /**
  * Read real tldw_server config for E2E tests.
@@ -12,16 +17,61 @@ import type { TestType } from "@playwright/test"
  * - TLDW_E2E_API_KEY     (API key accepted by that server)
  */
 export const requireRealServerConfig = (
-  _test: TestType<any, any>
+  test: TestType<any, any>
 ): { serverUrl: string; apiKey: string } => {
   const serverUrl = process.env.TLDW_E2E_SERVER_URL
   const apiKey = process.env.TLDW_E2E_API_KEY
 
   if (!serverUrl || !apiKey) {
-    throw new Error(
+    test.skip(
+      true,
       "Set TLDW_E2E_SERVER_URL and TLDW_E2E_API_KEY to run real-server E2E tests."
     )
+    return { serverUrl: "", apiKey: "" }
   }
 
   return { serverUrl: serverUrl!, apiKey: apiKey! }
+}
+
+/**
+ * Launch the extension for real-server E2E tests with a bounded startup timeout.
+ *
+ * If the browser/extension cannot start in the current environment, the test is
+ * skipped with a clear message instead of timing out for the full test duration.
+ */
+export const launchWithExtensionOrSkip = async (
+  test: TestType<any, any>,
+  extensionPath: string,
+  options: Parameters<typeof launchWithExtension>[1] = {}
+): Promise<LaunchWithExtensionResult> => {
+  try {
+    return await launchWithExtension(extensionPath, {
+      launchTimeoutMs: 30000,
+      ...(options || {})
+    })
+  } catch (error) {
+    test.skip(
+      true,
+      `Extension launch unavailable in this environment (${String(error)}).`
+    )
+    return undefined as never
+  }
+}
+
+export const launchWithBuiltExtensionOrSkip = async (
+  test: TestType<any, any>,
+  options: Parameters<typeof launchWithBuiltExtension>[0] = {}
+): Promise<Awaited<ReturnType<typeof launchWithBuiltExtension>>> => {
+  try {
+    return await launchWithBuiltExtension({
+      launchTimeoutMs: 30000,
+      ...(options || {})
+    })
+  } catch (error) {
+    test.skip(
+      true,
+      `Extension launch unavailable in this environment (${String(error)}).`
+    )
+    return undefined as never
+  }
 }

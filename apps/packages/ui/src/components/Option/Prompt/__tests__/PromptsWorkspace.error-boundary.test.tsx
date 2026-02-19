@@ -24,13 +24,35 @@ vi.mock("..", () => ({
   }
 }))
 
+const suppressExpectedWindowError = (expectedMessage: string): (() => void) => {
+  const handler = (event: ErrorEvent) => {
+    const message =
+      event.error instanceof Error
+        ? event.error.message
+        : typeof event.message === "string"
+          ? event.message
+          : ""
+
+    if (message.includes(expectedMessage)) {
+      event.preventDefault()
+    }
+  }
+
+  window.addEventListener("error", handler)
+  return () => window.removeEventListener("error", handler)
+}
+
 describe("PromptsWorkspace error boundary integration", () => {
   it("renders Prompts page fallback when PromptBody throws", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    const restoreWindowError = suppressExpectedWindowError("prompt body crash")
 
-    render(<PromptsWorkspace />)
-    expect(await screen.findByTestId("prompts-error-boundary")).toBeInTheDocument()
-
-    consoleSpy.mockRestore()
+    try {
+      render(<PromptsWorkspace />)
+      expect(await screen.findByTestId("prompts-error-boundary")).toBeInTheDocument()
+    } finally {
+      restoreWindowError()
+      consoleSpy.mockRestore()
+    }
   })
 })

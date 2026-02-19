@@ -102,6 +102,7 @@ import {
   getMediaPermalinkIdFromSearch,
   normalizeMediaPermalinkId
 } from '@/components/Review/mediaPermalink'
+import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
 import { downloadBlob } from '@/utils/download-blob'
 import {
   getImmediateCachedMediaTypes,
@@ -3047,6 +3048,36 @@ const MediaPageContent: React.FC = () => {
     )
   }, [selected, setSelectedKnowledge, setRagMediaIds, setChatMode, navigate, message, t])
 
+  const handleGenerateFlashcardsFromMedia = useCallback(
+    (payload: {
+      text: string
+      sourceId?: string
+      sourceTitle?: string
+    }) => {
+      const sourceText = String(payload.text || "").trim()
+      if (!sourceText) {
+        message.warning(
+          t("review:mediaPage.generateFlashcardsEmpty", {
+            defaultValue: "No content available to generate flashcards."
+          })
+        )
+        return
+      }
+
+      navigate(
+        buildFlashcardsGenerateRoute({
+          text: sourceText,
+          sourceType: "media",
+          sourceId:
+            payload.sourceId ||
+            (selected?.id != null ? String(selected.id) : undefined),
+          sourceTitle: payload.sourceTitle || selected?.title || undefined
+        })
+      )
+    },
+    [message, navigate, selected, t]
+  )
+
   const handleCreateNoteWithContent = useCallback(async (noteContent: string, title: string) => {
     try {
       await bgRequest({
@@ -3112,7 +3143,7 @@ const MediaPageContent: React.FC = () => {
         }}
       >
         <div
-          className="flex h-full flex-col"
+          className="flex h-full flex-col bg-surface"
           hidden={sidebarCollapsedValue}
           aria-hidden={sidebarCollapsedValue}
         >
@@ -3600,15 +3631,8 @@ const MediaPageContent: React.FC = () => {
             </div>
           )}
 
-          <MediaIngestJobsPanel />
-          <MediaLibraryStatsPanel
-            results={displayResults}
-            totalCount={activeTotalCount}
-            storageUsage={libraryStorageUsage}
-          />
-
           {/* Results + pagination flow */}
-          <div className="flex-1 overflow-y-auto min-h-0" style={{ minHeight: '325px' }}>
+          <div className="flex-1 overflow-y-auto min-h-0 bg-surface">
             <ResultsList
               results={displayResults}
               selectedId={selected?.id || null}
@@ -3691,6 +3715,18 @@ const MediaPageContent: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div
+            className="shrink-0 border-t border-border bg-surface"
+            data-testid="media-sidebar-bottom-utilities"
+          >
+            <MediaIngestJobsPanel />
+            <MediaLibraryStatsPanel
+              results={displayResults}
+              totalCount={activeTotalCount}
+              storageUsage={libraryStorageUsage}
+            />
           </div>
         </div>
       </div>
@@ -3829,6 +3865,7 @@ const MediaPageContent: React.FC = () => {
               totalResults={displayResults.length}
               onChatWithMedia={handleChatWithMedia}
               onChatAboutMedia={handleChatAboutMedia}
+              onGenerateFlashcardsFromContent={handleGenerateFlashcardsFromMedia}
               onRefreshMedia={handleRefreshMedia}
               onKeywordsUpdated={(mediaId, keywords) => {
                 // Update the selected item with new keywords

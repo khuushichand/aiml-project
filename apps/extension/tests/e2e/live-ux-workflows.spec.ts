@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import { launchWithBuiltExtension } from './utils/extension-build'
@@ -35,7 +36,7 @@ describeLive('Live server UX workflows (no mocks)', () => {
     }
   })
   test('Onboarding with real server shows reachability hints', async () => {
-    const { context, page } = await launchWithExtension(TEST_EXT_PATH)
+    const { context, page } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH)
 
     try {
       // Step 1: server URL

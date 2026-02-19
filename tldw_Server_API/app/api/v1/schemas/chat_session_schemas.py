@@ -32,6 +32,7 @@ class ChatSessionCreate(BaseModel):
     character_id: int = Field(..., description="ID of the character for this chat", gt=0)
     title: Optional[str] = Field(None, description="Optional title for the chat session")
     parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID for forked chats")
+    forked_from_message_id: Optional[str] = Field(None, description="Message ID where this fork begins")
     state: Optional[str] = Field(None, description="Lifecycle state for the conversation")
     topic_label: Optional[str] = Field(None, description="Primary topic label for the conversation")
     cluster_id: Optional[str] = Field(None, description="Cluster/group identifier for navigation")
@@ -89,6 +90,9 @@ class ChatSessionResponse(BaseModel):
     last_modified: datetime = Field(..., description="Last modification timestamp")
     message_count: Optional[int] = Field(0, description="Number of messages in the chat")
     version: int = Field(1, description="Version number for optimistic locking")
+    parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID when forked")
+    root_id: Optional[str] = Field(None, description="Root conversation ID for fork trees")
+    forked_from_message_id: Optional[str] = Field(None, description="Source message ID for forked chats")
     settings: Optional[dict[str, Any]] = Field(
         None,
         description="Optional per-chat settings payload when explicitly requested.",

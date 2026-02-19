@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe('ServerConnectionCard states', () => {
   test('missing-config shows Open settings and navigates', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Card visible with missing-config state (headline + primary CTA)
     await expect(
@@ -33,7 +33,7 @@ test.describe('ServerConnectionCard states', () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Seed config directly in extension storage
     await page.evaluate(
@@ -59,7 +59,7 @@ test.describe('ServerConnectionCard states', () => {
 
   test('unreachable state shows Troubleshooting guide', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Unreachable URL (ensure any existing config is cleared first)
     await page.evaluate(async () => {
@@ -113,7 +113,7 @@ test.describe('ServerConnectionCard states', () => {
 
   test('diagnostics link from connection card opens Health & diagnostics in a new tab', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // First-run: connection card should be visible with diagnostics entry point
     await expect(
@@ -140,7 +140,7 @@ test.describe('ServerConnectionCard states', () => {
 
   test('header status chips and Diagnostics link navigate to Health & diagnostics', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, extensionId } = (await launchWithExtension(extPath)) as any
+    const { context, page, extensionId } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const optionsUrl = `chrome-extension://${extensionId}/options.html`
 
     // Navigate to a route that always shows the main header

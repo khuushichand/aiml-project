@@ -42,6 +42,61 @@ Reference:
   `apps/packages/ui/src/components/Flashcards/components/__tests__/FlashcardEditDrawer.scheduling-metadata.test.tsx`  
   `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx`
 
+## H8 Layout Guardrails (Aesthetic + Minimalist)
+
+### State Priority Mapping
+
+State maps are defined in code and must include all four review states:
+`empty`, `active`, `success`, `error`.
+
+- Canonical mapping source:
+  `apps/packages/ui/src/components/Flashcards/constants/layout-guardrails.ts`
+- Mapping integrity tests:
+  `apps/packages/ui/src/components/Flashcards/constants/__tests__/layout-guardrails.test.ts`
+
+### Primary Action Placement by Tab
+
+- `Study` (`review`):
+  Primary actions live in card content states. The top bar may show at most one primary CTA only in `empty`.
+- `Manage` (`cards`):
+  Primary create action is floating/empty-state scoped, not top-bar scoped.
+- `Transfer` (`importExport`):
+  Primary actions belong to per-panel action rows, not summary/top-level chrome.
+
+### Top-Bar CTA Budgets
+
+- `review`: `active=0`, `success=0`, `empty<=1`, `error<=1`
+- `manage`: `0` for all states
+- `transfer`: `0` for all states
+
+Enforced by:
+- `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx`
+- `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx`
+- `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx`
+
+### Baseline Snapshot Coverage
+
+The baseline suite tracks core visual states for regression:
+
+- Review active and caught-up completion states:
+  `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx`
+- Cards selection state:
+  `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ManageTab.undo-stage3.test.tsx`
+- Import result + transfer summary state:
+  `apps/packages/ui/src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx`
+
+## H10 Help and Docs Sync
+
+- User-facing Flashcards help source-of-truth:
+  `Docs/User_Guides/Flashcards_Study_Guide.md`
+- In-app links to guide sections are centralized in:
+  `apps/packages/ui/src/components/Flashcards/constants/help-links.ts`
+- Link/anchor integrity tests:
+  `apps/packages/ui/src/components/Flashcards/constants/__tests__/help-links.test.ts`
+- UI surfaces using guide links:
+  `apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx`
+  `apps/packages/ui/src/components/Flashcards/tabs/ImportExportTab.tsx`
+
 ## Background References
 
 - https://www.kaggle.com/code/thomasanderson1962/public-synthetic-dataset-generation-w-internvl2

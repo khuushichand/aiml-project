@@ -220,6 +220,8 @@ const NotesGraphModal: React.FC<NotesGraphModalProps> = ({
     okButtonProps={{ disabled: !selectedNodeId }}
     width={1024}
     title={t('option:notesSearch.graphViewTitle', { defaultValue: 'Notes graph view' })}
+    aria-label={t('option:notesSearch.graphViewTitle', { defaultValue: 'Notes graph view' })}
+    keyboard
     destroyOnHidden
   >
       <div className="flex flex-wrap items-end gap-3 mb-3">
@@ -258,18 +260,21 @@ const NotesGraphModal: React.FC<NotesGraphModalProps> = ({
           size="small"
           icon={(<ZoomInIcon className="w-4 h-4" />) as any}
           onClick={handleZoomIn}
+          aria-label={t('option:notesSearch.graphZoomIn', { defaultValue: 'Zoom in' })}
           data-testid="notes-graph-zoom-in"
         />
         <Button
           size="small"
           icon={(<ZoomOutIcon className="w-4 h-4" />) as any}
           onClick={handleZoomOut}
+          aria-label={t('option:notesSearch.graphZoomOut', { defaultValue: 'Zoom out' })}
           data-testid="notes-graph-zoom-out"
         />
         <Button
           size="small"
           icon={(<FitIcon className="w-4 h-4" />) as any}
           onClick={handleFit}
+          aria-label={t('option:notesSearch.graphFit', { defaultValue: 'Fit graph to view' })}
           data-testid="notes-graph-fit"
         />
       </div>

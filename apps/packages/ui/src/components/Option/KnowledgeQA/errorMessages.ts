@@ -49,6 +49,9 @@ export const mapKnowledgeQaExportErrorMessage = (
   if (/403|forbidden/i.test(message)) {
     return "Chatbook export failed. You do not have permission to export this thread."
   }
+  if (/400|422|unprocessable|validation|required field|invalid request|invalid payload/i.test(message)) {
+    return "Chatbook export failed. Export request is invalid. Check the selected thread and try again."
+  }
   if (/429|rate limit|too many/i.test(message)) {
     return "Chatbook export failed. Too many export requests. Please wait and try again."
   }

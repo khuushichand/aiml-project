@@ -14,6 +14,7 @@
     "e2e:pw": "playwright test",
     "e2e:onboarding": "playwright test e2e/workflows/onboarding-ingestion-first.spec.ts --reporter=line",
     "e2e:smoke": "playwright test e2e/smoke/all-pages.spec.ts --reporter=list",
+    "e2e:smoke:stage4": "playwright test e2e/smoke/stage4-axe-high-risk-routes.spec.ts --reporter=line",
     "e2e:smoke:stage5": "playwright test e2e/smoke/stage5-release-gate.spec.ts --reporter=line",
     "e2e:smoke:interaction:stage1": "playwright test e2e/smoke/stage6-interaction-stage1.spec.ts --reporter=line",
     "e2e:smoke:interaction:stage2": "playwright test e2e/smoke/stage6-interaction-stage2.spec.ts --reporter=line",
@@ -32,10 +33,11 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest",
-    "test:extension": "vitest -c vitest.extension.config.ts",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
+  "test": "vitest",
+  "test:extension": "vitest -c vitest.extension.config.ts",
+  "test:characters-harness": "vitest run ../packages/ui/src/components/Option/Characters/__tests__/Manager.first-use.test.tsx ../packages/ui/src/components/Option/Characters/__tests__/CharacterGalleryCard.test.tsx ../packages/ui/src/components/Option/Characters/__tests__/search-utils.test.ts",
+  "test:run": "vitest run",
+  "test:coverage": "vitest run --coverage",
     "test:integration": "bash ../../Helper_Scripts/run-frontend-integration.sh"
   },
   "dependencies": {

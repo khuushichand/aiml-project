@@ -165,7 +165,9 @@ export type KnowledgeQAActions = {
   // Thread actions
   createNewThread: (title?: string) => Promise<string>
   selectThread: (threadId: string) => Promise<void>
+  selectSharedThread: (shareToken: string) => Promise<void>
   askFollowUp: (question: string) => Promise<void>
+  branchFromTurn: (messageId: string) => Promise<void>
 
   // Settings actions
   setPreset: (preset: RagPresetName) => void

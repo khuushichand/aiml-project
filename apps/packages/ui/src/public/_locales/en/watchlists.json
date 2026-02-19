@@ -3,7 +3,7 @@
     "message": "Watchlists"
   },
   "description": {
-    "message": "Monitor RSS feeds, websites, and forums. Create scheduled jobs to automatically scrape and process content."
+    "message": "Monitor RSS feeds, websites, and forums. Create scheduled monitors to automatically scrape and process content."
   },
   "offline": {
     "message": "Server is offline. Please connect to use Watchlists."
@@ -40,6 +40,9 @@
   },
   "tabs_settings": {
     "message": "Settings"
+  },
+  "tabs_moreViews": {
+    "message": "More views"
   },
   "sources_title": {
     "message": "Feeds"
@@ -106,6 +109,24 @@
   },
   "sources_deleteConfirm": {
     "message": "Delete this feed?"
+  },
+  "sources_deleteConfirmDescription": {
+    "message": "This action cannot be undone."
+  },
+  "sources_deleteConfirmForce": {
+    "message": "Delete anyway"
+  },
+  "sources_deleteConfirmInUseTitle": {
+    "message": "Feed is used by active monitors"
+  },
+  "sources_deleteConfirmInUseDescription": {
+    "message": "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs."
+  },
+  "sources_deleteConfirmInUseMore": {
+    "message": "+{{count}} more active monitor{{plural}}"
+  },
+  "sources_deleteUsageLookupError": {
+    "message": "Could not verify active monitor usage before deletion."
   },
   "sources_checkNow": {
     "message": "Check Now"
@@ -176,6 +197,9 @@
   "sources_types_forum": {
     "message": "Forum"
   },
+  "sources_types_forumComingSoon": {
+    "message": "Forum (coming soon)"
+  },
   "sources_form_name": {
     "message": "Name"
   },
@@ -200,11 +224,41 @@
   "sources_form_urlPlaceholder": {
     "message": "e.g., https://example.com/feed.xml"
   },
+  "sources_form_testSource": {
+    "message": "Test Feed"
+  },
+  "sources_form_testSourceHint": {
+    "message": "Runs a quick fetch preview for this saved feed."
+  },
+  "sources_form_testSourceDisabledHint": {
+    "message": "Save this feed before running a connectivity test."
+  },
+  "sources_form_testSourceRequiresSave": {
+    "message": "Create this feed first, then run Test Feed to verify reachability."
+  },
+  "sources_form_testSourceSuccess": {
+    "message": "Test succeeded: found {{count}} preview item{{plural}}."
+  },
+  "sources_form_testSourceNoItems": {
+    "message": "Test completed, but no preview items were returned."
+  },
+  "sources_form_testSourceError": {
+    "message": "Source test failed"
+  },
+  "sources_form_testSourceSummary": {
+    "message": "Test Summary"
+  },
+  "sources_form_testSourceSummaryDescription": {
+    "message": "{{total}} preview item{{plural}}, {{ingestable}} ingestable, {{filtered}} filtered."
+  },
   "sources_form_type": {
     "message": "Type"
   },
   "sources_form_typeRequired": {
     "message": "Please select a type"
+  },
+  "sources_form_forumDisabledHelp": {
+    "message": "Forum monitoring is coming soon. Use RSS Feed or Website for now."
   },
   "sources_form_tags": {
     "message": "Tags"
@@ -270,10 +324,25 @@
     "message": "Run triggered"
   },
   "jobs_deleteConfirm": {
-    "message": "Delete this job?"
+    "message": "Delete this monitor?"
   },
   "jobs_runNow": {
     "message": "Run Now"
+  },
+  "jobs_runNowDisabledHint": {
+    "message": "Activate this monitor to run it manually"
+  },
+  "jobs_showAdvancedDetails": {
+    "message": "Show advanced details"
+  },
+  "jobs_hideAdvancedDetails": {
+    "message": "Hide advanced details"
+  },
+  "jobs_metricsHint": {
+    "message": "Showing core columns. Use advanced mode for scope, filters, and run timing."
+  },
+  "jobs_compactSummary": {
+    "message": "{{scope}} • {{filters}} filters"
   },
   "jobs_never": {
     "message": "Never"
@@ -335,8 +404,23 @@
   "jobs_form_scopeRequired": {
     "message": "Please select at least one feed, group, or tag"
   },
+  "jobs_form_scopeRemediation": {
+    "message": "Select at least one feed, group, or tag before saving."
+  },
   "jobs_form_schedule": {
     "message": "Schedule"
+  },
+  "jobs_form_scheduleTooFrequent": {
+    "message": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes."
+  },
+  "jobs_form_emailRecipientsInvalidInline": {
+    "message": "Invalid addresses: {{emails}}"
+  },
+  "jobs_form_emailRecipientsInvalidSubmit": {
+    "message": "Fix invalid email recipients before saving."
+  },
+  "jobs_form_emailRecipientsRemediation": {
+    "message": "Remove or correct invalid recipient addresses."
   },
   "jobs_form_filters": {
     "message": "Filters"
@@ -354,10 +438,10 @@
     "message": "Server temporary default"
   },
   "jobs_form_retentionDefaultPreview": {
-    "message": "Stored as {{seconds}} seconds"
+    "message": "Saved internally as {{seconds}} seconds"
   },
   "jobs_form_retentionTemporaryPreview": {
-    "message": "Stored as {{seconds}} seconds"
+    "message": "Saved internally as {{seconds}} seconds"
   },
   "jobs_form_retentionUnit_seconds": {
     "message": "Seconds"
@@ -373,6 +457,45 @@
   },
   "jobs_form_retentionUnit_weeks": {
     "message": "Weeks"
+  },
+  "jobs_form_presetHint": {
+    "message": "Presets prefill template and delivery defaults. Structured review groups content into non-overlapping sections for easier scanning."
+  },
+  "jobs_form_previewLoadError": {
+    "message": "Could not load sample candidates for this monitor."
+  },
+  "jobs_form_previewCreateHint": {
+    "message": "Save this monitor once to load sample candidates for live filter preview."
+  },
+  "jobs_form_previewSummary": {
+    "message": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items."
+  },
+  "jobs_form_liveSummaryTitle": {
+    "message": "Live setup summary"
+  },
+  "jobs_form_liveSummary_name": {
+    "message": "Monitor"
+  },
+  "jobs_form_liveSummary_unnamed": {
+    "message": "Untitled monitor"
+  },
+  "jobs_form_liveSummary_scope": {
+    "message": "Scope"
+  },
+  "jobs_form_liveSummary_schedule": {
+    "message": "Schedule"
+  },
+  "jobs_form_liveSummary_filters": {
+    "message": "Filters"
+  },
+  "jobs_form_liveSummary_notScheduled": {
+    "message": "Not scheduled"
+  },
+  "jobs_form_liveSummary_filtersConfigured": {
+    "message": "{{count}} filters configured"
+  },
+  "jobs_form_liveSummary_noFilters": {
+    "message": "No filters configured"
   },
   "jobs_scope_sources": {
     "message": "Feeds"
@@ -440,8 +563,23 @@
   "filters_endDate": {
     "message": "End date"
   },
+  "filters_preview_title": {
+    "message": "Sample filter preview"
+  },
+  "filters_preview_loading": {
+    "message": "Loading sample candidates..."
+  },
+  "filters_preview_summary": {
+    "message": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items."
+  },
+  "filters_preview_empty": {
+    "message": "No sample candidates available."
+  },
+  "filters_preview_unavailable": {
+    "message": "Sample preview unavailable."
+  },
   "filters_help": {
-    "message": "Filters determine which items are included, excluded, or flagged during job runs. Include filters require at least one match."
+    "message": "Filters determine which items are included, excluded, or flagged during monitor runs. Include filters require at least one match."
   },
   "schedule_presets": {
     "message": "Schedule presets"
@@ -450,7 +588,7 @@
     "message": "Custom Schedule"
   },
   "schedule_cronPlaceholder": {
-    "message": "Cron expression (e.g., 0 9 * * MON)"
+    "message": "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
   },
   "schedule_apply": {
     "message": "Apply"
@@ -524,6 +662,12 @@
   "schedule_advancedHint": {
     "message": "Enable only if presets cannot express the cadence you need."
   },
+  "schedule_tooFrequent": {
+    "message": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes."
+  },
+  "schedule_tooFrequentRemediation": {
+    "message": "Increase schedule interval to meet the minimum cadence."
+  },
   "schedule_helpSimple": {
     "message": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns."
   },
@@ -537,7 +681,7 @@
     "message": "Activity"
   },
   "runs_description": {
-    "message": "View execution history and logs for your watchlist jobs."
+    "message": "View execution history and logs for your watchlist monitors."
   },
   "runs_totalItems": {
     "message": "{{total}} runs"
@@ -554,11 +698,44 @@
   "runs_viewDetails": {
     "message": "View Details"
   },
+  "runs_cancelRun": {
+    "message": "Cancel run"
+  },
+  "runs_cancelling": {
+    "message": "Cancelling..."
+  },
+  "runs_cancelFailedRetry": {
+    "message": "Cancel failed. Retry."
+  },
+  "runs_cancelRunSuccess": {
+    "message": "Run cancelled"
+  },
+  "runs_cancelRunError": {
+    "message": "Failed to cancel run"
+  },
   "runs_filterByJob": {
-    "message": "Filter by job"
+    "message": "Filter by monitor"
   },
   "runs_filterByStatus": {
     "message": "Filter by status"
+  },
+  "runs_showAdvancedFilters": {
+    "message": "Show advanced filters"
+  },
+  "runs_hideAdvancedFilters": {
+    "message": "Hide advanced filters"
+  },
+  "runs_activeFilters": {
+    "message": "Active filters"
+  },
+  "runs_activeFiltersJob": {
+    "message": "Monitor: {{name}}"
+  },
+  "runs_activeFiltersStatus": {
+    "message": "Status: {{status}}"
+  },
+  "runs_metricsHint": {
+    "message": "Showing core columns. Use advanced mode for run metrics."
   },
   "runs_autoRefreshing": {
     "message": "Auto-refreshing"
@@ -566,8 +743,11 @@
   "runs_lastRefreshed": {
     "message": "Last refreshed {{time}}"
   },
+  "runs_exportOptions": {
+    "message": "Export options"
+  },
   "runs_columns_job": {
-    "message": "Job"
+    "message": "Monitor"
   },
   "runs_columns_status": {
     "message": "Status"
@@ -590,8 +770,35 @@
   "runs_detail_title": {
     "message": "Run Details"
   },
+  "runs_detail_loadError": {
+    "message": "Failed to load details"
+  },
   "runs_detail_stats": {
     "message": "Statistics"
+  },
+  "runs_detail_statsLabels_status": {
+    "message": "Status"
+  },
+  "runs_detail_statsLabels_duration": {
+    "message": "Duration"
+  },
+  "runs_detail_statsLabels_started": {
+    "message": "Started"
+  },
+  "runs_detail_statsLabels_finished": {
+    "message": "Finished"
+  },
+  "runs_detail_statsLabels_itemsFound": {
+    "message": "Items Found"
+  },
+  "runs_detail_statsLabels_itemsIngested": {
+    "message": "Items Ingested"
+  },
+  "runs_detail_statsLabels_itemsFiltered": {
+    "message": "Items Filtered"
+  },
+  "runs_detail_statsLabels_errors": {
+    "message": "Errors"
   },
   "runs_detail_logs": {
     "message": "Logs"
@@ -604,6 +811,12 @@
   },
   "runs_detail_noItems": {
     "message": "No items found"
+  },
+  "runs_detail_errorMessage": {
+    "message": "Error Message"
+  },
+  "runs_detail_filterMatches": {
+    "message": "Filter Matches"
   },
   "runs_detail_stream": {
     "message": "Live stream"
@@ -740,6 +953,126 @@
   "items_noUrlHint": {
     "message": "This item does not include an original URL."
   },
+  "items_pageSizeLabel": {
+    "message": "Items per page"
+  },
+  "items_batch_selectPage": {
+    "message": "Select page"
+  },
+  "items_batch_selectedCount": {
+    "message": "{{count}} selected"
+  },
+  "items_batch_markSelected": {
+    "message": "Mark selected as reviewed"
+  },
+  "items_batch_markPage": {
+    "message": "Mark page as reviewed"
+  },
+  "items_batch_markAllFiltered": {
+    "message": "Mark all filtered as reviewed"
+  },
+  "items_batch_noSelected": {
+    "message": "Select one or more items to review."
+  },
+  "items_batch_noPage": {
+    "message": "All items on this page are already reviewed."
+  },
+  "items_batch_noFiltered": {
+    "message": "No matching unread items to review."
+  },
+  "items_batch_confirmSelectedTitle": {
+    "message": "Mark selected items as reviewed?"
+  },
+  "items_batch_confirmPageTitle": {
+    "message": "Mark this page as reviewed?"
+  },
+  "items_batch_confirmAllFilteredTitle": {
+    "message": "Mark all filtered items as reviewed?"
+  },
+  "items_batch_confirmDescription": {
+    "message": "This will mark {{count}} item{{plural}} as reviewed."
+  },
+  "items_batch_completed": {
+    "message": "Marked {{count}} item{{plural}} as reviewed."
+  },
+  "items_batch_partial": {
+    "message": "Marked {{success}} item{{successPlural}} as reviewed; {{failed}} failed."
+  },
+  "items_batch_failed": {
+    "message": "Failed to mark items as reviewed."
+  },
+  "items_savedViews_label": {
+    "message": "Saved views"
+  },
+  "items_savedViews_placeholder": {
+    "message": "Select a saved view"
+  },
+  "items_savedViews_save": {
+    "message": "Save view"
+  },
+  "items_savedViews_update": {
+    "message": "Update view"
+  },
+  "items_savedViews_delete": {
+    "message": "Delete view"
+  },
+  "items_savedViews_saveTitle": {
+    "message": "Save current view"
+  },
+  "items_savedViews_saveDescription": {
+    "message": "Save the current source, smart feed, status, and search filters."
+  },
+  "items_savedViews_namePlaceholder": {
+    "message": "Daily triage"
+  },
+  "items_savedViews_defaultName": {
+    "message": "My view"
+  },
+  "items_savedViews_nameRequired": {
+    "message": "Saved view name is required."
+  },
+  "items_savedViews_created": {
+    "message": "Saved view created."
+  },
+  "items_savedViews_updated": {
+    "message": "Saved view updated."
+  },
+  "items_savedViews_deleted": {
+    "message": "Saved view deleted."
+  },
+  "items_savedViews_deleteTitle": {
+    "message": "Delete saved view?"
+  },
+  "items_savedViews_deleteDescription": {
+    "message": "Delete saved view \"{{name}}\"?"
+  },
+  "items_shortcuts_button": {
+    "message": "Shortcuts"
+  },
+  "items_shortcuts_title": {
+    "message": "Keyboard shortcuts"
+  },
+  "items_shortcuts_helpHint": {
+    "message": "Keyboard shortcuts (?)"
+  },
+  "items_shortcuts_nextPrevious": {
+    "message": "Move to next or previous article in the list."
+  },
+  "items_shortcuts_toggleReviewed": {
+    "message": "Toggle reviewed state for the selected article."
+  },
+  "items_shortcuts_openOriginal": {
+    "message": "Open the selected article in a new tab."
+  },
+  "items_shortcuts_refresh": {
+    "message": "Refresh feeds, article list, and smart counts."
+  },
+  "items_shortcuts_newFlow": {
+    "message": "Start a new feed flow by opening Add Source."
+  },
+  "items_shortcuts_help": {
+    "message": "Open this shortcuts help panel."
+  },
   "outputs_title": {
     "message": "Outputs"
   },
@@ -845,6 +1178,30 @@
   "sources_importSummaryDesc": {
     "message": "{{created}} created, {{skipped}} skipped, {{errors}} errors"
   },
+  "sources_importFailedCount": {
+    "message": "{{count}} failed feed{{plural}} ready for recovery actions."
+  },
+  "sources_importRetryFailed": {
+    "message": "Retry failed only"
+  },
+  "sources_importRetryFailedNone": {
+    "message": "No retryable failed feeds."
+  },
+  "sources_importRetryFailedSuccess": {
+    "message": "Retried {{count}} failed feed{{plural}}."
+  },
+  "sources_importRetryFailedError": {
+    "message": "Failed to retry failed feeds."
+  },
+  "sources_importExportFailedCsv": {
+    "message": "Export failed CSV"
+  },
+  "sources_importExportFailedJson": {
+    "message": "Export failed JSON"
+  },
+  "sources_importReasonCode": {
+    "message": "Reason code"
+  },
   "sources_selectedCount": {
     "message": "{{count}} selected"
   },
@@ -863,6 +1220,39 @@
   "sources_bulkToggleConfirmDescription": {
     "message": "{{total}} selected ({{active}} active, {{inactive}} inactive). {{impacted}} will change state."
   },
+  "sources_moveSelectGroup": {
+    "message": "Move to group"
+  },
+  "sources_moveTargetNone": {
+    "message": "No group"
+  },
+  "sources_moveUnknownGroup": {
+    "message": "Selected group"
+  },
+  "sources_bulkMove": {
+    "message": "Move"
+  },
+  "sources_bulkMoveConfirmTitle": {
+    "message": "Move {{count}} selected feeds?"
+  },
+  "sources_bulkMoveConfirmDescription": {
+    "message": "Feeds will be assigned to {{group}}."
+  },
+  "sources_bulkMoveError": {
+    "message": "Bulk move failed"
+  },
+  "sources_bulkMovePartial": {
+    "message": "Moved {{success}} feeds, {{failed}} failed"
+  },
+  "sources_undoBulkMoveTitle": {
+    "message": "Moved {{count}} feeds"
+  },
+  "sources_undoBulkMoveDescription": {
+    "message": "Undo restores previous group assignments for {{seconds}} seconds."
+  },
+  "sources_undoBulkMovePartialError": {
+    "message": "{{restored}} restored, {{failed}} failed to restore"
+  },
   "sources_bulkDelete": {
     "message": "Delete"
   },
@@ -874,6 +1264,12 @@
   },
   "sources_bulkDeleteConfirmDescription": {
     "message": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive)."
+  },
+  "sources_bulkDeleteConfirmInUseSummary": {
+    "message": "{{sources}} selected feed{{sourcesPlural}} are referenced by {{jobs}} active monitor{{jobsPlural}}."
+  },
+  "sources_bulkDeleteConfirmInUseMore": {
+    "message": "+{{count}} more active monitor{{plural}}"
   },
   "sources_bulkUpdated": {
     "message": "{{count}} sources updated"
@@ -920,11 +1316,20 @@
   "groups_create": {
     "message": "Create Group"
   },
+  "groups_edit": {
+    "message": "Edit Group"
+  },
   "groups_created": {
     "message": "Group created"
   },
+  "groups_updated": {
+    "message": "Group updated"
+  },
   "groups_createError": {
     "message": "Failed to create group"
+  },
+  "groups_updateError": {
+    "message": "Failed to update group"
   },
   "groups_deleteConfirm": {
     "message": "Delete this group?"
@@ -934,6 +1339,9 @@
   },
   "groups_deleteError": {
     "message": "Failed to delete group"
+  },
+  "groups_parentCycleError": {
+    "message": "Cannot move a group into itself or one of its descendants."
   },
   "groups_empty": {
     "message": "No groups yet"
@@ -963,7 +1371,7 @@
     "message": "Preview"
   },
   "jobs_preview_title": {
-    "message": "Job Preview"
+    "message": "Monitor Preview"
   },
   "jobs_preview_summary": {
     "message": "{{total}} candidates: {{ingestable}} ingestable, {{filtered}} filtered"
@@ -989,8 +1397,41 @@
   "runs_detail_itemsUpdateError": {
     "message": "Failed to update item"
   },
+  "runs_detail_retryTriggered": {
+    "message": "Retry started as run #{{id}}."
+  },
+  "runs_detail_retryError": {
+    "message": "Failed to retry run"
+  },
+  "runs_detail_remediationTitle": {
+    "message": "Suggested recovery steps"
+  },
+  "runs_detail_remediationFallback": {
+    "message": "Open logs and adjust source or monitor settings, then retry."
+  },
+  "runs_detail_retryRun": {
+    "message": "Retry run"
+  },
+  "runs_detail_editMonitor": {
+    "message": "Edit monitor schedule"
+  },
+  "runs_detail_openSources": {
+    "message": "Review source settings"
+  },
   "runs_detail_itemsUntitled": {
     "message": "Untitled"
+  },
+  "runs_detail_filteredSampleTitle": {
+    "message": "Filtered item sample"
+  },
+  "runs_detail_filteredSampleSummary": {
+    "message": "Showing {{count}} recently filtered item{{plural}} for quick diagnosis."
+  },
+  "runs_detail_filteredSampleHelp": {
+    "message": "Use this sample with filter tallies below to tune include/exclude rules."
+  },
+  "runs_detail_filteredSampleStatus": {
+    "message": "Status: {{status}}"
   },
   "runs_detail_logsTruncated": {
     "message": "Logs truncated"
@@ -1000,6 +1441,18 @@
   },
   "runs_detail_logsPath": {
     "message": "Logs stored at {{path}}"
+  },
+  "runs_detail_duration_lessThanSecond": {
+    "message": "<1 second"
+  },
+  "runs_detail_duration_seconds": {
+    "message": "{{count}} seconds"
+  },
+  "runs_detail_duration_minutes": {
+    "message": "{{count}} minutes"
+  },
+  "runs_detail_duration_hours": {
+    "message": "{{count}} hours"
   },
   "runs_detail_itemsColumns_title": {
     "message": "Title"
@@ -1019,8 +1472,11 @@
   "runs_detail_itemsColumns_created": {
     "message": "Ingested"
   },
+  "runs_detail_itemsSourceReference": {
+    "message": "#{{id}}"
+  },
   "outputs_description": {
-    "message": "Generated briefings and reports from your watchlist jobs."
+    "message": "Generated briefings and reports from your watchlist monitors."
   },
   "outputs_totalItems": {
     "message": "{{total}} outputs"
@@ -1041,7 +1497,28 @@
     "message": "Download"
   },
   "outputs_filterByJob": {
-    "message": "Filter by job"
+    "message": "Filter by monitor"
+  },
+  "outputs_showAdvancedFilters": {
+    "message": "Show advanced filters"
+  },
+  "outputs_hideAdvancedFilters": {
+    "message": "Hide advanced filters"
+  },
+  "outputs_activeFilters": {
+    "message": "Active filters"
+  },
+  "outputs_metricsHint": {
+    "message": "Showing core columns. Use advanced mode for format/run details."
+  },
+  "outputs_deliveryOverflowTitle": {
+    "message": "Additional delivery statuses"
+  },
+  "outputs_deliveryOverflowAria": {
+    "message": "Show additional delivery statuses"
+  },
+  "outputs_deliveryOverflowCount": {
+    "message": "+{{count}} more"
   },
   "outputs_noContent": {
     "message": "No content available"
@@ -1083,7 +1560,7 @@
     "message": "Title"
   },
   "outputs_columns_job": {
-    "message": "Job"
+    "message": "Monitor"
   },
   "outputs_columns_run": {
     "message": "Run"
@@ -1093,6 +1570,9 @@
   },
   "outputs_columns_created": {
     "message": "Created"
+  },
+  "outputs_columns_delivery": {
+    "message": "Delivery"
   },
   "outputs_columns_expires": {
     "message": "Expires"
@@ -1205,6 +1685,24 @@
   "templates_fields_format": {
     "message": "Output Format"
   },
+  "templates_quickInsert": {
+    "message": "Quick insert snippets"
+  },
+  "templates_openDocs": {
+    "message": "Open variables & sample context"
+  },
+  "templates_snippetLoop": {
+    "message": "Items loop"
+  },
+  "templates_snippetTallies": {
+    "message": "Filter tallies"
+  },
+  "templates_snippetSummary": {
+    "message": "Summary block"
+  },
+  "templates_snippetGeneratedAt": {
+    "message": "Generated timestamp"
+  },
   "templates_editor_tab": {
     "message": "Editor"
   },
@@ -1225,6 +1723,9 @@
   },
   "templates_docs_description": {
     "message": "These variables are available in your Jinja2 template."
+  },
+  "templates_docs_sampleContextTitle": {
+    "message": "Sample context payload"
   },
   "templates_docs_hint": {
     "message": "Use Jinja2 syntax: {% for item in items %}, {{ item.title }}, {% if condition %}, etc."
@@ -1295,6 +1796,102 @@
   "overview_onboarding_cta_reviewArticles": {
     "message": "Open Articles"
   },
+  "overview_onboarding_cta_guidedSetup": {
+    "message": "Guided setup"
+  },
+  "overview_onboarding_quickSetup_title": {
+    "message": "Guided quick setup"
+  },
+  "overview_onboarding_quickSetup_steps_feed": {
+    "message": "Feed"
+  },
+  "overview_onboarding_quickSetup_steps_monitor": {
+    "message": "Monitor"
+  },
+  "overview_onboarding_quickSetup_steps_review": {
+    "message": "Review"
+  },
+  "overview_onboarding_quickSetup_fields_sourceName": {
+    "message": "Feed name"
+  },
+  "overview_onboarding_quickSetup_fields_sourceUrl": {
+    "message": "Feed URL"
+  },
+  "overview_onboarding_quickSetup_fields_sourceType": {
+    "message": "Feed type"
+  },
+  "overview_onboarding_quickSetup_fields_monitorName": {
+    "message": "Monitor name"
+  },
+  "overview_onboarding_quickSetup_fields_schedule": {
+    "message": "Schedule"
+  },
+  "overview_onboarding_quickSetup_fields_runNow": {
+    "message": "Run immediately"
+  },
+  "overview_onboarding_quickSetup_placeholders_sourceName": {
+    "message": "e.g., Daily Tech Feed"
+  },
+  "overview_onboarding_quickSetup_placeholders_sourceUrl": {
+    "message": "https://example.com/feed.xml"
+  },
+  "overview_onboarding_quickSetup_placeholders_monitorName": {
+    "message": "e.g., Morning Brief"
+  },
+  "overview_onboarding_quickSetup_validation_sourceNameRequired": {
+    "message": "Enter a feed name"
+  },
+  "overview_onboarding_quickSetup_validation_sourceUrlRequired": {
+    "message": "Enter a feed URL"
+  },
+  "overview_onboarding_quickSetup_validation_sourceUrlInvalid": {
+    "message": "Enter a valid http(s) URL"
+  },
+  "overview_onboarding_quickSetup_validation_sourceTypeRequired": {
+    "message": "Select a feed type"
+  },
+  "overview_onboarding_quickSetup_validation_monitorNameRequired": {
+    "message": "Enter a monitor name"
+  },
+  "overview_onboarding_quickSetup_schedule_none": {
+    "message": "Manual only"
+  },
+  "overview_onboarding_quickSetup_schedule_hourly": {
+    "message": "Hourly"
+  },
+  "overview_onboarding_quickSetup_schedule_daily": {
+    "message": "Daily at 08:00"
+  },
+  "overview_onboarding_quickSetup_schedule_weekdays": {
+    "message": "Weekdays at 08:00"
+  },
+  "overview_onboarding_quickSetup_review_feed": {
+    "message": "Feed"
+  },
+  "overview_onboarding_quickSetup_review_monitor": {
+    "message": "Monitor"
+  },
+  "overview_onboarding_quickSetup_review_schedule": {
+    "message": "Schedule"
+  },
+  "overview_onboarding_quickSetup_review_runNow": {
+    "message": "Run now"
+  },
+  "overview_onboarding_quickSetup_reviewDescription": {
+    "message": "Confirm your setup, then create your feed and monitor."
+  },
+  "overview_onboarding_quickSetup_actions_finish": {
+    "message": "Create setup"
+  },
+  "overview_onboarding_quickSetup_created": {
+    "message": "Quick setup complete. Feed and monitor created."
+  },
+  "overview_onboarding_quickSetup_createdAndRunning": {
+    "message": "Quick setup complete. Your first run has started."
+  },
+  "overview_onboarding_quickSetup_error": {
+    "message": "Failed to complete quick setup."
+  },
   "overview_setupComplete_title": {
     "message": "Setup complete"
   },
@@ -1359,13 +1956,76 @@
     "message": "View run"
   },
   "overview_failedRuns_jobFallback": {
-    "message": "Job #{{id}}"
+    "message": "Monitor #{{id}}"
   },
   "overview_failedRuns_failed": {
     "message": "Failed"
   },
   "overview_failedRuns_noError": {
     "message": "No error details available"
+  },
+  "guide_title": {
+    "message": "Watchlists guided tour"
+  },
+  "guide_start": {
+    "message": "Start guided tour"
+  },
+  "guide_resume": {
+    "message": "Resume guided tour"
+  },
+  "guide_restart": {
+    "message": "Restart guided tour"
+  },
+  "guide_skip": {
+    "message": "Skip"
+  },
+  "guide_finish": {
+    "message": "Finish"
+  },
+  "guide_progress": {
+    "message": "Step {{current}} of {{total}}"
+  },
+  "guide_completedTitle": {
+    "message": "Guided tour complete"
+  },
+  "guide_completedDescription": {
+    "message": "Next: monitor Activity for run health and Articles for review triage."
+  },
+  "guide_openActivity": {
+    "message": "Open Activity"
+  },
+  "guide_openArticles": {
+    "message": "Open Articles"
+  },
+  "guide_steps_sources_title": {
+    "message": "1. Add feeds"
+  },
+  "guide_steps_sources_description": {
+    "message": "Add RSS/site sources so monitors have content to fetch."
+  },
+  "guide_steps_jobs_title": {
+    "message": "2. Create monitors"
+  },
+  "guide_steps_jobs_description": {
+    "message": "Define monitor schedules and scopes for your feeds."
+  },
+  "guide_steps_runs_title": {
+    "message": "3. Check activity"
+  },
+  "guide_steps_runs_description": {
+    "message": "Use Activity to inspect run status, logs, and failures."
+  },
+  "guide_steps_items_title": {
+    "message": "4. Review articles"
+  },
+  "guide_steps_items_description": {
+    "message": "Triaging article output keeps your feed review queue clean."
+  },
+  "guide_steps_outputs_title": {
+    "message": "5. Deliver reports"
+  },
+  "guide_steps_outputs_description": {
+    "message": "Use Reports for generated briefings and output verification."
   },
   "notifications_viewRun": {
     "message": "View run"
@@ -1382,8 +2042,149 @@
   "notifications_runFailedDescription": {
     "message": "Run #{{id}} failed. {{hint}}"
   },
+  "notifications_failureHints_auth": {
+    "message": "Source may require authentication. Verify credentials or access rules."
+  },
+  "notifications_failureHints_rateLimit": {
+    "message": "Source is rate-limiting requests. Reduce schedule frequency and retry."
+  },
+  "notifications_failureHints_timeout": {
+    "message": "The source request timed out. Retry, or lower concurrency for this source."
+  },
+  "notifications_failureHints_dns": {
+    "message": "Source host could not be resolved. Verify the source URL and DNS availability."
+  },
+  "notifications_failureHints_tls": {
+    "message": "TLS/SSL validation failed. Verify certificate chain or endpoint URL."
+  },
+  "notifications_failureHints_network": {
+    "message": "Source could not be reached. Check connectivity and endpoint availability."
+  },
+  "notifications_failureHints_unknownEmpty": {
+    "message": "Open run details to inspect logs and retry."
+  },
+  "notifications_failureHints_unknown": {
+    "message": "Open run details to inspect logs and adjust source or filter settings."
+  },
+  "errors_retry": {
+    "message": "Retry"
+  },
+  "errors_operation_load": {
+    "message": "load"
+  },
+  "errors_title": {
+    "message": "Could not {{operation}} {{context}}."
+  },
+  "errors_details": {
+    "message": "Details: {{message}}"
+  },
+  "errors_next_auth": {
+    "message": "Verify your login/API key permissions for {{context}}, then retry."
+  },
+  "errors_next_rateLimit": {
+    "message": "Reduce monitor frequency or wait briefly before retrying."
+  },
+  "errors_next_timeout": {
+    "message": "Retry now. If this continues, reduce scope or schedule intensity."
+  },
+  "errors_next_network": {
+    "message": "Check server connection and try again."
+  },
+  "errors_next_server": {
+    "message": "Retry in a moment. If this keeps failing, check server logs."
+  },
+  "errors_next_notFound": {
+    "message": "Refresh the list and confirm the requested records still exist."
+  },
+  "errors_next_generic": {
+    "message": "Retry the request. If the problem continues, review server diagnostics."
+  },
+  "help_docs": {
+    "message": "Watchlists docs"
+  },
+  "help_learnMore": {
+    "message": "Learn more"
+  },
+  "help_learnMoreTab": {
+    "message": "Learn more: {{tab}}"
+  },
+  "help_reportIssue": {
+    "message": "Report an issue"
+  },
+  "help_openTopic": {
+    "message": "Open help for {{topic}}"
+  },
+  "help_tabs_overview": {
+    "message": "Overview guidance"
+  },
+  "help_tabs_sources": {
+    "message": "Feeds setup"
+  },
+  "help_tabs_jobs": {
+    "message": "Monitor scheduling"
+  },
+  "help_tabs_runs": {
+    "message": "Activity diagnostics"
+  },
+  "help_tabs_items": {
+    "message": "Article review"
+  },
+  "help_tabs_outputs": {
+    "message": "Report outputs"
+  },
+  "help_tabs_templates": {
+    "message": "Template authoring"
+  },
+  "help_tabs_settings": {
+    "message": "Workspace settings"
+  },
+  "help_topics_opml_label": {
+    "message": "OPML imports"
+  },
+  "help_topics_opml_title": {
+    "message": "What is OPML?"
+  },
+  "help_topics_opml_description": {
+    "message": "OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once."
+  },
+  "help_topics_cron_label": {
+    "message": "cron scheduling"
+  },
+  "help_topics_cron_title": {
+    "message": "How cron scheduling works"
+  },
+  "help_topics_cron_description": {
+    "message": "Cron uses five fields: minute, hour, day-of-month, month, and day-of-week."
+  },
+  "help_topics_ttl_label": {
+    "message": "retention TTL"
+  },
+  "help_topics_ttl_title": {
+    "message": "What retention TTL means"
+  },
+  "help_topics_ttl_description": {
+    "message": "TTL controls how long generated outputs are kept before they expire automatically."
+  },
+  "help_topics_jinja2_label": {
+    "message": "Jinja2 templates"
+  },
+  "help_topics_jinja2_title": {
+    "message": "Using Jinja2 templates"
+  },
+  "help_topics_jinja2_description": {
+    "message": "Jinja2 lets you loop, branch, and format monitor data into reusable report templates."
+  },
+  "help_topics_claimClusters_label": {
+    "message": "claim clusters"
+  },
+  "help_topics_claimClusters_title": {
+    "message": "What claim clusters are"
+  },
+  "help_topics_claimClusters_description": {
+    "message": "Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates."
+  },
   "settings_description": {
-    "message": "Server configuration and retention settings for the watchlists module."
+    "message": "Manage retention and related topic subscriptions for this watchlist workspace."
   },
   "settings_fetchError": {
     "message": "Failed to load settings"
@@ -1406,8 +2207,29 @@
   "settings_ttl_note": {
     "message": "TTL values are configured on the server."
   },
+  "settings_diagnostics_title": {
+    "message": "Internal diagnostics"
+  },
+  "settings_diagnostics_forumsEnabled": {
+    "message": "Forums enabled"
+  },
+  "settings_diagnostics_forumsDefaultTopN": {
+    "message": "Forum default top N"
+  },
+  "settings_diagnostics_sharingMode": {
+    "message": "Sharing mode"
+  },
+  "settings_diagnostics_adminCrossUser": {
+    "message": "admin_cross_user"
+  },
+  "settings_diagnostics_backend": {
+    "message": "Watchlists backend"
+  },
+  "settings_diagnostics_note": {
+    "message": "Internal diagnostics are enabled for this environment."
+  },
   "settings_clusters_title": {
-    "message": "Related Claim Clusters"
+    "message": "Related Topics (Claim Clusters)"
   },
   "settings_clusters_help": {
     "message": "Claim clusters group similar claims detected across feeds. Subscribe a monitor to include those cluster updates in briefings."

@@ -63,9 +63,9 @@ describe("FollowUpInput accessibility", () => {
 
     const input = screen.getByRole("textbox", { name: "Ask a follow-up question" })
     expect(input).toBeDisabled()
-    expect(input).toHaveAttribute("placeholder", "Type your next question...")
+    expect(input).toHaveAttribute("placeholder", "Current search in progress...")
     expect(
-      screen.getByText(/queue your next question while the current search completes/i)
+      screen.getByText(/follow-up input unlocks when the current search completes/i)
     ).toBeInTheDocument()
   })
 

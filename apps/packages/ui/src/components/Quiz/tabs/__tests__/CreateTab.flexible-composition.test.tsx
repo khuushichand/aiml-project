@@ -99,7 +99,7 @@ describe("CreateTab flexible composition", () => {
     expect(firstPayload.question.order_index).toBe(0)
     expect(secondPayload.question.question_text).toBe("First question")
     expect(secondPayload.question.order_index).toBe(1)
-  }, 15000)
+  }, 30000)
 
   it("enforces multiple-choice option bounds between 2 and 6", () => {
     render(<CreateTab onNavigateToTake={() => {}} />)
@@ -128,7 +128,7 @@ describe("CreateTab flexible composition", () => {
     removeButtons.forEach((button) => {
       expect(button).toBeDisabled()
     })
-  }, 15000)
+  }, 20000)
 
   it("remaps selected correct answer when an earlier option is removed", () => {
     render(<CreateTab onNavigateToTake={() => {}} />)
@@ -144,5 +144,70 @@ describe("CreateTab flexible composition", () => {
     const radiosAfterRemoval = screen.getAllByRole("radio")
     expect(radiosAfterRemoval).toHaveLength(3)
     expect(radiosAfterRemoval[1]).toBeChecked()
-  })
+  }, 15000)
+
+  it("uses mobile-friendly stacked option rows and touch-target sizing", () => {
+    render(<CreateTab onNavigateToTake={() => {}} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Add Your First Question/i }))
+
+    const optionRow = screen.getByTestId("create-option-row-0-0")
+    expect(optionRow.className).toContain("flex-col")
+
+    const detailsGrid = screen.getByTestId("create-details-grid")
+    expect(detailsGrid.className).toContain("grid-cols-1")
+    expect(detailsGrid.className).toContain("sm:grid-cols-2")
+
+    expect(screen.getByRole("button", { name: /Add Option/i }).className).toContain("min-h-11")
+    expect(screen.getByRole("button", { name: "Move question 1 up" }).className).toContain("min-h-11")
+    expect(screen.getByRole("button", { name: /Remove option 1 for question 1/i }).className).toContain("min-h-11")
+  }, 15000)
+
+  it("serializes matching questions with prompt options and pair map", async () => {
+    render(<CreateTab onNavigateToTake={() => {}} />)
+
+    fireEvent.change(screen.getByPlaceholderText("e.g., Biology Chapter 5"), {
+      target: { value: "Systems Quiz" }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Add Your First Question/i }))
+
+    const typeSelector = screen.getAllByRole("combobox")[0]
+    fireEvent.mouseDown(typeSelector)
+    fireEvent.click(await screen.findByText("Matching"))
+
+    fireEvent.change(screen.getByPlaceholderText("Enter your question..."), {
+      target: { value: "Match each term to its description." }
+    })
+
+    const leftInputs = screen.getAllByPlaceholderText("Left item")
+    const rightInputs = screen.getAllByPlaceholderText("Matching item")
+
+    fireEvent.change(leftInputs[0], { target: { value: "CPU" } })
+    fireEvent.change(rightInputs[0], { target: { value: "Processor" } })
+
+    fireEvent.change(leftInputs[1], { target: { value: "RAM" } })
+    fireEvent.change(rightInputs[1], { target: { value: "Memory" } })
+
+    fireEvent.click(screen.getByRole("button", { name: /Save Quiz/i }))
+
+    await waitFor(() => {
+      expect(createQuestionMutateAsync).toHaveBeenCalledTimes(1)
+    })
+
+    expect(createQuestionMutateAsync).toHaveBeenCalledWith({
+      quizId: 42,
+      question: {
+        question_type: "matching",
+        question_text: "Match each term to its description.",
+        options: ["CPU", "RAM"],
+        correct_answer: {
+          CPU: "Processor",
+          RAM: "Memory"
+        },
+        explanation: undefined,
+        order_index: 0
+      }
+    })
+  }, 20000)
 })

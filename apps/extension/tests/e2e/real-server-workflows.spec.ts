@@ -1,5 +1,6 @@
+import { test } from "@playwright/test"
 import { registerRealServerWorkflows, type CreateWorkflowDriver, withFeatures, ALL_FEATURE_FLAGS_ENABLED } from "../../../test-utils/real-server-workflows"
-import { launchWithBuiltExtension } from "./utils/extension-build"
+import { launchWithBuiltExtensionOrSkip } from "./utils/real-server"
 import { grantHostPermission } from "./utils/permissions"
 
 const shouldSkipHostPermission =
@@ -15,7 +16,8 @@ const normalizeRoute = (route: string) => {
 const createExtensionDriver: CreateWorkflowDriver = async ({
   serverUrl,
   apiKey,
-  featureFlags
+  featureFlags,
+  testRef
 }) => {
   const baseSeed = {
     __tldw_first_run_complete: true,
@@ -58,7 +60,10 @@ const createExtensionDriver: CreateWorkflowDriver = async ({
     })
   }
 
-  const launchResult = await launchWithBuiltExtension({ seedConfig, seedLocalStorage })
+  const launchResult = await launchWithBuiltExtensionOrSkip(testRef ?? test, {
+    seedConfig,
+    seedLocalStorage
+  })
   const { context, page, extensionId, optionsUrl, sidepanelUrl, openSidepanel } =
     launchResult
 

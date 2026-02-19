@@ -1,28 +1,45 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { Button, Collapse, Form, Input, InputNumber, Modal, Select, Switch, message } from "antd"
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistJob,
+  fetchWatchlistGroups,
   fetchJobOutputTemplates,
+  fetchWatchlistSources,
   fetchWatchlistTemplates,
+  previewWatchlistJob,
   updateWatchlistJob
 } from "@/services/watchlists"
 import type {
   JobOutputPrefs,
+  JobPreviewResult,
   JobScope,
+  PreviewItem,
   WatchlistFilter,
   WatchlistJob,
   WatchlistJobCreate
 } from "@/types/watchlists"
+import { CronDisplay, WatchlistsHelpTooltip } from "../shared"
+import {
+  buildScopeTooltipLines,
+  summarizeScopeCounts
+} from "./job-summaries"
+import { evaluatePreviewItems } from "./filter-preview"
 import { ScopeSelector } from "./ScopeSelector"
 import { FilterBuilder } from "./FilterBuilder"
 import { SchedulePicker } from "./SchedulePicker"
+import { findInvalidEmailRecipients } from "./email-utils"
+import { analyzeScheduleFrequency, MIN_SCHEDULE_INTERVAL_MINUTES } from "./schedule-frequency"
 import {
   durationToSeconds,
   secondsToDurationInput,
   type DurationInputValue,
   type DurationUnit
 } from "./duration-utils"
+import {
+  trackWatchlistsPreventionTelemetry,
+  type WatchlistsPreventionRule
+} from "@/utils/watchlists-prevention-telemetry"
 
 interface JobFormModalProps {
   open: boolean
@@ -41,9 +58,69 @@ type EmailBodyFormat = "auto" | "text" | "html"
 type OutputFormat = "md" | "html"
 type OutputPresetId = "briefing_md" | "newsletter_html" | "mece_md"
 const RETENTION_UNITS: DurationUnit[] = ["minutes", "hours", "days", "weeks", "seconds"]
+const JOB_PREVIEW_LIMIT = 60
+const JOB_PREVIEW_PER_SOURCE = 12
+const JOB_SCOPE_CATALOG_PAGE_SIZE = 500
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+type WatchlistsValidationErrorDetail = {
+  code?: string
+  rule?: string
+  message_key?: string
+  message?: string
+  remediation_key?: string
+  remediation?: string
+  meta?: Record<string, unknown>
+}
+
+const KNOWN_PREVENTION_RULES = new Set<WatchlistsPreventionRule>([
+  "scope_required",
+  "schedule_too_frequent",
+  "invalid_email_recipients",
+  "group_cycle_parent"
+])
+
+const asWatchlistsValidationErrorDetail = (
+  candidate: unknown
+): WatchlistsValidationErrorDetail | null => {
+  if (!isRecord(candidate)) return null
+  const detailCandidate = isRecord(candidate.detail) ? candidate.detail : candidate
+  if (!isRecord(detailCandidate)) return null
+  if (detailCandidate.code !== "watchlists_validation_error") return null
+  return detailCandidate as WatchlistsValidationErrorDetail
+}
+
+const extractWatchlistsValidationErrorDetail = (
+  error: unknown
+): WatchlistsValidationErrorDetail | null => {
+  const direct = asWatchlistsValidationErrorDetail(error)
+  if (direct) return direct
+  if (!isRecord(error)) return null
+  const fromDetails = asWatchlistsValidationErrorDetail(error.details)
+  if (fromDetails) return fromDetails
+  const fromCause = asWatchlistsValidationErrorDetail(error.cause)
+  if (fromCause) return fromCause
+  if (isRecord(error.cause)) {
+    return asWatchlistsValidationErrorDetail(error.cause.details)
+  }
+  return null
+}
+
+const toKnownPreventionRule = (
+  rule: string | undefined
+): WatchlistsPreventionRule | null => {
+  if (!rule) return null
+  return KNOWN_PREVENTION_RULES.has(rule as WatchlistsPreventionRule)
+    ? (rule as WatchlistsPreventionRule)
+    : null
+}
+
+const toOptionalNumber = (value: unknown): number | null => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
 
 const cloneRecord = (value: Record<string, unknown>): Record<string, unknown> => {
   try {
@@ -127,6 +204,13 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const [deliveryChatbookTitle, setDeliveryChatbookTitle] = useState("")
   const [deliveryChatbookDescription, setDeliveryChatbookDescription] = useState("")
   const [deliveryChatbookConversationId, setDeliveryChatbookConversationId] = useState<number | null>(null)
+  const [scopeSourceNamesById, setScopeSourceNamesById] = useState<Record<number, string>>({})
+  const [scopeGroupNamesById, setScopeGroupNamesById] = useState<Record<number, string>>({})
+  const [previewCandidates, setPreviewCandidates] = useState<PreviewItem[]>([])
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+
+  const watchedName = Form.useWatch("name", form)
 
   const applyOutputPrefsState = (prefs: JobOutputPrefs | null | undefined) => {
     const prefsRecord = isRecord(prefs) ? prefs : {}
@@ -371,6 +455,81 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   }, [open, initialValues, form])
 
   useEffect(() => {
+    if (!open) {
+      setScopeSourceNamesById({})
+      setScopeGroupNamesById({})
+      return
+    }
+    let cancelled = false
+
+    Promise.all([
+      fetchWatchlistSources({ page: 1, size: JOB_SCOPE_CATALOG_PAGE_SIZE }),
+      fetchWatchlistGroups({ page: 1, size: JOB_SCOPE_CATALOG_PAGE_SIZE })
+    ])
+      .then(([sourcesResult, groupsResult]) => {
+        if (cancelled) return
+        const nextSources: Record<number, string> = {}
+        const nextGroups: Record<number, string> = {}
+        for (const source of sourcesResult.items || []) {
+          nextSources[source.id] = source.name
+        }
+        for (const group of groupsResult.items || []) {
+          nextGroups[group.id] = group.name
+        }
+        setScopeSourceNamesById(nextSources)
+        setScopeGroupNamesById(nextGroups)
+      })
+      .catch((err) => {
+        console.warn("Failed to load monitor scope summary catalog:", err)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !isEditing || !initialValues?.id) {
+      setPreviewCandidates([])
+      setPreviewError(null)
+      setPreviewLoading(false)
+      return
+    }
+    let cancelled = false
+    setPreviewLoading(true)
+    setPreviewError(null)
+
+    previewWatchlistJob(initialValues.id, {
+      limit: JOB_PREVIEW_LIMIT,
+      per_source: JOB_PREVIEW_PER_SOURCE
+    })
+      .then((result: JobPreviewResult) => {
+        if (cancelled) return
+        setPreviewCandidates(Array.isArray(result.items) ? result.items : [])
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error("Failed to load monitor preview candidates:", err)
+        setPreviewCandidates([])
+        setPreviewError(
+          t(
+            "watchlists:jobs.form.previewLoadError",
+            "Could not load sample candidates for this monitor."
+          )
+        )
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPreviewLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [initialValues?.id, isEditing, open, t])
+
+  useEffect(() => {
     if (!open) return
     let cancelled = false
     const loadTemplates = async () => {
@@ -457,7 +616,49 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         (scope.tags?.length ?? 0) > 0
 
       if (!hasScope) {
+        void trackWatchlistsPreventionTelemetry({
+          type: "watchlists_validation_blocked",
+          surface: "job_form",
+          rule: "scope_required",
+          remediation: "select_scope"
+        })
         message.error(t("watchlists:jobs.form.scopeRequired", "Please select at least one feed, group, or tag"))
+        return
+      }
+
+      const scheduleFrequency = analyzeScheduleFrequency(schedule, MIN_SCHEDULE_INTERVAL_MINUTES)
+      if (scheduleFrequency.tooFrequent) {
+        void trackWatchlistsPreventionTelemetry({
+          type: "watchlists_validation_blocked",
+          surface: "job_form",
+          rule: "schedule_too_frequent",
+          remediation: "increase_interval",
+          minutes: MIN_SCHEDULE_INTERVAL_MINUTES
+        })
+        message.error(
+          t(
+            "watchlists:jobs.form.scheduleTooFrequent",
+            "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
+            { minutes: MIN_SCHEDULE_INTERVAL_MINUTES }
+          )
+        )
+        return
+      }
+
+      if (invalidEmailRecipients.length > 0) {
+        void trackWatchlistsPreventionTelemetry({
+          type: "watchlists_validation_blocked",
+          surface: "job_form",
+          rule: "invalid_email_recipients",
+          remediation: "fix_recipients",
+          count: invalidEmailRecipients.length
+        })
+        message.error(
+          t(
+            "watchlists:jobs.form.emailRecipientsInvalidSubmit",
+            "Fix invalid email recipients before saving."
+          )
+        )
         return
       }
 
@@ -478,20 +679,54 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
 
       if (isEditing && initialValues) {
         await updateWatchlistJob(initialValues.id, jobData)
-        message.success(t("watchlists:jobs.updated", "Job updated"))
+        message.success(t("watchlists:jobs.updated", "Monitor updated"))
       } else {
         await createWatchlistJob(jobData)
-        message.success(t("watchlists:jobs.created", "Job created"))
+        message.success(t("watchlists:jobs.created", "Monitor created"))
       }
 
       onSuccess()
     } catch (err) {
-      console.error("Form submit error:", err)
       if (err && typeof err === "object" && "errorFields" in err) {
         // Validation error - handled by form
         return
       }
-      message.error(t("watchlists:jobs.saveError", "Failed to save job"))
+      const validationDetail = extractWatchlistsValidationErrorDetail(err)
+      if (validationDetail) {
+        const meta = isRecord(validationDetail.meta) ? validationDetail.meta : {}
+        const minimumMinutes = toOptionalNumber(meta.minimum_minutes)
+        const tValues =
+          minimumMinutes != null
+            ? { minutes: Math.max(1, Math.round(minimumMinutes)) }
+            : undefined
+        const localizedMessage = validationDetail.message_key
+          ? t(
+            validationDetail.message_key,
+            validationDetail.message || "Validation failed.",
+            tValues
+          )
+          : validationDetail.message || t("watchlists:jobs.saveError", "Failed to save monitor")
+        const localizedRemediation = validationDetail.remediation_key
+          ? t(validationDetail.remediation_key, validationDetail.remediation || "", tValues)
+          : validationDetail.remediation || ""
+        const knownRule = toKnownPreventionRule(validationDetail.rule)
+        if (knownRule) {
+          void trackWatchlistsPreventionTelemetry({
+            type: "watchlists_validation_blocked",
+            surface: "job_form",
+            rule: knownRule,
+            remediation: "server_validation_error"
+          })
+        }
+        const combinedMessage = [localizedMessage, localizedRemediation]
+          .map((part) => String(part || "").trim())
+          .filter((part) => part.length > 0)
+          .join(" ")
+        message.error(combinedMessage || t("watchlists:jobs.saveError", "Failed to save monitor"))
+        return
+      }
+      console.error("Form submit error:", err)
+      message.error(t("watchlists:jobs.saveError", "Failed to save monitor"))
     } finally {
       setSubmitting(false)
     }
@@ -512,6 +747,67 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
 
   const retentionDefaultSeconds = durationToSeconds(retentionDefaultDuration)
   const retentionTemporarySeconds = durationToSeconds(retentionTemporaryDuration)
+  const invalidEmailRecipients = findInvalidEmailRecipients(deliveryEmailRecipients)
+
+  const scopeSummary = summarizeScopeCounts(scope, t)
+  const scopeSummaryLines = buildScopeTooltipLines(
+    scope,
+    {
+      sources: scopeSourceNamesById,
+      groups: scopeGroupNamesById
+    },
+    t,
+    4
+  )
+
+  const scopedPreviewCandidates = useMemo(() => {
+    const selectedSourceIds = Array.isArray(scope.sources) ? scope.sources : []
+    if (selectedSourceIds.length === 0) return previewCandidates
+    const allowedSourceIds = new Set(selectedSourceIds)
+    return previewCandidates.filter((item) => allowedSourceIds.has(item.source_id))
+  }, [previewCandidates, scope.sources])
+
+  const filterPreviewOutcome = useMemo(
+    () => evaluatePreviewItems(scopedPreviewCandidates, filters),
+    [filters, scopedPreviewCandidates]
+  )
+
+  const filterPreviewUnavailableReason = useMemo(() => {
+    if (previewLoading) return null
+    if (!isEditing) {
+      return t(
+        "watchlists:jobs.form.previewCreateHint",
+        "Save this monitor once to load sample candidates for live filter preview."
+      )
+    }
+    if (previewError) return previewError
+    return null
+  }, [isEditing, previewError, previewLoading, t])
+
+  const filterPreviewSummaryText = useMemo(() => {
+    if (previewLoading) {
+      return t("watchlists:filters.preview.loading", "Loading sample candidates...")
+    }
+    if (filterPreviewUnavailableReason) {
+      return filterPreviewUnavailableReason
+    }
+    return t(
+      "watchlists:jobs.form.previewSummary",
+      "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
+      {
+        ingestable: filterPreviewOutcome.ingestable,
+        filtered: filterPreviewOutcome.filtered,
+        total: filterPreviewOutcome.total
+      }
+    )
+  }, [
+    filterPreviewOutcome.filtered,
+    filterPreviewOutcome.ingestable,
+    filterPreviewOutcome.total,
+    filterPreviewUnavailableReason,
+    previewLoading,
+    t
+  ])
 
   const collapseItems = [
     {
@@ -551,7 +847,17 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           )}
         </span>
       ),
-      children: <FilterBuilder value={filters} onChange={setFilters} />
+      children: (
+        <FilterBuilder
+          value={filters}
+          onChange={setFilters}
+          preview={{
+            loading: previewLoading,
+            unavailableReason: filterPreviewUnavailableReason,
+            outcome: filterPreviewOutcome
+          }}
+        />
+      )
     },
     {
       key: "output_prefs",
@@ -602,8 +908,9 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           </div>
 
           <div className="rounded-lg border border-border p-3">
-            <div className="mb-3 text-sm font-medium">
+            <div className="mb-3 flex items-center gap-1 text-sm font-medium">
               {t("watchlists:jobs.form.defaultTemplate", "Default template")}
+              <WatchlistsHelpTooltip topic="jinja2" />
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
@@ -662,8 +969,9 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           </div>
 
           <div className="rounded-lg border border-border p-3">
-            <div className="mb-3 text-sm font-medium">
+            <div className="mb-3 flex items-center gap-1 text-sm font-medium">
               {t("watchlists:jobs.form.retentionDefaults", "Retention defaults")}
+              <WatchlistsHelpTooltip topic="ttl" />
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
@@ -696,7 +1004,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   <div className="mt-1 text-xs text-text-muted">
                     {t(
                       "watchlists:jobs.form.retentionDefaultPreview",
-                      "Stored as {{seconds}} seconds",
+                      "Saved internally as {{seconds}} seconds",
                       { seconds: retentionDefaultSeconds }
                     )}
                   </div>
@@ -735,7 +1043,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   <div className="mt-1 text-xs text-text-muted">
                     {t(
                       "watchlists:jobs.form.retentionTemporaryPreview",
-                      "Stored as {{seconds}} seconds",
+                      "Saved internally as {{seconds}} seconds",
                       { seconds: retentionTemporarySeconds }
                     )}
                   </div>
@@ -769,7 +1077,17 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   placeholder={t("watchlists:jobs.form.emailRecipientsPlaceholder", "Enter email addresses")}
                   className="w-full"
                   tokenSeparators={[","]}
+                  status={invalidEmailRecipients.length > 0 ? "error" : undefined}
                 />
+                {invalidEmailRecipients.length > 0 && (
+                  <div className="mt-1 text-xs text-danger">
+                    {t(
+                      "watchlists:jobs.form.emailRecipientsInvalidInline",
+                      "Invalid addresses: {{emails}}",
+                      { emails: invalidEmailRecipients.join(", ") }
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="mb-1 text-xs text-text-muted">
@@ -905,6 +1223,51 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           <Switch />
         </Form.Item>
       </Form>
+
+      <div
+        className="mt-4 rounded-lg border border-border bg-surface p-3 space-y-2"
+        data-testid="job-form-live-summary"
+      >
+        <div className="text-sm font-medium">
+          {t("watchlists:jobs.form.liveSummaryTitle", "Live setup summary")}
+        </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-summary-name">
+          {t("watchlists:jobs.form.liveSummary.name", "Monitor")}:{" "}
+          {String(watchedName || "").trim() || t("watchlists:jobs.form.liveSummary.unnamed", "Untitled monitor")}
+        </div>
+        <div className="grid grid-cols-1 gap-2 text-xs text-text-muted md:grid-cols-3">
+          <div>
+            <div className="font-medium text-text">{t("watchlists:jobs.form.liveSummary.scope", "Scope")}</div>
+            <div data-testid="job-form-summary-scope">{scopeSummary}</div>
+          </div>
+          <div>
+            <div className="font-medium text-text">{t("watchlists:jobs.form.liveSummary.schedule", "Schedule")}</div>
+            <div data-testid="job-form-summary-schedule">
+              {schedule ? (
+                <CronDisplay expression={schedule} showIcon={false} />
+              ) : (
+                t("watchlists:jobs.form.liveSummary.notScheduled", "Not scheduled")
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="font-medium text-text">{t("watchlists:jobs.form.liveSummary.filters", "Filters")}</div>
+            <div data-testid="job-form-summary-filters">
+              {filters.length > 0
+                ? t("watchlists:jobs.form.liveSummary.filtersConfigured", "{{count}} filters configured", {
+                  count: filters.length
+                })
+                : t("watchlists:jobs.form.liveSummary.noFilters", "No filters configured")}
+            </div>
+          </div>
+        </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-summary-scope-lines">
+          {scopeSummaryLines.join(" · ")}
+        </div>
+        <div className="text-xs text-text-muted" data-testid="job-form-summary-preview">
+          {filterPreviewSummaryText}
+        </div>
+      </div>
 
       <Collapse
         items={collapseItems}

@@ -150,6 +150,32 @@ class ConflictError(CharactersRAGDBError):
         return f"{base} ({', '.join(details)})" if details else base
 
 
+class RestoreWindowExpiredError(ConflictError):
+    """Raised when a soft-deleted character is outside the configured restore window."""
+
+    def __init__(
+        self,
+        *,
+        character_id: int,
+        retention_days: int,
+        deleted_at_iso: str,
+        restore_expires_at_iso: str,
+    ):
+        message = (
+            f"Restore window expired for character ID {character_id}. "
+            f"This character was deleted at {deleted_at_iso} and can only be restored within "
+            f"{retention_days} days."
+        )
+        super().__init__(
+            message,
+            entity="character_cards",
+            entity_id=character_id,
+        )
+        self.retention_days = retention_days
+        self.deleted_at_iso = deleted_at_iso
+        self.restore_expires_at_iso = restore_expires_at_iso
+
+
 _CHACHA_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
     AttributeError,
@@ -406,7 +432,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 22  # Schema v22 adds character exemplars
+    _CURRENT_SCHEMA_VERSION = 25  # Schema v25 adds quiz hints and hint-penalty scoring metadata
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -553,7 +579,8 @@ CREATE TRIGGER character_cards_au
 AFTER UPDATE ON character_cards BEGIN
   INSERT INTO character_cards_fts(character_cards_fts,rowid,
                                   name,description,personality,scenario,system_prompt)
-  VALUES('delete',old.id,old.name,old.description,old.personality,old.scenario,old.system_prompt);
+  SELECT 'delete',old.id,old.name,old.description,old.personality,old.scenario,old.system_prompt
+  WHERE old.deleted = 0;
 
   INSERT INTO character_cards_fts(rowid,name,description,personality,scenario,system_prompt)
   SELECT new.id,new.name,new.description,new.personality,new.scenario,new.system_prompt
@@ -2477,6 +2504,195 @@ UPDATE db_schema_version
    AND version < 22;
 """
 
+    _MIGRATION_SQL_V22_TO_V23 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 23 - Quiz multi-select question type (2026-02-18)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = OFF;
+
+DROP TRIGGER IF EXISTS quiz_questions_ai;
+DROP TRIGGER IF EXISTS quiz_questions_au;
+DROP TRIGGER IF EXISTS quiz_questions_ad;
+
+CREATE TABLE IF NOT EXISTS quiz_questions_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quiz_id INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  question_type TEXT NOT NULL CHECK(question_type IN ('multiple_choice', 'multi_select', 'true_false', 'fill_blank')),
+  question_text TEXT NOT NULL,
+  options TEXT,
+  correct_answer TEXT NOT NULL,
+  explanation TEXT,
+  points INTEGER NOT NULL DEFAULT 1,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  tags_json TEXT,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO quiz_questions_new(
+  id, quiz_id, question_type, question_text, options, correct_answer, explanation,
+  points, order_index, tags_json, deleted, client_id, version, created_at, last_modified
+)
+SELECT
+  id, quiz_id, question_type, question_text, options, correct_answer, explanation,
+  points, order_index, tags_json, deleted, client_id, version, created_at, last_modified
+FROM quiz_questions;
+
+DROP TABLE IF EXISTS quiz_questions;
+ALTER TABLE quiz_questions_new RENAME TO quiz_questions;
+
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_deleted ON quiz_questions(deleted);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_order ON quiz_questions(quiz_id, order_index);
+
+DROP TABLE IF EXISTS quiz_questions_fts;
+CREATE VIRTUAL TABLE IF NOT EXISTS quiz_questions_fts
+USING fts5(
+  question_text, explanation,
+  content='quiz_questions',
+  content_rowid='id'
+);
+
+CREATE TRIGGER quiz_questions_ai
+AFTER INSERT ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(rowid, question_text, explanation)
+  SELECT new.id, new.question_text, new.explanation
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER quiz_questions_au
+AFTER UPDATE ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(quiz_questions_fts,rowid,question_text,explanation)
+  VALUES('delete',old.id,old.question_text,old.explanation);
+
+  INSERT INTO quiz_questions_fts(rowid, question_text, explanation)
+  SELECT new.id, new.question_text, new.explanation
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER quiz_questions_ad
+AFTER DELETE ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(quiz_questions_fts,rowid,question_text,explanation)
+  VALUES('delete',old.id,old.question_text,old.explanation);
+END;
+
+INSERT INTO quiz_questions_fts(quiz_questions_fts) VALUES('rebuild');
+
+PRAGMA foreign_keys = ON;
+
+UPDATE db_schema_version
+   SET version = 23
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 23;
+"""
+
+    _MIGRATION_SQL_V23_TO_V24 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 24 - Quiz matching question type (2026-02-18)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = OFF;
+
+DROP TRIGGER IF EXISTS quiz_questions_ai;
+DROP TRIGGER IF EXISTS quiz_questions_au;
+DROP TRIGGER IF EXISTS quiz_questions_ad;
+
+CREATE TABLE IF NOT EXISTS quiz_questions_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quiz_id INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  question_type TEXT NOT NULL CHECK(question_type IN ('multiple_choice', 'multi_select', 'matching', 'true_false', 'fill_blank')),
+  question_text TEXT NOT NULL,
+  options TEXT,
+  correct_answer TEXT NOT NULL,
+  explanation TEXT,
+  points INTEGER NOT NULL DEFAULT 1,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  tags_json TEXT,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO quiz_questions_new(
+  id, quiz_id, question_type, question_text, options, correct_answer, explanation,
+  points, order_index, tags_json, deleted, client_id, version, created_at, last_modified
+)
+SELECT
+  id, quiz_id, question_type, question_text, options, correct_answer, explanation,
+  points, order_index, tags_json, deleted, client_id, version, created_at, last_modified
+FROM quiz_questions;
+
+DROP TABLE IF EXISTS quiz_questions;
+ALTER TABLE quiz_questions_new RENAME TO quiz_questions;
+
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_deleted ON quiz_questions(deleted);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_order ON quiz_questions(quiz_id, order_index);
+
+DROP TABLE IF EXISTS quiz_questions_fts;
+CREATE VIRTUAL TABLE IF NOT EXISTS quiz_questions_fts
+USING fts5(
+  question_text, explanation,
+  content='quiz_questions',
+  content_rowid='id'
+);
+
+CREATE TRIGGER quiz_questions_ai
+AFTER INSERT ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(rowid, question_text, explanation)
+  SELECT new.id, new.question_text, new.explanation
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER quiz_questions_au
+AFTER UPDATE ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(quiz_questions_fts,rowid,question_text,explanation)
+  VALUES('delete',old.id,old.question_text,old.explanation);
+
+  INSERT INTO quiz_questions_fts(rowid, question_text, explanation)
+  SELECT new.id, new.question_text, new.explanation
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER quiz_questions_ad
+AFTER DELETE ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(quiz_questions_fts,rowid,question_text,explanation)
+  VALUES('delete',old.id,old.question_text,old.explanation);
+END;
+
+INSERT INTO quiz_questions_fts(quiz_questions_fts) VALUES('rebuild');
+
+PRAGMA foreign_keys = ON;
+
+UPDATE db_schema_version
+   SET version = 24
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 24;
+"""
+
+    _MIGRATION_SQL_V24_TO_V25 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 25 - Quiz hint metadata and source citations (2026-02-18)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE quiz_questions
+  ADD COLUMN IF NOT EXISTS hint TEXT;
+
+ALTER TABLE quiz_questions
+  ADD COLUMN IF NOT EXISTS hint_penalty_points INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE quiz_questions
+  ADD COLUMN IF NOT EXISTS source_citations_json TEXT;
+
+UPDATE db_schema_version
+   SET version = 25
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 25;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -3702,6 +3918,84 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V21->V22: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V22 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v22_to_v23(self, conn: sqlite3.Connection):
+        """Migrates schema from V22 to V23 (Quiz multi-select support)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V22 to V23 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V22_TO_V23)
+            final_version = self._get_db_version(conn)
+            if final_version != 23:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V22->V23 failed version check. Expected 23, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V23 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V22->V23 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V22->V23 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V22->V23: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V23 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v23_to_v24(self, conn: sqlite3.Connection):
+        """Migrates schema from V23 to V24 (Quiz matching support)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V23 to V24 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V23_TO_V24)
+            final_version = self._get_db_version(conn)
+            if final_version != 24:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V23->V24 failed version check. Expected 24, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V24 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V23->V24 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V23->V24 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V23->V24: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V24 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v24_to_v25(self, conn: sqlite3.Connection):
+        """Migrates schema from V24 to V25 (Quiz hint metadata and source citations)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V24 to V25 for DB: {self.db_path_str}...")
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info('quiz_questions')").fetchall()}
+            if "hint" not in cols:
+                conn.execute("ALTER TABLE quiz_questions ADD COLUMN hint TEXT")
+            if "hint_penalty_points" not in cols:
+                conn.execute(
+                    "ALTER TABLE quiz_questions ADD COLUMN hint_penalty_points INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK(hint_penalty_points >= 0)"
+                )
+            if "source_citations_json" not in cols:
+                conn.execute("ALTER TABLE quiz_questions ADD COLUMN source_citations_json TEXT")
+
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 25
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 25;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 25:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V24->V25 failed version check. Expected 25, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V25 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V24->V25 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V24->V25 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V24->V25: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V25 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -3839,6 +4133,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
+                    self._ensure_character_cards_fts_triggers_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -3904,6 +4199,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 22 and current_db_version == 21:
                         self._migrate_from_v21_to_v22(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 23 and current_db_version == 22:
+                        self._migrate_from_v22_to_v23(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 24 and current_db_version == 23:
+                        self._migrate_from_v23_to_v24(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 25 and current_db_version == 24:
+                        self._migrate_from_v24_to_v25(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4082,8 +4386,44 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         if target_version >= 22 and current_db_version == 21:
                             self._migrate_from_v21_to_v22(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 23 and current_db_version == 22:
+                            self._migrate_from_v22_to_v23(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 24 and current_db_version == 23:
+                            self._migrate_from_v23_to_v24(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 25 and current_db_version == 24:
+                            self._migrate_from_v24_to_v25(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 21 and target_version >= 22:
                         self._migrate_from_v21_to_v22(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 23 and current_db_version == 22:
+                            self._migrate_from_v22_to_v23(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 24 and current_db_version == 23:
+                            self._migrate_from_v23_to_v24(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 25 and current_db_version == 24:
+                            self._migrate_from_v24_to_v25(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 22 and target_version >= 23:
+                        self._migrate_from_v22_to_v23(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 24 and current_db_version == 23:
+                            self._migrate_from_v23_to_v24(conn)
+                            current_db_version = self._get_db_version(conn)
+                        if target_version >= 25 and current_db_version == 24:
+                            self._migrate_from_v24_to_v25(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 23 and target_version >= 24:
+                        self._migrate_from_v23_to_v24(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 25 and current_db_version == 24:
+                            self._migrate_from_v24_to_v25(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 24 and target_version >= 25:
+                        self._migrate_from_v24_to_v25(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         # Fallback: attempt linear migrations for known versions.
@@ -4125,6 +4465,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v20_to_v21(conn)
                             elif fallback_version == 21:
                                 self._migrate_from_v21_to_v22(conn)
+                            elif fallback_version == 22:
+                                self._migrate_from_v22_to_v23(conn)
+                            elif fallback_version == 23:
+                                self._migrate_from_v23_to_v24(conn)
+                            elif fallback_version == 24:
+                                self._migrate_from_v24_to_v25(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4167,6 +4513,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 22 and current_db_version == 21:
                     self._migrate_from_v21_to_v22(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 23 and current_db_version == 22:
+                    self._migrate_from_v22_to_v23(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 24 and current_db_version == 23:
+                    self._migrate_from_v23_to_v24(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 25 and current_db_version == 24:
+                    self._migrate_from_v24_to_v25(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -4174,6 +4529,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"Schema migration process completed, but final DB version is {final_version_check}, expected {target_version}. Manual check required.")
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
+                self._ensure_character_cards_fts_triggers_sqlite(conn)
                 # Seed/heal character_cards_fts before request traffic. Schema V4
                 # inserts "Default Assistant" before FTS triggers are created.
                 self._self_heal_character_cards_fts_sqlite(conn)
@@ -4243,6 +4599,54 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "Added missing character_cards columns required for FTS rebuild: {}",
                 ", ".join(missing_columns),
             )
+
+    def _ensure_character_cards_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Normalize character_cards FTS triggers to avoid invalid delete operations.
+
+        When restoring a soft-deleted row (`deleted: 1 -> 0`), the previous trigger
+        shape always issued an FTS `delete` against the old row snapshot. If the row
+        was already absent from FTS, SQLite could surface a transient
+        `database disk image is malformed` error from FTS internals. We guard this by
+        deleting from FTS only when `old.deleted = 0`.
+        """
+
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS character_cards_ai;
+                DROP TRIGGER IF EXISTS character_cards_au;
+                DROP TRIGGER IF EXISTS character_cards_ad;
+
+                CREATE TRIGGER character_cards_ai
+                AFTER INSERT ON character_cards BEGIN
+                  INSERT INTO character_cards_fts(rowid,name,description,personality,scenario,system_prompt)
+                  SELECT new.id,new.name,new.description,new.personality,new.scenario,new.system_prompt
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER character_cards_au
+                AFTER UPDATE ON character_cards BEGIN
+                  INSERT INTO character_cards_fts(character_cards_fts,rowid,
+                                                  name,description,personality,scenario,system_prompt)
+                  SELECT 'delete',old.id,old.name,old.description,old.personality,old.scenario,old.system_prompt
+                  WHERE old.deleted = 0;
+
+                  INSERT INTO character_cards_fts(rowid,name,description,personality,scenario,system_prompt)
+                  SELECT new.id,new.name,new.description,new.personality,new.scenario,new.system_prompt
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER character_cards_ad
+                AFTER DELETE ON character_cards BEGIN
+                  INSERT INTO character_cards_fts(character_cards_fts,rowid,
+                                                  name,description,personality,scenario,system_prompt)
+                  SELECT 'delete',old.id,old.name,old.description,old.personality,old.scenario,old.system_prompt
+                  WHERE old.deleted = 0;
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring character_cards FTS triggers: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -4372,6 +4776,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 22:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V21_TO_V22, conn, expected_version=22)
                 current_version = 22
+            if current_version < 23:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V22_TO_V23, conn, expected_version=23)
+                current_version = 23
+            if current_version < 24:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V23_TO_V24, conn, expected_version=24)
+                current_version = 24
+            if current_version < 25:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V24_TO_V25, conn, expected_version=25)
+                current_version = 25
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -7136,7 +7549,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 exc_info=True)
             raise
 
-    def restore_character_card(self, character_id: int, expected_version: int) -> bool | None:
+    def restore_character_card(
+        self,
+        character_id: int,
+        expected_version: int,
+        *,
+        retention_days: int | None = None,
+    ) -> bool | None:
         """
         Restores a soft-deleted character card using optimistic locking.
 
@@ -7168,8 +7587,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 # First check if record exists at all
-                check_cursor = conn.execute("SELECT deleted, version FROM character_cards WHERE id = ?",
-                                           (character_id,))
+                check_cursor = conn.execute(
+                    "SELECT deleted, version, last_modified FROM character_cards WHERE id = ?",
+                    (character_id,),
+                )
                 record_status = check_cursor.fetchone()
 
                 if not record_status:
@@ -7191,6 +7612,58 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"Restore for Character ID {character_id} failed: version mismatch (db has {current_db_version}, client expected {expected_version}).",
                         entity="character_cards", entity_id=character_id
                     )
+
+                if retention_days is not None:
+                    if retention_days < 0:
+                        raise InputError(  # noqa: TRY301
+                            f"Invalid retention_days value {retention_days}. Must be >= 0."
+                        )
+
+                    deleted_at_raw = record_status["last_modified"]
+                    deleted_at_dt: datetime | None = None
+
+                    if isinstance(deleted_at_raw, datetime):
+                        deleted_at_dt = deleted_at_raw
+                    elif isinstance(deleted_at_raw, str):
+                        normalized = deleted_at_raw.strip()
+                        if normalized.endswith("Z"):
+                            normalized = f"{normalized[:-1]}+00:00"
+                        try:
+                            deleted_at_dt = datetime.fromisoformat(normalized)
+                        except ValueError:
+                            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                                try:
+                                    deleted_at_dt = datetime.strptime(normalized, fmt)
+                                    break
+                                except ValueError:
+                                    continue
+
+                    if deleted_at_dt is None:
+                        raise CharactersRAGDBError(  # noqa: TRY301
+                            f"Cannot evaluate restore retention window for character {character_id}: "
+                            f"invalid deleted timestamp {deleted_at_raw!r}."
+                        )
+
+                    if deleted_at_dt.tzinfo is None:
+                        deleted_at_dt = deleted_at_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        deleted_at_dt = deleted_at_dt.astimezone(timezone.utc)
+
+                    restore_expires_at_dt = deleted_at_dt + timedelta(days=retention_days)
+                    now_utc = datetime.now(timezone.utc)
+                    if now_utc > restore_expires_at_dt:
+                        deleted_at_iso = (
+                            deleted_at_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                        )
+                        restore_expires_at_iso = (
+                            restore_expires_at_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                        )
+                        raise RestoreWindowExpiredError(  # noqa: TRY301
+                            character_id=character_id,
+                            retention_days=retention_days,
+                            deleted_at_iso=deleted_at_iso,
+                            restore_expires_at_iso=restore_expires_at_iso,
+                        )
 
                 cursor = conn.execute(query, params)
 
@@ -10507,6 +10980,54 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._list_generic_items("keywords", "keyword COLLATE NOCASE", limit, offset)
 
+    def get_note_counts_for_keywords(self, keyword_ids: list[int] | None = None) -> dict[int, int]:
+        """Return active-note usage counts keyed by keyword ID."""
+        normalized_ids: list[int] = []
+        if keyword_ids:
+            seen = set()
+            for raw in keyword_ids:
+                try:
+                    value = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if value <= 0 or value in seen:
+                    continue
+                seen.add(value)
+                normalized_ids.append(value)
+
+        keyword_table = self._map_table_for_backend("keywords")
+        notes_table = self._map_table_for_backend("notes")
+        keyword_filter = ""
+        params: list[Any] = []
+        if normalized_ids:
+            placeholders = ", ".join(["?"] * len(normalized_ids))
+            keyword_filter = f" AND nk.keyword_id IN ({placeholders})"
+            params.extend(normalized_ids)
+
+        deleted_note_value = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
+        deleted_keyword_value = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
+
+        query = f"""
+            SELECT nk.keyword_id AS keyword_id, COUNT(DISTINCT nk.note_id) AS note_count
+            FROM note_keywords nk
+            JOIN {notes_table} n ON n.id = nk.note_id
+            JOIN {keyword_table} k ON k.id = nk.keyword_id
+            WHERE n.deleted = {deleted_note_value}
+              AND k.deleted = {deleted_keyword_value}
+              {keyword_filter}
+            GROUP BY nk.keyword_id
+        """
+
+        cursor = self.execute_query(query, tuple(params) if params else None)
+        out: dict[int, int] = {}
+        for row in cursor.fetchall():
+            try:
+                keyword_id = int(row["keyword_id"])
+                out[keyword_id] = int(row["note_count"] or 0)
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def count_keywords(self) -> int:
         """Return count of active (non-deleted) keywords."""
         keyword_table = self._map_table_for_backend("keywords")
@@ -10544,6 +11065,266 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             expected_version=expected_version,
             pk_col_name="id" # Explicitly pass, though "id" is default
         )
+
+    def rename_keyword(self, keyword_id: int, new_keyword_text: str, expected_version: int) -> dict[str, Any]:
+        """
+        Rename an active keyword using optimistic locking.
+
+        Raises:
+            InputError: If new keyword text is empty.
+            ConflictError: If versions conflict or the destination text already exists.
+            CharactersRAGDBError: On storage failures.
+        """
+        normalized_text = str(new_keyword_text or "").strip()
+        if not normalized_text:
+            raise InputError("Keyword text cannot be empty.")  # noqa: TRY003
+
+        keyword_table = self._map_table_for_backend("keywords")
+        now_iso = self._get_current_utc_timestamp_iso()
+        next_version = expected_version + 1
+
+        try:
+            with self.transaction() as conn:
+                current_version = self._get_current_db_version(conn, keyword_table, "id", keyword_id)
+                if current_version != expected_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Keyword {keyword_id} version mismatch (db={current_version}, expected={expected_version}).",
+                        entity="keywords",
+                        entity_id=keyword_id,
+                    )
+
+                duplicate = conn.execute(
+                    f"SELECT id FROM {keyword_table} WHERE deleted = 0 AND keyword = ? AND id <> ? LIMIT 1",
+                    (normalized_text, keyword_id),
+                ).fetchone()
+                if duplicate:
+                    raise ConflictError(  # noqa: TRY003
+                        f"Keyword '{normalized_text}' already exists.",
+                        entity="keywords",
+                        entity_id=normalized_text,
+                    )
+
+                cursor = conn.execute(
+                    (
+                        f"UPDATE {keyword_table} "
+                        f"SET keyword = ?, last_modified = ?, version = ?, client_id = ? "
+                        f"WHERE id = ? AND version = ? AND deleted = 0"
+                    ),
+                    (
+                        normalized_text,
+                        now_iso,
+                        next_version,
+                        self.client_id,
+                        keyword_id,
+                        expected_version,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Keyword {keyword_id} update affected 0 rows.",
+                        entity="keywords",
+                        entity_id=keyword_id,
+                    )
+
+                refreshed = conn.execute(
+                    f"SELECT * FROM {keyword_table} WHERE id = ? AND deleted = 0",
+                    (keyword_id,),
+                ).fetchone()
+                if not refreshed:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Keyword {keyword_id} not found after rename.",
+                        entity="keywords",
+                        entity_id=keyword_id,
+                    )
+                return dict(refreshed)
+        except sqlite3.IntegrityError as exc:
+            if "unique constraint failed" in str(exc).lower():
+                raise ConflictError(  # noqa: TRY003
+                    f"Keyword '{normalized_text}' already exists.",
+                    entity="keywords",
+                    entity_id=normalized_text,
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to rename keyword {keyword_id}: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Keyword '{normalized_text}' already exists.",
+                    entity="keywords",
+                    entity_id=normalized_text,
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to rename keyword {keyword_id}: {exc}") from exc  # noqa: TRY003
+
+    def _merge_keyword_links_for_table(
+        self,
+        conn: Any,
+        *,
+        link_table: str,
+        entity_column: str,
+        source_keyword_id: int,
+        target_keyword_id: int,
+        now_iso: str,
+    ) -> int:
+        """Move link-table references from source keyword to target keyword."""
+        if self.backend_type == BackendType.POSTGRESQL:
+            insert_sql = (
+                f"INSERT INTO {link_table} ({entity_column}, keyword_id, created_at) "
+                f"SELECT src.{entity_column}, ?, ? "
+                f"FROM {link_table} src "
+                f"WHERE src.keyword_id = ? "
+                f"ON CONFLICT ({entity_column}, keyword_id) DO NOTHING"
+            )
+        else:
+            insert_sql = (
+                f"INSERT OR IGNORE INTO {link_table} ({entity_column}, keyword_id, created_at) "
+                f"SELECT src.{entity_column}, ?, ? "
+                f"FROM {link_table} src "
+                f"WHERE src.keyword_id = ?"
+            )
+
+        insert_cursor = conn.execute(
+            insert_sql,
+            (target_keyword_id, now_iso, source_keyword_id),
+        )
+        inserted_count = int(insert_cursor.rowcount or 0)
+        if inserted_count < 0:
+            inserted_count = 0
+
+        conn.execute(
+            f"DELETE FROM {link_table} WHERE keyword_id = ?",
+            (source_keyword_id,),
+        )
+        return inserted_count
+
+    def merge_keywords(
+        self,
+        *,
+        source_keyword_id: int,
+        target_keyword_id: int,
+        expected_source_version: int,
+        expected_target_version: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Merge one keyword into another and soft-delete the source keyword atomically.
+
+        Link tables migrated:
+        - note_keywords
+        - conversation_keywords
+        - collection_keywords
+        - flashcard_keywords
+        """
+        if source_keyword_id == target_keyword_id:
+            raise InputError("Source and target keyword IDs must differ.")  # noqa: TRY003
+
+        keyword_table = self._map_table_for_backend("keywords")
+        now_iso = self._get_current_utc_timestamp_iso()
+        source_next_version = expected_source_version + 1
+
+        try:
+            with self.transaction() as conn:
+                source_version = self._get_current_db_version(
+                    conn, keyword_table, "id", source_keyword_id
+                )
+                if source_version != expected_source_version:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        (
+                            f"Source keyword {source_keyword_id} version mismatch "
+                            f"(db={source_version}, expected={expected_source_version})."
+                        ),
+                        entity="keywords",
+                        entity_id=source_keyword_id,
+                    )
+
+                target_version = self._get_current_db_version(
+                    conn, keyword_table, "id", target_keyword_id
+                )
+                if (
+                    expected_target_version is not None
+                    and target_version != expected_target_version
+                ):
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        (
+                            f"Target keyword {target_keyword_id} version mismatch "
+                            f"(db={target_version}, expected={expected_target_version})."
+                        ),
+                        entity="keywords",
+                        entity_id=target_keyword_id,
+                    )
+
+                merged_note_links = self._merge_keyword_links_for_table(
+                    conn,
+                    link_table="note_keywords",
+                    entity_column="note_id",
+                    source_keyword_id=source_keyword_id,
+                    target_keyword_id=target_keyword_id,
+                    now_iso=now_iso,
+                )
+                merged_conversation_links = self._merge_keyword_links_for_table(
+                    conn,
+                    link_table="conversation_keywords",
+                    entity_column="conversation_id",
+                    source_keyword_id=source_keyword_id,
+                    target_keyword_id=target_keyword_id,
+                    now_iso=now_iso,
+                )
+                merged_collection_links = self._merge_keyword_links_for_table(
+                    conn,
+                    link_table="collection_keywords",
+                    entity_column="collection_id",
+                    source_keyword_id=source_keyword_id,
+                    target_keyword_id=target_keyword_id,
+                    now_iso=now_iso,
+                )
+                merged_flashcard_links = self._merge_keyword_links_for_table(
+                    conn,
+                    link_table="flashcard_keywords",
+                    entity_column="card_id",
+                    source_keyword_id=source_keyword_id,
+                    target_keyword_id=target_keyword_id,
+                    now_iso=now_iso,
+                )
+
+                soft_delete_cursor = conn.execute(
+                    (
+                        f"UPDATE {keyword_table} "
+                        f"SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                        f"WHERE id = ? AND version = ? AND deleted = 0"
+                    ),
+                    (
+                        now_iso,
+                        source_next_version,
+                        self.client_id,
+                        source_keyword_id,
+                        expected_source_version,
+                    ),
+                )
+                if soft_delete_cursor.rowcount == 0:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        (
+                            f"Source keyword {source_keyword_id} changed during merge "
+                            f"(expected version {expected_source_version})."
+                        ),
+                        entity="keywords",
+                        entity_id=source_keyword_id,
+                    )
+
+                return {
+                    "source_keyword_id": source_keyword_id,
+                    "target_keyword_id": target_keyword_id,
+                    "source_deleted_version": source_next_version,
+                    "target_version": target_version,
+                    "merged_note_links": merged_note_links,
+                    "merged_conversation_links": merged_conversation_links,
+                    "merged_collection_links": merged_collection_links,
+                    "merged_flashcard_links": merged_flashcard_links,
+                }
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(
+                f"Failed to merge keyword {source_keyword_id} into {target_keyword_id}: {exc}"
+            ) from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(
+                f"Failed to merge keyword {source_keyword_id} into {target_keyword_id}: {exc}"
+            ) from exc  # noqa: TRY003
 
     def search_keywords(self, search_term: str, limit: int = 10) -> list[dict[str, Any]]:
         """
@@ -11708,6 +12489,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         source_ref_id = card_data.get('source_ref_id')
         conversation_id = self._normalize_nullable_text(card_data.get('conversation_id'))
         message_id = self._normalize_nullable_text(card_data.get('message_id'))
+        ef = max(1.3, float(card_data.get('ef', 2.5) or 2.5))
+        interval_days = max(0, int(card_data.get('interval_days', 0) or 0))
+        repetitions = max(0, int(card_data.get('repetitions', 0) or 0))
+        lapses = max(0, int(card_data.get('lapses', 0) or 0))
+        due_at = self._normalize_nullable_text(card_data.get('due_at'))
+        last_reviewed_at = self._normalize_nullable_text(card_data.get('last_reviewed_at'))
         model_type = card_data.get('model_type')
         reverse_flag = card_data.get('reverse')
         if not model_type:
@@ -11744,12 +12531,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     source_ref_id,
                     conversation_id,
                     message_id,
-                    2.5,
-                    0,
-                    0,
-                    0,
-                    None,
-                    None,
+                    ef,
+                    interval_days,
+                    repetitions,
+                    lapses,
+                    due_at,
+                    last_reviewed_at,
                     now,
                     now,
                     False,
@@ -11805,6 +12592,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     source_ref_id = card_data.get('source_ref_id')
                     conversation_id = self._normalize_nullable_text(card_data.get('conversation_id'))
                     message_id = self._normalize_nullable_text(card_data.get('message_id'))
+                    ef = max(1.3, float(card_data.get('ef', 2.5) or 2.5))
+                    interval_days = max(0, int(card_data.get('interval_days', 0) or 0))
+                    repetitions = max(0, int(card_data.get('repetitions', 0) or 0))
+                    lapses = max(0, int(card_data.get('lapses', 0) or 0))
+                    due_at = self._normalize_nullable_text(card_data.get('due_at'))
+                    last_reviewed_at = self._normalize_nullable_text(card_data.get('last_reviewed_at'))
                     model_type = card_data.get('model_type')
                     reverse_flag = card_data.get('reverse')
                     if not model_type:
@@ -11828,12 +12621,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             source_ref_id,
                             conversation_id,
                             message_id,
-                            2.5,
-                            0,
-                            0,
-                            0,
-                            None,
-                            None,
+                            ef,
+                            interval_days,
+                            repetitions,
+                            lapses,
+                            due_at,
+                            last_reviewed_at,
                             now,
                             now,
                             False,
@@ -12524,6 +13317,98 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ==========================
     # Quizzes (V12)
     # ==========================
+    def _normalize_multi_select_indices(self, answer: Any) -> list[int]:
+        """Normalize multi-select answers into sorted unique option indices."""
+        values: list[Any]
+        if isinstance(answer, list | tuple | set):
+            values = list(answer)
+        elif isinstance(answer, str):
+            raw = answer.strip()
+            if not raw:
+                return []
+            parsed: Any = None
+            with contextlib.suppress(json.JSONDecodeError):
+                parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                values = list(parsed)
+            else:
+                values = [part.strip() for part in raw.split(",")]
+        else:
+            values = [answer]
+
+        indices: list[int] = []
+        for value in values:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            if index < 0:
+                continue
+            indices.append(index)
+
+        return sorted(set(indices))
+
+    def _normalize_matching_map(self, answer: Any) -> dict[str, str]:
+        """Normalize matching answers into a clean left->right map."""
+        pairs: list[tuple[str, str]] = []
+
+        if isinstance(answer, dict):
+            pairs = [(str(left), str(right)) for left, right in answer.items()]
+        elif isinstance(answer, list | tuple | set):
+            for item in answer:
+                if isinstance(item, dict):
+                    left = item.get("left")
+                    right = item.get("right")
+                    if left is not None and right is not None:
+                        pairs.append((str(left), str(right)))
+                    continue
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    pairs.append((str(item[0]), str(item[1])))
+                    continue
+                if isinstance(item, str):
+                    token = item.strip()
+                    delimiter = "=>" if "=>" in token else ("::" if "::" in token else None)
+                    if not delimiter:
+                        continue
+                    left, right = token.split(delimiter, 1)
+                    pairs.append((left, right))
+        elif isinstance(answer, str):
+            raw = answer.strip()
+            if not raw:
+                return {}
+            parsed: Any = None
+            with contextlib.suppress(json.JSONDecodeError):
+                parsed = json.loads(raw)
+            if parsed is not None and parsed is not answer:
+                return self._normalize_matching_map(parsed)
+            for token in re.split(r"(?:\r?\n)|(?:\|\|)", raw):
+                trimmed = token.strip()
+                if not trimmed:
+                    continue
+                delimiter = "=>" if "=>" in trimmed else ("::" if "::" in trimmed else None)
+                if not delimiter:
+                    continue
+                left, right = trimmed.split(delimiter, 1)
+                pairs.append((left, right))
+
+        normalized: dict[str, str] = {}
+        for left, right in pairs:
+            left_text = str(left).strip()
+            right_text = str(right).strip()
+            if not left_text or not right_text:
+                continue
+            normalized[left_text] = right_text
+        return normalized
+
+    def _normalize_matching_compare_map(self, answer: Any) -> dict[str, str]:
+        """Normalize matching maps for case-insensitive comparison."""
+        normalized = self._normalize_matching_map(answer)
+        return {
+            self._normalize_fill_blank_text(left): self._normalize_fill_blank_text(right)
+            for left, right in normalized.items()
+            if self._normalize_fill_blank_text(left) and self._normalize_fill_blank_text(right)
+        }
+
     def _normalize_quiz_correct_answer(self, question_type: str, correct_answer: Any) -> str:
         """Normalize correct_answer into a consistent stored string."""
         if question_type == "multiple_choice":
@@ -12531,21 +13416,49 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return str(int(correct_answer))
             except (TypeError, ValueError):
                 return "0"
+        if question_type == "multi_select":
+            normalized = self._normalize_multi_select_indices(correct_answer)
+            return json.dumps(normalized, ensure_ascii=True)
+        if question_type == "matching":
+            normalized = self._normalize_matching_map(correct_answer)
+            return json.dumps(normalized, ensure_ascii=True, sort_keys=True)
         if question_type == "true_false":
             val = str(correct_answer).strip().lower()
             return "true" if val in {"true", "1", "yes", "y"} else "false"
         return str(correct_answer or "").strip()
 
     def _deserialize_quiz_question(self, row: Any) -> dict[str, Any] | None:
-        item = self._deserialize_row_fields(row, ["options", "tags_json"])
+        item = self._deserialize_row_fields(row, ["options", "tags_json", "source_citations_json"])
         if not item:
             return None
         tags = item.pop("tags_json", None)
         if tags is not None:
             item["tags"] = tags
+        source_citations = item.pop("source_citations_json", None)
+        if isinstance(source_citations, list):
+            item["source_citations"] = source_citations
+        elif isinstance(source_citations, dict):
+            item["source_citations"] = [source_citations]
+        else:
+            item["source_citations"] = None
+        hint_value = item.get("hint")
+        if isinstance(hint_value, str):
+            item["hint"] = hint_value.strip() or None
+        elif hint_value is None:
+            item["hint"] = None
+        else:
+            item["hint"] = str(hint_value).strip() or None
+        try:
+            item["hint_penalty_points"] = max(0, int(item.get("hint_penalty_points") or 0))
+        except (TypeError, ValueError):
+            item["hint_penalty_points"] = 0
         if item.get("question_type") == "multiple_choice" and item.get("correct_answer") is not None:
             with contextlib.suppress(TypeError, ValueError):
                 item["correct_answer"] = int(item["correct_answer"])
+        if item.get("question_type") == "multi_select" and item.get("correct_answer") is not None:
+            item["correct_answer"] = self._normalize_multi_select_indices(item["correct_answer"])
+        if item.get("question_type") == "matching" and item.get("correct_answer") is not None:
+            item["correct_answer"] = self._normalize_matching_map(item["correct_answer"])
         return item
 
     def _public_quiz_question(self, question: dict[str, Any]) -> dict[str, Any]:
@@ -12750,9 +13663,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         quiz_id: int,
         question_type: str,
         question_text: str,
-        correct_answer: int | str,
+        correct_answer: int | str | list[int] | dict[str, str],
         options: list[str] | None = None,
         explanation: str | None = None,
+        hint: str | None = None,
+        hint_penalty_points: int = 0,
+        source_citations: list[dict[str, Any]] | None = None,
         points: int = 1,
         order_index: int = 0,
         tags: list[str] | None = None,
@@ -12763,6 +13679,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         norm_correct = self._normalize_quiz_correct_answer(question_type, correct_answer)
         options_json = self._ensure_json_string(options)
         tags_json = self._ensure_json_string(tags)
+        source_citations_json = self._ensure_json_string(source_citations)
+        normalized_hint = (hint or "").strip() or None
+        normalized_hint_penalty = max(0, int(hint_penalty_points or 0))
         try:
             with self.transaction() as conn:
                 quiz_row = conn.execute("SELECT id FROM quizzes WHERE id = ? AND deleted = 0", (quiz_id,)).fetchone()
@@ -12770,8 +13689,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     raise ConflictError("Quiz not found", entity="quizzes", identifier=quiz_id)  # noqa: TRY003
                 insert_sql = (
                     "INSERT INTO quiz_questions(quiz_id, question_type, question_text, options, correct_answer, "
-                    "explanation, points, order_index, tags_json, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "explanation, hint, hint_penalty_points, source_citations_json, points, order_index, tags_json, deleted, client_id, "
+                    "version, created_at, last_modified) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     quiz_id,
@@ -12780,6 +13700,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     options_json,
                     norm_correct,
                     explanation,
+                    normalized_hint,
+                    normalized_hint_penalty,
+                    source_citations_json,
                     points,
                     order_index,
                     tags_json,
@@ -12809,7 +13732,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get question by ID."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, points, "
+            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, hint, "
+            "hint_penalty_points, source_citations_json, points, "
             "order_index, tags_json, deleted, client_id, version, created_at, last_modified "
             "FROM quiz_questions WHERE id = ? " + deleted_clause
         )
@@ -12855,7 +13779,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             query_params.extend([int(limit), int(offset)])
 
         query = (
-            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, points, "
+            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, hint, "
+            "hint_penalty_points, source_citations_json, points, "
             "order_index, tags_json, deleted, client_id, version, created_at, last_modified "
             f"FROM quiz_questions WHERE {where_sql} {fts_filter} "
             f"{order_clause} {limit_clause}"
@@ -12881,7 +13806,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def update_question(self, question_id: int, updates: dict[str, Any], client_id: str = "unknown") -> bool:
         """Update question fields."""
         expected_version = updates.pop("expected_version", None)
-        allowed = {"question_type", "question_text", "options", "correct_answer", "explanation", "points", "order_index", "tags"}
+        allowed = {
+            "question_type",
+            "question_text",
+            "options",
+            "correct_answer",
+            "explanation",
+            "hint",
+            "hint_penalty_points",
+            "source_citations",
+            "points",
+            "order_index",
+            "tags",
+        }
         set_parts = []
         params: list[Any] = []
         for k, v in updates.items():
@@ -12903,6 +13840,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     question_type = row["question_type"] if row else None
                 set_parts.append("correct_answer = ?")
                 params.append(self._normalize_quiz_correct_answer(str(question_type or "fill_blank"), v))
+            elif k == "hint":
+                normalized_hint = str(v or "").strip()
+                set_parts.append("hint = ?")
+                params.append(normalized_hint or None)
+            elif k == "hint_penalty_points":
+                try:
+                    normalized_penalty = max(0, int(v or 0))
+                except (TypeError, ValueError):
+                    normalized_penalty = 0
+                set_parts.append("hint_penalty_points = ?")
+                params.append(normalized_penalty)
+            elif k == "source_citations":
+                set_parts.append("source_citations_json = ?")
+                params.append(self._ensure_json_string(v))
             else:
                 set_parts.append(f"{k} = ?")
                 params.append(v)
@@ -13057,13 +14008,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     points_awarded = 0
                     correct_answer = None
                     explanation = None
+                    hint_used = bool(ans.get("hint_used"))
+                    hint_penalty_points = 0
+                    source_citations = None
                     if question:
                         is_correct = self._check_answer(question, user_answer)
                         points_val = int(question.get("points") or 0)
-                        points_awarded = points_val if is_correct else 0
+                        configured_hint_penalty = max(0, int(question.get("hint_penalty_points") or 0))
+                        if is_correct:
+                            hint_penalty_points = min(points_val, configured_hint_penalty) if hint_used else 0
+                            points_awarded = max(0, points_val - hint_penalty_points)
+                        else:
+                            points_awarded = 0
                         score += points_awarded
                         correct_answer = question.get("correct_answer")
                         explanation = question.get("explanation")
+                        source_citations = question.get("source_citations")
                     time_spent_ms = ans.get("time_spent_ms")
                     if isinstance(time_spent_ms, (int, float)):
                         total_time_ms += int(time_spent_ms)
@@ -13073,6 +14033,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         "is_correct": is_correct,
                         "correct_answer": correct_answer,
                         "explanation": explanation,
+                        "hint_used": hint_used,
+                        "hint_penalty_points": hint_penalty_points,
+                        "source_citations": source_citations,
                         "points_awarded": points_awarded,
                         "time_spent_ms": time_spent_ms,
                     })
@@ -13165,14 +14128,156 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return int(user_answer) == int(correct)
             except (TypeError, ValueError):
                 return False
+        if q_type == "multi_select":
+            if user_answer is None or correct is None:
+                return False
+            user_indices = self._normalize_multi_select_indices(user_answer)
+            correct_indices = self._normalize_multi_select_indices(correct)
+            if not correct_indices:
+                return False
+            return user_indices == correct_indices
+        if q_type == "matching":
+            if user_answer is None or correct is None:
+                return False
+            user_map = self._normalize_matching_compare_map(user_answer)
+            correct_map = self._normalize_matching_compare_map(correct)
+            if not correct_map:
+                return False
+            return user_map == correct_map
         if q_type == "true_false":
             if user_answer is None or correct is None:
                 return False
             return str(user_answer).strip().lower() == str(correct).strip().lower()
         if q_type == "fill_blank":
-            if user_answer is None or correct is None:
-                return False
-            return str(user_answer).strip().lower() == str(correct).strip().lower()
+            return self._check_fill_blank_answer(user_answer, correct)
+        return False
+
+    def _normalize_fill_blank_text(self, value: Any) -> str:
+        """Normalize a fill-blank answer for stable comparison."""
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+    def _clamp_fill_blank_threshold(self, value: Any) -> float:
+        """Clamp fuzzy threshold to a sensible range."""
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 0.88
+        return min(1.0, max(0.5, parsed))
+
+    def _parse_fill_blank_json_rules(self, raw: str) -> list[tuple[str, bool, float]] | None:
+        """Parse JSON encoded fill-blank rules."""
+        if not (raw.startswith("{") or raw.startswith("[")):
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+
+        if isinstance(parsed, list):
+            accepted = [str(entry).strip() for entry in parsed if str(entry or "").strip()]
+            if not accepted:
+                return None
+            return [(entry, False, 0.88) for entry in accepted]
+
+        if not isinstance(parsed, dict):
+            return None
+
+        accepted_raw = parsed.get("accepted_answers")
+        if not isinstance(accepted_raw, list):
+            return None
+        accepted = [str(entry).strip() for entry in accepted_raw if str(entry or "").strip()]
+        if not accepted:
+            return None
+
+        fuzzy = bool(parsed.get("fuzzy"))
+        threshold = self._clamp_fill_blank_threshold(parsed.get("fuzzy_threshold"))
+        return [(entry, fuzzy, threshold) for entry in accepted]
+
+    def _parse_fill_blank_token_rule(self, token: str) -> tuple[str, bool, float] | None:
+        """Parse a single delimited fill-blank token."""
+        trimmed = token.strip()
+        if not trimmed:
+            return None
+        if not trimmed.startswith("~"):
+            return (trimmed, False, 0.88)
+
+        body = trimmed[1:].strip()
+        if not body:
+            return None
+        threshold_match = re.match(r"^(\d(?:\.\d+)?)\s*:\s*(.+)$", body)
+        if threshold_match:
+            return (
+                threshold_match.group(2).strip(),
+                True,
+                self._clamp_fill_blank_threshold(threshold_match.group(1)),
+            )
+        return (body, True, 0.88)
+
+    def _parse_fill_blank_answer_rules(self, correct_answer: Any) -> list[tuple[str, bool, float]]:
+        """Parse supported fill-blank answer syntaxes into match rules."""
+        raw = str(correct_answer or "").strip()
+        if not raw:
+            return []
+
+        json_rules = self._parse_fill_blank_json_rules(raw)
+        if json_rules:
+            return json_rules
+
+        delimited_rules = []
+        for part in raw.split("||"):
+            parsed_rule = self._parse_fill_blank_token_rule(part)
+            if parsed_rule:
+                delimited_rules.append(parsed_rule)
+        if delimited_rules:
+            return delimited_rules
+
+        return [(raw, False, 0.88)]
+
+    def _levenshtein_distance(self, left: str, right: str) -> int:
+        """Compute Levenshtein distance for fuzzy fill-blank matching."""
+        if left == right:
+            return 0
+        if not left:
+            return len(right)
+        if not right:
+            return len(left)
+
+        previous = list(range(len(right) + 1))
+        current = [0] * (len(right) + 1)
+        for left_index, left_char in enumerate(left, start=1):
+            current[0] = left_index
+            for right_index, right_char in enumerate(right, start=1):
+                cost = 0 if left_char == right_char else 1
+                current[right_index] = min(
+                    previous[right_index] + 1,
+                    current[right_index - 1] + 1,
+                    previous[right_index - 1] + cost,
+                )
+            previous, current = current, previous
+        return previous[-1]
+
+    def _fill_blank_similarity_ratio(self, left: str, right: str) -> float:
+        """Compute normalized similarity in [0, 1]."""
+        max_len = max(len(left), len(right))
+        if max_len == 0:
+            return 1.0
+        return 1.0 - (self._levenshtein_distance(left, right) / max_len)
+
+    def _check_fill_blank_answer(self, user_answer: Any, correct_answer: Any) -> bool:
+        """Grade fill-blank answers using exact, alternates, and fuzzy rules."""
+        normalized_user = self._normalize_fill_blank_text(user_answer)
+        if not normalized_user:
+            return False
+
+        rules = self._parse_fill_blank_answer_rules(correct_answer)
+        for value, fuzzy, threshold in rules:
+            normalized_value = self._normalize_fill_blank_text(value)
+            if not normalized_value:
+                continue
+            if normalized_value == normalized_user:
+                return True
+            if fuzzy and self._fill_blank_similarity_ratio(normalized_user, normalized_value) >= threshold:
+                return True
         return False
 
     # --- Writing Playground Methods ---

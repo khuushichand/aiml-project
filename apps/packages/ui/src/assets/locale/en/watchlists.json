@@ -1,6 +1,6 @@
 {
   "title": "Watchlists",
-  "description": "Monitor RSS feeds, websites, and forums. Create scheduled jobs to automatically scrape and process content.",
+  "description": "Monitor RSS feeds, websites, and forums. Create scheduled monitors to automatically scrape and process content.",
   "offline": "Server is offline. Please connect to use Watchlists.",
   "betaNotice": "Beta Feature",
   "betaDescription": "Watchlists is currently in beta. Some features may be incomplete or change.",
@@ -13,7 +13,8 @@
     "items": "Articles",
     "outputs": "Reports",
     "templates": "Templates",
-    "settings": "Settings"
+    "settings": "Settings",
+    "moreViews": "More views"
   },
   "overview": {
     "description": "At-a-glance watchlist health, activity, and failure signals.",
@@ -49,7 +50,55 @@
       "cta": {
         "addFeed": "Add first feed",
         "createMonitor": "Create first monitor",
-        "reviewArticles": "Open Articles"
+        "reviewArticles": "Open Articles",
+        "guidedSetup": "Guided setup"
+      },
+      "quickSetup": {
+        "title": "Guided quick setup",
+        "steps": {
+          "feed": "Feed",
+          "monitor": "Monitor",
+          "review": "Review"
+        },
+        "fields": {
+          "sourceName": "Feed name",
+          "sourceUrl": "Feed URL",
+          "sourceType": "Feed type",
+          "monitorName": "Monitor name",
+          "schedule": "Schedule",
+          "runNow": "Run immediately"
+        },
+        "placeholders": {
+          "sourceName": "e.g., Daily Tech Feed",
+          "sourceUrl": "https://example.com/feed.xml",
+          "monitorName": "e.g., Morning Brief"
+        },
+        "validation": {
+          "sourceNameRequired": "Enter a feed name",
+          "sourceUrlRequired": "Enter a feed URL",
+          "sourceUrlInvalid": "Enter a valid http(s) URL",
+          "sourceTypeRequired": "Select a feed type",
+          "monitorNameRequired": "Enter a monitor name"
+        },
+        "schedule": {
+          "none": "Manual only",
+          "hourly": "Hourly",
+          "daily": "Daily at 08:00",
+          "weekdays": "Weekdays at 08:00"
+        },
+        "review": {
+          "feed": "Feed",
+          "monitor": "Monitor",
+          "schedule": "Schedule",
+          "runNow": "Run now"
+        },
+        "reviewDescription": "Confirm your setup, then create your feed and monitor.",
+        "actions": {
+          "finish": "Create setup"
+        },
+        "created": "Quick setup complete. Feed and monitor created.",
+        "createdAndRunning": "Quick setup complete. Your first run has started.",
+        "error": "Failed to complete quick setup."
       }
     },
     "setupComplete": {
@@ -86,9 +135,44 @@
       "title": "Recent Failed Runs",
       "empty": "No recent failures",
       "viewRun": "View run",
-      "jobFallback": "Job #{{id}}",
+      "jobFallback": "Monitor #{{id}}",
       "failed": "Failed",
       "noError": "No error details available"
+    }
+  },
+  "guide": {
+    "title": "Watchlists guided tour",
+    "start": "Start guided tour",
+    "resume": "Resume guided tour",
+    "restart": "Restart guided tour",
+    "skip": "Skip",
+    "finish": "Finish",
+    "progress": "Step {{current}} of {{total}}",
+    "completedTitle": "Guided tour complete",
+    "completedDescription": "Next: monitor Activity for run health and Articles for review triage.",
+    "openActivity": "Open Activity",
+    "openArticles": "Open Articles",
+    "steps": {
+      "sources": {
+        "title": "1. Add feeds",
+        "description": "Add RSS/site sources so monitors have content to fetch."
+      },
+      "jobs": {
+        "title": "2. Create monitors",
+        "description": "Define monitor schedules and scopes for your feeds."
+      },
+      "runs": {
+        "title": "3. Check activity",
+        "description": "Use Activity to inspect run status, logs, and failures."
+      },
+      "items": {
+        "title": "4. Review articles",
+        "description": "Triaging article output keeps your feed review queue clean."
+      },
+      "outputs": {
+        "title": "5. Deliver reports",
+        "description": "Use Reports for generated briefings and output verification."
+      }
     }
   },
   "notifications": {
@@ -96,7 +180,78 @@
     "runCompletedTitle": "Run completed",
     "runCompletedDescription": "Run #{{id}} completed successfully.",
     "runFailedTitle": "Run failed",
-    "runFailedDescription": "Run #{{id}} failed. {{hint}}"
+    "runFailedDescription": "Run #{{id}} failed. {{hint}}",
+    "failureHints": {
+      "auth": "Source may require authentication. Verify credentials or access rules.",
+      "rateLimit": "Source is rate-limiting requests. Reduce schedule frequency and retry.",
+      "timeout": "The source request timed out. Retry, or lower concurrency for this source.",
+      "dns": "Source host could not be resolved. Verify the source URL and DNS availability.",
+      "tls": "TLS/SSL validation failed. Verify certificate chain or endpoint URL.",
+      "network": "Source could not be reached. Check connectivity and endpoint availability.",
+      "unknownEmpty": "Open run details to inspect logs and retry.",
+      "unknown": "Open run details to inspect logs and adjust source or filter settings."
+    }
+  },
+  "errors": {
+    "retry": "Retry",
+    "operation": {
+      "load": "load"
+    },
+    "title": "Could not {{operation}} {{context}}.",
+    "details": "Details: {{message}}",
+    "next": {
+      "auth": "Verify your login/API key permissions for {{context}}, then retry.",
+      "rateLimit": "Reduce monitor frequency or wait briefly before retrying.",
+      "timeout": "Retry now. If this continues, reduce scope or schedule intensity.",
+      "network": "Check server connection and try again.",
+      "server": "Retry in a moment. If this keeps failing, check server logs.",
+      "notFound": "Refresh the list and confirm the requested records still exist.",
+      "generic": "Retry the request. If the problem continues, review server diagnostics."
+    }
+  },
+  "help": {
+    "docs": "Watchlists docs",
+    "learnMore": "Learn more",
+    "learnMoreTab": "Learn more: {{tab}}",
+    "reportIssue": "Report an issue",
+    "openTopic": "Open help for {{topic}}",
+    "tabs": {
+      "overview": "Overview guidance",
+      "sources": "Feeds setup",
+      "jobs": "Monitor scheduling",
+      "runs": "Activity diagnostics",
+      "items": "Article review",
+      "outputs": "Report outputs",
+      "templates": "Template authoring",
+      "settings": "Workspace settings"
+    },
+    "topics": {
+      "opml": {
+        "label": "OPML imports",
+        "title": "What is OPML?",
+        "description": "OPML is a portable feed-list format. Import one file to add many RSS or site feeds at once."
+      },
+      "cron": {
+        "label": "cron scheduling",
+        "title": "How cron scheduling works",
+        "description": "Cron uses five fields: minute, hour, day-of-month, month, and day-of-week."
+      },
+      "ttl": {
+        "label": "retention TTL",
+        "title": "What retention TTL means",
+        "description": "TTL controls how long generated outputs are kept before they expire automatically."
+      },
+      "jinja2": {
+        "label": "Jinja2 templates",
+        "title": "Using Jinja2 templates",
+        "description": "Jinja2 lets you loop, branch, and format monitor data into reusable report templates."
+      },
+      "claimClusters": {
+        "label": "claim clusters",
+        "title": "What claim clusters are",
+        "description": "Claim clusters group similar claims across feeds so monitors can subscribe to related topic updates."
+      }
+    }
   },
   "sources": {
     "title": "Feeds",
@@ -121,6 +276,12 @@
     "enabled": "Feed enabled",
     "disabled": "Feed disabled",
     "deleteConfirm": "Delete this feed?",
+    "deleteConfirmDescription": "This action cannot be undone.",
+    "deleteConfirmForce": "Delete anyway",
+    "deleteConfirmInUseTitle": "Feed is used by active monitors",
+    "deleteConfirmInUseDescription": "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs.",
+    "deleteConfirmInUseMore": "+{{count}} more active monitor{{plural}}",
+    "deleteUsageLookupError": "Could not verify active monitor usage before deletion.",
     "never": "Never",
     "groupFilterError": "Failed to load group filter",
     "export": "Export OPML",
@@ -156,16 +317,37 @@
     },
     "importSummary": "Import Summary",
     "importSummaryDesc": "{{created}} created, {{skipped}} skipped, {{errors}} errors",
+    "importFailedCount": "{{count}} failed feed{{plural}} ready for recovery actions.",
+    "importRetryFailed": "Retry failed only",
+    "importRetryFailedNone": "No retryable failed feeds.",
+    "importRetryFailedSuccess": "Retried {{count}} failed feed{{plural}}.",
+    "importRetryFailedError": "Failed to retry failed feeds.",
+    "importExportFailedCsv": "Export failed CSV",
+    "importExportFailedJson": "Export failed JSON",
+    "importReasonCode": "Reason code",
     "selectedCount": "{{count}} selected",
     "bulkEnable": "Enable",
     "bulkEnableConfirmTitle": "Enable selected feeds?",
     "bulkDisable": "Disable",
     "bulkDisableConfirmTitle": "Disable selected feeds?",
     "bulkToggleConfirmDescription": "{{total}} selected ({{active}} active, {{inactive}} inactive). {{impacted}} will change state.",
+    "moveSelectGroup": "Move to group",
+    "moveTargetNone": "No group",
+    "moveUnknownGroup": "Selected group",
+    "bulkMove": "Move",
+    "bulkMoveConfirmTitle": "Move {{count}} selected feeds?",
+    "bulkMoveConfirmDescription": "Feeds will be assigned to {{group}}.",
+    "bulkMoveError": "Bulk move failed",
+    "bulkMovePartial": "Moved {{success}} feeds, {{failed}} failed",
+    "undoBulkMoveTitle": "Moved {{count}} feeds",
+    "undoBulkMoveDescription": "Undo restores previous group assignments for {{seconds}} seconds.",
+    "undoBulkMovePartialError": "{{restored}} restored, {{failed}} failed to restore",
     "bulkDelete": "Delete",
     "bulkDeleteConfirm": "Delete selected sources?",
     "bulkDeleteConfirmTitle": "Delete {{count}} selected feeds?",
     "bulkDeleteConfirmDescription": "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+    "bulkDeleteConfirmInUseSummary": "{{sources}} selected feed{{sourcesPlural}} are referenced by {{jobs}} active monitor{{jobsPlural}}.",
+    "bulkDeleteConfirmInUseMore": "+{{count}} more active monitor{{plural}}",
     "bulkUpdated": "{{count}} sources updated",
     "bulkUpdatePartial": "Updated {{success}} feeds, {{failed}} failed",
     "bulkDeleted": "{{count}} sources deleted",
@@ -192,7 +374,8 @@
     "types": {
       "rss": "RSS Feed",
       "site": "Website",
-      "forum": "Forum"
+      "forum": "Forum",
+      "forumComingSoon": "Forum (coming soon)"
     },
     "form": {
       "name": "Name",
@@ -203,8 +386,23 @@
       "urlRequired": "Please enter a URL",
       "urlInvalid": "Please enter a valid URL",
       "urlPlaceholder": "e.g., https://example.com/feed.xml",
+      "testSource": "Test Feed",
+      "testSourceHint": "Runs a quick fetch preview for this feed. Unsaved URL/type edits are tested.",
+      "testSourceDraftHint": "Run Test Feed to validate URL/type connectivity before saving.",
+      "testSourceRequiresSave": "Create this feed first, then run Test Feed to verify reachability.",
+      "testSourceSuccess": "Test succeeded: found {{count}} preview item{{plural}}.",
+      "testSourceNoItems": "Test completed, but no preview items were returned.",
+      "testSourceError": "Source test failed",
+      "testSourceErrorHintForumDisabled": "Forum feeds are not enabled yet. Switch type to RSS Feed or Website.",
+      "testSourceErrorHintYoutube": "Use a canonical YouTube feed URL (channel_id or playlist_id) and retry.",
+      "testSourceErrorHintNotFound": "This saved feed no longer exists. Refresh feeds and open it again.",
+      "testSourceErrorHintNetwork": "Check server connectivity, then run Test Feed again.",
+      "testSourceErrorHintGeneric": "Review URL and feed type, then retry. If this persists, check server logs.",
+      "testSourceSummary": "Test Summary",
+      "testSourceSummaryDescription": "{{total}} preview item{{plural}}, {{ingestable}} ingestable, {{filtered}} filtered.",
       "type": "Type",
       "typeRequired": "Please select a type",
+      "forumDisabledHelp": "Forum monitoring is coming soon. Use RSS Feed or Website for now.",
       "tags": "Tags",
       "tagsPlaceholder": "Add or select tags",
       "tagsHelp": "Add tags to organize and filter your sources"
@@ -214,11 +412,15 @@
     "title": "Groups",
     "all": "All Feeds",
     "create": "Create Group",
+    "edit": "Edit Group",
     "created": "Group created",
+    "updated": "Group updated",
     "createError": "Failed to create group",
+    "updateError": "Failed to update group",
     "deleteConfirm": "Delete this group?",
     "deleted": "Group deleted",
     "deleteError": "Failed to delete group",
+    "parentCycleError": "Cannot move a group into itself or one of its descendants.",
     "empty": "No groups yet",
     "nameRequired": "Please enter a name",
     "namePlaceholder": "News Sources",
@@ -249,8 +451,13 @@
     "enabled": "Monitor enabled",
     "disabled": "Monitor disabled",
     "runTriggered": "Run triggered",
-    "deleteConfirm": "Delete this job?",
+    "deleteConfirm": "Delete this monitor?",
     "runNow": "Run Now",
+    "runNowDisabledHint": "Activate this monitor to run it manually",
+    "showAdvancedDetails": "Show advanced details",
+    "hideAdvancedDetails": "Hide advanced details",
+    "metricsHint": "Showing core columns. Use advanced mode for scope, filters, and run timing.",
+    "compactSummary": "{{scope}} • {{filters}} filters",
     "never": "Never",
     "pending": "Pending",
     "notScheduled": "Not scheduled",
@@ -274,15 +481,20 @@
       "active": "Active",
       "scope": "Feeds to Include",
       "scopeRequired": "Please select at least one feed, group, or tag",
+      "scopeRemediation": "Select at least one feed, group, or tag before saving.",
+      "scheduleTooFrequent": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
       "schedule": "Schedule",
+      "emailRecipientsInvalidInline": "Invalid addresses: {{emails}}",
+      "emailRecipientsInvalidSubmit": "Fix invalid email recipients before saving.",
+      "emailRecipientsRemediation": "Remove or correct invalid recipient addresses.",
       "filters": "Filters",
       "presetMeceMd": "Structured review (Markdown)",
       "retentionDefault": "Default retention",
       "retentionTemporary": "Temporary retention",
       "retentionDefaultPlaceholder": "Server default",
       "retentionTemporaryPlaceholder": "Server temporary default",
-      "retentionDefaultPreview": "Stored as {{seconds}} seconds",
-      "retentionTemporaryPreview": "Stored as {{seconds}} seconds",
+      "retentionDefaultPreview": "Saved internally as {{seconds}} seconds",
+      "retentionTemporaryPreview": "Saved internally as {{seconds}} seconds",
       "retentionUnit": {
         "seconds": "Seconds",
         "minutes": "Minutes",
@@ -290,7 +502,21 @@
         "days": "Days",
         "weeks": "Weeks"
       },
-      "presetHint": "Presets prefill template and delivery defaults. Structured review groups content into non-overlapping sections for easier scanning."
+      "presetHint": "Presets prefill template and delivery defaults. Structured review groups content into non-overlapping sections for easier scanning.",
+      "previewLoadError": "Could not load sample candidates for this monitor.",
+      "previewCreateHint": "Save this monitor once to load sample candidates for live filter preview.",
+      "previewSummary": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
+      "liveSummaryTitle": "Live setup summary",
+      "liveSummary": {
+        "name": "Monitor",
+        "unnamed": "Untitled monitor",
+        "scope": "Scope",
+        "schedule": "Schedule",
+        "filters": "Filters",
+        "notScheduled": "Not scheduled",
+        "filtersConfigured": "{{count}} filters configured",
+        "noFilters": "No filters configured"
+      }
     },
     "noFeeds": "No feeds selected",
     "scope": {
@@ -306,7 +532,7 @@
     },
     "preview": {
       "button": "Preview",
-      "title": "Job Preview",
+      "title": "Monitor Preview",
       "summary": "{{total}} candidates: {{ingestable}} ingestable, {{filtered}} filtered",
       "empty": "No preview data available",
       "columns": {
@@ -331,12 +557,19 @@
     "fieldAuthor": "Author",
     "startDate": "Start date",
     "endDate": "End date",
-    "help": "Filters determine which items are included, excluded, or flagged during job runs. Include filters require at least one match."
+    "preview": {
+      "title": "Sample filter preview",
+      "loading": "Loading sample candidates...",
+      "summary": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
+      "empty": "No sample candidates available.",
+      "unavailable": "Sample preview unavailable."
+    },
+    "help": "Filters determine which items are included, excluded, or flagged during monitor runs. Include filters require at least one match."
   },
   "schedule": {
     "presets": "Schedule presets",
     "custom": "Custom Schedule",
-    "cronPlaceholder": "Cron expression (e.g., 0 9 * * MON)",
+    "cronPlaceholder": "Advanced schedule expression (cron, e.g., 0 9 * * MON)",
     "apply": "Apply",
     "clear": "Clear",
     "preview": "Preview",
@@ -373,23 +606,37 @@
     },
     "advancedLabel": "Advanced cron expression",
     "advancedHint": "Enable only if presets cannot express the cadence you need.",
+    "tooFrequent": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
+    "tooFrequentRemediation": "Increase schedule interval to meet the minimum cadence.",
     "helpSimple": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns.",
     "helpAdvanced": "Cron format: minute hour day-of-month month day-of-week. Example: 0 9 * * MON runs every Monday at 09:00."
   },
   "runs": {
     "title": "Activity",
-    "description": "View execution history and logs for your watchlist jobs.",
+    "description": "View execution history and logs for your watchlist monitors.",
     "totalItems": "{{total}} runs",
     "fetchError": "Failed to load runs",
     "triggerError": "Failed to trigger run",
     "runTriggered": "Run triggered successfully",
     "viewDetails": "View Details",
-    "filterByJob": "Filter by job",
+    "cancelRun": "Cancel run",
+    "cancelling": "Cancelling...",
+    "cancelFailedRetry": "Cancel failed. Retry.",
+    "cancelRunSuccess": "Run cancelled",
+    "cancelRunError": "Failed to cancel run",
+    "filterByJob": "Filter by monitor",
     "filterByStatus": "Filter by status",
+    "showAdvancedFilters": "Show advanced filters",
+    "hideAdvancedFilters": "Hide advanced filters",
+    "activeFilters": "Active filters",
+    "activeFiltersJob": "Monitor: {{name}}",
+    "activeFiltersStatus": "Status: {{status}}",
+    "metricsHint": "Showing core columns. Use advanced mode for run metrics.",
     "autoRefreshing": "Auto-refreshing",
     "lastRefreshed": "Last refreshed {{time}}",
+    "exportOptions": "Export options",
     "columns": {
-      "job": "Job",
+      "job": "Monitor",
       "status": "Status",
       "started": "Started",
       "duration": "Duration",
@@ -399,17 +646,47 @@
     },
     "detail": {
       "title": "Run Details",
+      "loadError": "Failed to load details",
       "stats": "Statistics",
+      "statsLabels": {
+        "status": "Status",
+        "duration": "Duration",
+        "started": "Started",
+        "finished": "Finished",
+        "itemsFound": "Items Found",
+        "itemsIngested": "Items Ingested",
+        "itemsFiltered": "Items Filtered",
+        "errors": "Errors"
+      },
       "logs": "Logs",
       "items": "Scraped Items",
       "noLogs": "No logs available",
       "noItems": "No items found",
       "itemsError": "Failed to load items",
       "itemsUpdateError": "Failed to update item",
+      "retryTriggered": "Retry started as run #{{id}}.",
+      "retryError": "Failed to retry run",
+      "remediationTitle": "Suggested recovery steps",
+      "remediationFallback": "Open logs and adjust source or monitor settings, then retry.",
+      "retryRun": "Retry run",
+      "editMonitor": "Edit monitor schedule",
+      "openSources": "Review source settings",
       "itemsUntitled": "Untitled",
+      "errorMessage": "Error Message",
+      "filteredSampleTitle": "Filtered item sample",
+      "filteredSampleSummary": "Showing {{count}} recently filtered item{{plural}} for quick diagnosis.",
+      "filteredSampleHelp": "Use this sample with filter tallies below to tune include/exclude rules.",
+      "filteredSampleStatus": "Status: {{status}}",
+      "filterMatches": "Filter Matches",
       "logsTruncated": "Logs truncated",
       "logsTruncatedDesc": "Showing the most recent log output.",
       "logsPath": "Logs stored at {{path}}",
+      "duration": {
+        "lessThanSecond": "<1 second",
+        "seconds": "{{count}} seconds",
+        "minutes": "{{count}} minutes",
+        "hours": "{{count}} hours"
+      },
       "stream": "Live stream",
       "lastStreamEvent": "Last event {{time}}",
       "liveOn": "Live",
@@ -431,7 +708,8 @@
         "source": "Source",
         "published": "Published",
         "created": "Ingested"
-      }
+      },
+      "itemsSourceReference": "#{{id}}"
     }
   },
   "items": {
@@ -469,18 +747,71 @@
     "markedReviewed": "Marked as reviewed",
     "markedUnreviewed": "Marked as unreviewed",
     "updateError": "Failed to update item",
-    "noUrlHint": "This item does not include an original URL."
+    "noUrlHint": "This item does not include an original URL.",
+    "pageSizeLabel": "Items per page",
+    "batch": {
+      "selectPage": "Select page",
+      "selectedCount": "{{count}} selected",
+      "markSelected": "Mark selected as reviewed",
+      "markPage": "Mark page as reviewed",
+      "markAllFiltered": "Mark all filtered as reviewed",
+      "noSelected": "Select one or more items to review.",
+      "noPage": "All items on this page are already reviewed.",
+      "noFiltered": "No matching unread items to review.",
+      "confirmSelectedTitle": "Mark selected items as reviewed?",
+      "confirmPageTitle": "Mark this page as reviewed?",
+      "confirmAllFilteredTitle": "Mark all filtered items as reviewed?",
+      "confirmDescription": "This will mark {{count}} item{{plural}} as reviewed.",
+      "completed": "Marked {{count}} item{{plural}} as reviewed.",
+      "partial": "Marked {{success}} item{{successPlural}} as reviewed; {{failed}} failed.",
+      "failed": "Failed to mark items as reviewed."
+    },
+    "savedViews": {
+      "label": "Saved views",
+      "placeholder": "Select a saved view",
+      "save": "Save view",
+      "update": "Update view",
+      "delete": "Delete view",
+      "saveTitle": "Save current view",
+      "saveDescription": "Save the current source, smart feed, status, and search filters.",
+      "namePlaceholder": "Daily triage",
+      "defaultName": "My view",
+      "nameRequired": "Saved view name is required.",
+      "created": "Saved view created.",
+      "updated": "Saved view updated.",
+      "deleted": "Saved view deleted.",
+      "deleteTitle": "Delete saved view?",
+      "deleteDescription": "Delete saved view \"{{name}}\"?"
+    },
+    "shortcuts": {
+      "button": "Shortcuts",
+      "title": "Keyboard shortcuts",
+      "helpHint": "Keyboard shortcuts (?)",
+      "nextPrevious": "Move to next or previous article in the list.",
+      "toggleReviewed": "Toggle reviewed state for the selected article.",
+      "openOriginal": "Open the selected article in a new tab.",
+      "refresh": "Refresh feeds, article list, and smart counts.",
+      "newFlow": "Start a new feed flow by opening Add Source.",
+      "help": "Open this shortcuts help panel."
+    }
   },
   "outputs": {
     "title": "Outputs",
-    "description": "Generated briefings and reports from your watchlist jobs.",
+    "description": "Generated briefings and reports from your watchlist monitors.",
     "totalItems": "{{total}} outputs",
     "fetchError": "Failed to load outputs",
     "downloadError": "Failed to download output",
     "downloaded": "Output downloaded",
     "preview": "Preview",
     "download": "Download",
-    "filterByJob": "Filter by job",
+    "filterByJob": "Filter by monitor",
+    "showAdvancedFilters": "Show advanced filters",
+    "hideAdvancedFilters": "Hide advanced filters",
+    "activeFilters": "Active filters",
+    "metricsHint": "Showing core columns. Use advanced mode for format/run details.",
+    "deliveryOverflowTitle": "Additional delivery statuses",
+    "deliveryOverflowAria": "Show additional delivery statuses",
+    "deliveryOverflowCount": "+{{count}} more",
     "noContent": "No content available",
     "openInNewTab": "Open in new tab",
     "rendered": "Rendered",
@@ -495,10 +826,11 @@
     "titlePlaceholder": "Optional title override",
     "columns": {
       "title": "Title",
-      "job": "Job",
+      "job": "Monitor",
       "run": "Run",
       "format": "Format",
       "created": "Created",
+      "delivery": "Delivery",
       "expires": "Expires",
       "actions": "Actions"
     }
@@ -544,6 +876,12 @@
       "description": "Description",
       "format": "Output Format"
     },
+    "quickInsert": "Quick insert snippets",
+    "openDocs": "Open variables & sample context",
+    "snippetLoop": "Items loop",
+    "snippetTallies": "Filter tallies",
+    "snippetSummary": "Summary block",
+    "snippetGeneratedAt": "Generated timestamp",
     "editor": {
       "tab": "Editor"
     },
@@ -556,12 +894,13 @@
       "tab": "Variables",
       "title": "Available Variables",
       "description": "These variables are available in your Jinja2 template.",
+      "sampleContextTitle": "Sample context payload",
       "hint": "Use Jinja2 syntax: {% for item in items %}, {{ item.title }}, {% if condition %}, etc."
     }
   },
   "settings": {
     "title": "Settings",
-    "description": "Server configuration and retention settings for the watchlists module.",
+    "description": "Manage retention and related topic subscriptions for this watchlist workspace.",
     "fetchError": "Failed to load settings",
     "unavailable": "Settings unavailable",
     "unavailableDesc": "Could not load server settings. Make sure the server is running.",
@@ -571,8 +910,17 @@
       "temporaryOutput": "Temporary Output TTL",
       "note": "TTL values are configured on the server."
     },
+    "diagnostics": {
+      "title": "Internal diagnostics",
+      "forumsEnabled": "Forums enabled",
+      "forumsDefaultTopN": "Forum default top N",
+      "sharingMode": "Sharing mode",
+      "adminCrossUser": "admin_cross_user",
+      "backend": "Watchlists backend",
+      "note": "Internal diagnostics are enabled for this environment."
+    },
     "clusters": {
-      "title": "Related Claim Clusters",
+      "title": "Related Topics (Claim Clusters)",
       "help": "Claim clusters group similar claims detected across feeds. Subscribe a monitor to include those cluster updates in briefings.",
       "jobPlaceholder": "Select monitor",
       "searchPlaceholder": "Search clusters",

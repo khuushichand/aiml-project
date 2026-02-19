@@ -3,6 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ResultsTab } from "../ResultsTab"
 import { useAllAttemptsQuery, useAttemptQuery, useQuizzesQuery } from "../../hooks"
+import {
+  useCreateDeckMutation,
+  useCreateFlashcardMutation,
+  useDecksQuery
+} from "@/components/Flashcards/hooks/useFlashcardQueries"
+
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
 
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
@@ -32,10 +41,20 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => navigationMocks.navigate
+}))
+
 vi.mock("../../hooks", () => ({
   useAllAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
   useAttemptQuery: vi.fn()
+}))
+
+vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
+  useDecksQuery: vi.fn(),
+  useCreateDeckMutation: vi.fn(),
+  useCreateFlashcardMutation: vi.fn()
 }))
 
 if (!(globalThis as any).ResizeObserver) {
@@ -50,6 +69,7 @@ describe("ResultsTab CSV export", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
+    navigationMocks.navigate.mockReset()
     window.sessionStorage.setItem("quiz-results-filters-v1", JSON.stringify({
       page: 1,
       pageSize: 10,
@@ -101,6 +121,19 @@ describe("ResultsTab CSV export", () => {
       data: null,
       isLoading: false,
       isFetching: false
+    } as any)
+
+    vi.mocked(useDecksQuery).mockReturnValue({
+      data: [],
+      isLoading: false
+    } as any)
+    vi.mocked(useCreateDeckMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
     } as any)
   })
 

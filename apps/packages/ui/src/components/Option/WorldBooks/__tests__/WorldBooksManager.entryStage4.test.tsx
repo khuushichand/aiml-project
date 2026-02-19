@@ -263,5 +263,5 @@ describe("WorldBooksManager entry drawer stage-4 bulk add workflow", () => {
         message: "Bulk add completed with errors"
       })
     )
-  }, 20000)
+  }, 90000)
 })

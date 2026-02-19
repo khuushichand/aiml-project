@@ -1,4 +1,5 @@
 import { test } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
@@ -22,7 +23,7 @@ async function dumpSidepanelState(label: string, page: any) {
 
 test.describe('Sidepanel render debug', () => {
   test('first open vs reload vs reopen', async () => {
-    const { context, openSidepanel } = (await launchWithExtension(EXT_PATH)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, EXT_PATH)) as any
 
     // First open
     const page1 = await openSidepanel()

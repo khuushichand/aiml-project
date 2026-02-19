@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react"
 import {
+  Alert,
   Button,
   Popconfirm,
   Space,
@@ -15,18 +16,50 @@ import { useTranslation } from "react-i18next"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
-  createWatchlistJob,
   deleteWatchlistJob,
+  fetchWatchlistGroups,
   fetchWatchlistJobs,
+  fetchWatchlistSources,
+  restoreWatchlistJob,
   triggerWatchlistRun,
   updateWatchlistJob
 } from "@/services/watchlists"
 import type { WatchlistJob } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
-import { CronDisplay, StatusTag } from "../shared"
+import { CronDisplay } from "../shared"
 import { JobFormModal } from "./JobFormModal"
-import { JOB_DELETE_UNDO_WINDOW_SECONDS, toJobCreatePayload } from "./job-undo"
+import { JOB_DELETE_UNDO_WINDOW_SECONDS, toJobRestoreId } from "./job-undo"
+import {
+  buildScopeTooltipLines,
+  summarizeFilters,
+  summarizeScopeCounts
+} from "./job-summaries"
 import { JobPreviewModal } from "./JobPreviewModal"
+import { mapWatchlistsError } from "../shared/watchlists-error"
+
+const SCOPE_CATALOG_LIMIT = 1000
+const JOBS_ADVANCED_COLUMNS_STORAGE_KEY = "watchlists:jobs:advanced-columns:v1"
+
+const readStoredDisclosureState = (key: string): boolean | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw === "1") return true
+    if (raw === "0") return false
+  } catch {
+    // Ignore storage access errors and keep defaults.
+  }
+  return null
+}
+
+const persistDisclosureState = (key: string, value: boolean): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0")
+  } catch {
+    // Ignore storage access errors and keep UI functional.
+  }
+}
 
 export const JobsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -57,6 +90,13 @@ export const JobsTab: React.FC = () => {
   const [triggeringJobId, setTriggeringJobId] = useState<number | null>(null)
   const [previewJob, setPreviewJob] = useState<WatchlistJob | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [sourceNamesById, setSourceNamesById] = useState<Record<number, string>>({})
+  const [groupNamesById, setGroupNamesById] = useState<Record<number, string>>({})
+  const [jobsLoadError, setJobsLoadError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
+  const [showAdvancedColumns, setShowAdvancedColumns] = useState<boolean>(() => {
+    const stored = readStoredDisclosureState(JOBS_ADVANCED_COLUMNS_STORAGE_KEY)
+    return stored ?? false
+  })
 
   // Fetch jobs
   const loadJobs = useCallback(async () => {
@@ -67,9 +107,16 @@ export const JobsTab: React.FC = () => {
         size: jobsPageSize
       })
       setJobs(result.items, result.total)
+      setJobsLoadError(null)
     } catch (err) {
       console.error("Failed to fetch jobs:", err)
-      message.error(t("watchlists:jobs.fetchError", "Failed to load jobs"))
+      setJobsLoadError(
+        mapWatchlistsError(err, {
+          t,
+          context: t("watchlists:jobs.title", "Monitors"),
+          fallbackMessage: t("watchlists:jobs.fetchError", "Failed to load monitors")
+        })
+      )
     } finally {
       setJobsLoading(false)
     }
@@ -80,6 +127,38 @@ export const JobsTab: React.FC = () => {
     loadJobs()
   }, [loadJobs])
 
+  const loadScopeCatalog = useCallback(async () => {
+    try {
+      const [sourcesResult, groupsResult] = await Promise.all([
+        fetchWatchlistSources({ page: 1, size: SCOPE_CATALOG_LIMIT }),
+        fetchWatchlistGroups({ page: 1, size: SCOPE_CATALOG_LIMIT })
+      ])
+
+      const nextSourceNames: Record<number, string> = {}
+      const nextGroupNames: Record<number, string> = {}
+
+      for (const source of sourcesResult.items || []) {
+        nextSourceNames[source.id] = source.name
+      }
+      for (const group of groupsResult.items || []) {
+        nextGroupNames[group.id] = group.name
+      }
+
+      setSourceNamesById(nextSourceNames)
+      setGroupNamesById(nextGroupNames)
+    } catch (err) {
+      console.warn("Failed to fetch monitor scope catalog:", err)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadScopeCatalog()
+  }, [loadScopeCatalog])
+
+  useEffect(() => {
+    persistDisclosureState(JOBS_ADVANCED_COLUMNS_STORAGE_KEY, showAdvancedColumns)
+  }, [showAdvancedColumns])
+
   // Handle toggle active
   const handleToggleActive = async (job: WatchlistJob) => {
     try {
@@ -87,12 +166,12 @@ export const JobsTab: React.FC = () => {
       updateJobInList(job.id, updated)
       message.success(
         job.active
-          ? t("watchlists:jobs.disabled", "Job disabled")
-          : t("watchlists:jobs.enabled", "Job enabled")
+          ? t("watchlists:jobs.disabled", "Monitor disabled")
+          : t("watchlists:jobs.enabled", "Monitor enabled")
       )
     } catch (err) {
       console.error("Failed to toggle job:", err)
-      message.error(t("watchlists:jobs.toggleError", "Failed to update job"))
+      message.error(t("watchlists:jobs.toggleError", "Failed to update monitor"))
     }
   }
 
@@ -100,29 +179,36 @@ export const JobsTab: React.FC = () => {
   const handleDelete = async (jobId: number) => {
     const deletedJob = jobs.find((job) => job.id === jobId)
     try {
-      await deleteWatchlistJob(jobId)
+      const deleteResult = await deleteWatchlistJob(jobId)
       removeJob(jobId)
       if (!deletedJob) {
         message.success(t("watchlists:jobs.deleted", "Monitor deleted"))
         return
       }
+      const undoWindowSeconds =
+        Number(deleteResult?.restore_window_seconds) > 0
+          ? Number(deleteResult.restore_window_seconds)
+          : JOB_DELETE_UNDO_WINDOW_SECONDS
 
       showUndoNotification({
         title: t("watchlists:jobs.undoDeleteTitle", "Monitor deleted"),
         description: t(
           "watchlists:jobs.undoDeleteDescription",
           "Undo restores this monitor for {{seconds}} seconds.",
-          { seconds: JOB_DELETE_UNDO_WINDOW_SECONDS }
+          { seconds: undoWindowSeconds }
         ),
-        duration: JOB_DELETE_UNDO_WINDOW_SECONDS,
+        duration: undoWindowSeconds,
+        onDismiss: () => {
+          void loadJobs()
+        },
         onUndo: async () => {
-          await createWatchlistJob(toJobCreatePayload(deletedJob))
+          await restoreWatchlistJob(toJobRestoreId(deletedJob))
           await loadJobs()
         }
       })
     } catch (err) {
       console.error("Failed to delete job:", err)
-      message.error(t("watchlists:jobs.deleteError", "Failed to delete job"))
+      message.error(t("watchlists:jobs.deleteError", "Failed to delete monitor"))
     }
   }
 
@@ -147,23 +233,8 @@ export const JobsTab: React.FC = () => {
     ? jobs.find((j) => j.id === jobFormEditId)
     : undefined
 
-  // Render scope summary
-  const renderScope = (job: WatchlistJob) => {
-    const parts: string[] = []
-    if (job.scope.sources?.length) {
-      parts.push(`${job.scope.sources.length} feed${job.scope.sources.length > 1 ? "s" : ""}`)
-    }
-    if (job.scope.groups?.length) {
-      parts.push(`${job.scope.groups.length} group${job.scope.groups.length > 1 ? "s" : ""}`)
-    }
-    if (job.scope.tags?.length) {
-      parts.push(`${job.scope.tags.length} tag${job.scope.tags.length > 1 ? "s" : ""}`)
-    }
-    return parts.length > 0 ? parts.join(", ") : t("watchlists:jobs.noFeeds", "No feeds selected")
-  }
-
   // Table columns
-  const columns: ColumnsType<WatchlistJob> = [
+  const allColumns: ColumnsType<WatchlistJob> = [
     {
       title: t("watchlists:jobs.columns.name", "Name"),
       dataIndex: "name",
@@ -175,6 +246,14 @@ export const JobsTab: React.FC = () => {
           {record.description && (
             <div className="text-xs text-text-muted truncate">
               {record.description}
+            </div>
+          )}
+          {!showAdvancedColumns && (
+            <div className="text-xs text-text-muted mt-1" data-testid={`job-compact-summary-${record.id}`}>
+              {t("watchlists:jobs.compactSummary", "{{scope}} • {{filters}} filters", {
+                scope: summarizeScopeCounts(record.scope, t),
+                filters: summarizeFilters(record.job_filters?.filters, t).count
+              })}
             </div>
           )}
         </div>
@@ -190,24 +269,64 @@ export const JobsTab: React.FC = () => {
     {
       title: t("watchlists:jobs.columns.scope", "Feeds"),
       key: "scope",
-      width: 150,
-      render: (_, record) => (
-        <span className="text-sm text-text-muted">
-          {renderScope(record)}
-        </span>
-      )
+      width: 220,
+      render: (_, record) => {
+        const scopeSummary = summarizeScopeCounts(record.scope, t)
+        const tooltipLines = buildScopeTooltipLines(
+          record.scope,
+          { sources: sourceNamesById, groups: groupNamesById },
+          t
+        )
+        return (
+          <Tooltip
+            title={
+              <div className="max-w-[340px]">
+                {tooltipLines.map((line, index) => (
+                  <div key={`${record.id}-scope-line-${index}`}>{line}</div>
+                ))}
+              </div>
+            }
+          >
+            <span
+              className="text-sm text-text-muted cursor-help"
+              data-testid={`job-scope-summary-${record.id}`}
+            >
+              {scopeSummary}
+            </span>
+          </Tooltip>
+        )
+      }
     },
     {
       title: t("watchlists:jobs.columns.filters", "Filters"),
       key: "filters",
-      width: 80,
-      align: "center",
+      width: 260,
       render: (_, record) => {
-        const count = record.job_filters?.filters?.length || 0
-        return count > 0 ? (
-          <Tag>{count}</Tag>
-        ) : (
-          <span className="text-text-subtle">-</span>
+        const summary = summarizeFilters(record.job_filters?.filters, t)
+        if (summary.count === 0) {
+          return <span className="text-text-subtle">-</span>
+        }
+
+        return (
+          <Tooltip
+            title={
+              <div className="max-w-[340px]">
+                {summary.tooltipLines.map((line, index) => (
+                  <div key={`${record.id}-filter-line-${index}`}>{line}</div>
+                ))}
+              </div>
+            }
+          >
+            <div
+              className="flex items-center gap-2"
+              data-testid={`job-filters-summary-${record.id}`}
+            >
+              <Tag>{summary.count}</Tag>
+              <span className="text-sm text-text-muted truncate">
+                {summary.preview}
+              </span>
+            </div>
+          </Tooltip>
         )
       }
     },
@@ -269,14 +388,19 @@ export const JobsTab: React.FC = () => {
     {
       title: t("watchlists:jobs.columns.actions", "Actions"),
       key: "actions",
-      width: 130,
+      width: 140,
       align: "center",
-      render: (_, record) => (
+      render: (_, record) => {
+        const runNowTooltip = record.active
+          ? t("watchlists:jobs.runNow", "Run Now")
+          : t("watchlists:jobs.runNowDisabledHint", "Activate this monitor to run it manually")
+        return (
         <Space size="small">
-          <Tooltip title={t("watchlists:jobs.runNow", "Run Now")}>
+          <Tooltip title={runNowTooltip}>
             <Button
               type="text"
               size="small"
+              aria-label={runNowTooltip}
               icon={<Play className="h-4 w-4" />}
               onClick={() => handleTriggerRun(record.id)}
               loading={triggeringJobId === record.id}
@@ -287,6 +411,7 @@ export const JobsTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:jobs.preview.button", "Preview")}
               icon={<Eye className="h-4 w-4" />}
               onClick={() => {
                 setPreviewJob(record)
@@ -298,12 +423,13 @@ export const JobsTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("common:edit", "Edit")}
               icon={<Edit2 className="h-4 w-4" />}
               onClick={() => openJobForm(record.id)}
             />
           </Tooltip>
           <Popconfirm
-            title={t("watchlists:jobs.deleteConfirm", "Delete this job?")}
+            title={t("watchlists:jobs.deleteConfirm", "Delete this monitor?")}
             onConfirm={() => handleDelete(record.id)}
             okText={t("common:yes", "Yes")}
             cancelText={t("common:no", "No")}
@@ -313,14 +439,19 @@ export const JobsTab: React.FC = () => {
                 type="text"
                 size="small"
                 danger
+                aria-label={t("common:delete", "Delete")}
                 icon={<Trash2 className="h-4 w-4" />}
               />
             </Tooltip>
           </Popconfirm>
         </Space>
-      )
+      )}
     }
   ]
+  const defaultColumnKeys = new Set(["name", "schedule_expr", "active", "actions"])
+  const columns = showAdvancedColumns
+    ? allColumns
+    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
 
   return (
     <div className="space-y-4">
@@ -330,6 +461,16 @@ export const JobsTab: React.FC = () => {
           {t("watchlists:jobs.description", "Create monitors that automatically fetch and process updates from your feeds.")}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="small"
+            type={showAdvancedColumns ? "default" : "dashed"}
+            data-testid="watchlists-jobs-advanced-toggle"
+            onClick={() => setShowAdvancedColumns((previous) => !previous)}
+          >
+            {showAdvancedColumns
+              ? t("watchlists:jobs.hideAdvancedDetails", "Hide advanced details")
+              : t("watchlists:jobs.showAdvancedDetails", "Show advanced details")}
+          </Button>
           <Button
             icon={<RefreshCw className="h-4 w-4" />}
             onClick={loadJobs}
@@ -346,6 +487,29 @@ export const JobsTab: React.FC = () => {
           </Button>
         </div>
       </div>
+      {!showAdvancedColumns && (
+        <div className="text-xs text-text-subtle">
+          {t("watchlists:jobs.metricsHint", "Showing core columns. Use advanced mode for scope, filters, and run timing.")}
+        </div>
+      )}
+
+      {jobsLoadError && (
+        <Alert
+          type={jobsLoadError.severity}
+          showIcon
+          title={jobsLoadError.title}
+          description={jobsLoadError.description}
+          action={(
+            <Button
+              size="small"
+              onClick={() => void loadJobs()}
+              loading={jobsLoading}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        />
+      )}
 
       {/* Table */}
       <Table
@@ -359,7 +523,7 @@ export const JobsTab: React.FC = () => {
           total: jobsTotal,
           showSizeChanger: true,
           showTotal: (total) =>
-            t("watchlists:jobs.totalItems", "{{total}} jobs", { total }),
+            t("watchlists:jobs.totalItems", "{{total}} monitors", { total }),
           onChange: (page, pageSize) => {
             setJobsPage(page)
             if (pageSize !== jobsPageSize) {

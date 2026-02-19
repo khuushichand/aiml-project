@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -70,6 +73,7 @@ from starlette.responses import JSONResponse
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
+    get_chacha_db_for_user_id,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
     ChatAnalyticsBucket,
@@ -201,6 +205,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Chat import command_router
@@ -285,6 +290,10 @@ import_dictionary = chat_dictionaries.import_dictionary
 export_dictionary = chat_dictionaries.export_dictionary
 export_dictionary_json = chat_dictionaries.export_dictionary_json
 import_dictionary_json = chat_dictionaries.import_dictionary_json
+list_dictionary_activity = chat_dictionaries.list_dictionary_activity
+list_dictionary_versions = chat_dictionaries.list_dictionary_versions
+get_dictionary_version = chat_dictionaries.get_dictionary_version
+revert_dictionary_version = chat_dictionaries.revert_dictionary_version
 get_dictionary_statistics = chat_dictionaries.get_dictionary_statistics
 
 def _chat_connectors_enabled() -> bool:
@@ -2528,10 +2537,14 @@ async def create_chat_completion(
                 )
                 return key_val
 
-            async def _resolve_byok(name: str) -> ResolvedByokCredentials:
+            async def _resolve_byok(
+                name: str,
+                *,
+                force_oauth_refresh: bool = False,
+            ) -> ResolvedByokCredentials:
                 provider_key = (name or "").strip().lower()
                 cached = byok_cache.get(provider_key)
-                if cached:
+                if cached and not force_oauth_refresh:
                     return cached
                 user_id_int = getattr(current_user, "id_int", None)
                 if user_id_int is None:
@@ -2544,6 +2557,7 @@ async def create_chat_completion(
                     user_id=user_id_int,
                     request=request,
                     fallback_resolver=_fallback_resolver,
+                    force_oauth_refresh=force_oauth_refresh,
                 )
                 byok_cache[provider_key] = resolved
                 return resolved
@@ -2796,8 +2810,15 @@ async def create_chat_completion(
             if override_error:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-            async def rebuild_call_params_for_provider(target_provider: str) -> tuple[dict[str, Any], str | None]:
-                refreshed_resolution = await _resolve_byok(target_provider)
+            async def rebuild_call_params_for_provider(
+                target_provider: str,
+                *,
+                force_oauth_refresh: bool = False,
+            ) -> tuple[dict[str, Any], str | None]:
+                refreshed_resolution = await _resolve_byok(
+                    target_provider,
+                    force_oauth_refresh=force_oauth_refresh,
+                )
                 provider_api_key_new = refreshed_resolution.api_key
                 if provider_requires_api_key(target_provider) and not provider_api_key_new:
                     logger.error(
@@ -3079,6 +3100,82 @@ async def create_chat_completion(
                 llm_call_func = partial(_mock_chat_call, **cleaned_args)
             else:
                 llm_call_func = partial(perform_chat_api_call, **cleaned_args)
+
+            def _is_auth_401_error(exc: BaseException) -> bool:
+                try:
+                    status_code = int(getattr(exc, "status_code", 0) or 0)
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                    status_code = 0
+                return status_code == status.HTTP_401_UNAUTHORIZED
+
+            def _is_missing_credentials_error(exc: BaseException) -> bool:
+                if not isinstance(exc, HTTPException):
+                    return False
+                if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE:
+                    return False
+                detail = getattr(exc, "detail", None)
+                return isinstance(detail, dict) and detail.get("error_code") == "missing_provider_credentials"
+
+            def _oauth_reconnect_required_exception() -> HTTPException:
+                return HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={
+                        "error_code": "oauth_reconnect_required",
+                        "provider": "openai",
+                        "reconnect_required": True,
+                        "message": "OpenAI OAuth access is no longer valid. Reconnect OpenAI and retry.",
+                    },
+                )
+
+            if (
+                target_api_provider == "openai"
+                and getattr(byok_resolution, "auth_source", None) == "oauth"
+            ):
+                oauth_retry_state = {"attempted": False}
+                base_llm_call_func = llm_call_func
+
+                def _run_refresh_on_endpoint_loop() -> tuple[dict[str, Any], str | None]:
+                    future = asyncio.run_coroutine_threadsafe(
+                        rebuild_call_params_for_provider(
+                            target_api_provider,
+                            force_oauth_refresh=True,
+                        ),
+                        current_loop,
+                    )
+                    return future.result(timeout=20.0)
+
+                def _llm_call_with_openai_oauth_retry():
+                    try:
+                        return base_llm_call_func()
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as initial_exc:
+                        if oauth_retry_state["attempted"] or not _is_auth_401_error(initial_exc):
+                            raise
+                        oauth_retry_state["attempted"] = True
+                        logger.info(
+                            "OpenAI OAuth auth failure detected; forcing refresh and retrying once."
+                        )
+                        try:
+                            refreshed_args, _ = _run_refresh_on_endpoint_loop()
+                        except HTTPException as refresh_exc:
+                            if _is_auth_401_error(refresh_exc) or _is_missing_credentials_error(refresh_exc):
+                                raise _oauth_reconnect_required_exception() from initial_exc
+                            raise
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as refresh_exc:
+                            logger.warning("OpenAI OAuth forced refresh failed: {}", refresh_exc)
+                            raise _oauth_reconnect_required_exception() from initial_exc
+
+                        refreshed_key = refreshed_args.get("api_key")
+                        if not isinstance(refreshed_key, str) or not refreshed_key.strip():
+                            raise _oauth_reconnect_required_exception() from initial_exc
+
+                        try:
+                            return perform_chat_api_call(**refreshed_args)
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as retry_exc:
+                            if _is_auth_401_error(retry_exc):
+                                raise _oauth_reconnect_required_exception() from retry_exc
+                            raise
+
+                llm_call_func = _llm_call_with_openai_oauth_retry
 
             # Build moderation getter that overlays guardian policies on output
             def _get_moderation_with_guardian():
@@ -3711,6 +3808,204 @@ def _replace_conversation_keywords(
             logger.warning("Failed to link keyword {} to {}: {}", original, conversation_id, exc)
 
 
+_KNOWLEDGE_QA_SHARE_LINKS_SETTINGS_KEY = "knowledge_qa_share_links"
+_KNOWLEDGE_QA_SHARE_TOKEN_VERSION = 1
+_KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS = max(
+    300, int(os.getenv("KNOWLEDGE_QA_SHARE_LINK_DEFAULT_TTL_SECONDS", "604800"))
+)
+_KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS = max(
+    _KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS,
+    int(os.getenv("KNOWLEDGE_QA_SHARE_LINK_MAX_TTL_SECONDS", "2592000")),
+)
+
+
+@lru_cache(maxsize=1)
+def _get_knowledge_qa_share_signing_key() -> bytes:
+    explicit = (os.getenv("KNOWLEDGE_QA_SHARE_LINK_SECRET") or "").strip()
+    if explicit:
+        return explicit.encode("utf-8")
+    try:
+        return derive_hmac_key()
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        fallback = (os.getenv("JWT_SECRET_KEY") or "knowledge_qa_share_link_default")
+        return fallback.encode("utf-8")
+
+
+def _urlsafe_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
+
+
+def _urlsafe_b64decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(f"{value}{padding}")
+
+
+def _build_knowledge_qa_share_token(payload: dict[str, Any]) -> str:
+    encoded_payload = _urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signature = hmac.new(
+        _get_knowledge_qa_share_signing_key(),
+        encoded_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    encoded_signature = _urlsafe_b64encode(signature)
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _decode_knowledge_qa_share_token(token: str) -> dict[str, Any]:
+    token_parts = token.split(".")
+    if len(token_parts) != 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token")
+
+    encoded_payload, encoded_signature = token_parts
+    expected_signature = hmac.new(
+        _get_knowledge_qa_share_signing_key(),
+        encoded_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    provided_signature = _urlsafe_b64decode(encoded_signature)
+    if not hmac.compare_digest(expected_signature, provided_signature):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid share token")
+
+    try:
+        payload = json.loads(_urlsafe_b64decode(encoded_payload).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token payload") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share token payload")
+    return payload
+
+
+def _normalize_knowledge_qa_share_links(raw_links: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_links, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_links:
+        if not isinstance(raw, dict):
+            continue
+        share_id = str(raw.get("id") or "").strip()
+        if not share_id:
+            continue
+        permission = str(raw.get("permission") or "view").strip().lower()
+        if permission != "view":
+            permission = "view"
+        created_at = str(raw.get("created_at") or "").strip() or datetime.now(
+            timezone.utc
+        ).isoformat()
+        expires_at = str(raw.get("expires_at") or "").strip()
+        if not expires_at:
+            continue
+        normalized.append(
+            {
+                "id": share_id,
+                "permission": permission,
+                "created_at": created_at,
+                "expires_at": expires_at,
+                "revoked_at": raw.get("revoked_at"),
+                "created_by_user_id": str(raw.get("created_by_user_id") or "").strip(),
+                "label": str(raw.get("label") or "").strip() or None,
+            }
+        )
+    return normalized
+
+
+def _load_knowledge_qa_share_links(
+    db: CharactersRAGDB, conversation_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    settings_row = db.get_conversation_settings(conversation_id) or {}
+    settings = settings_row.get("settings") if isinstance(settings_row, dict) else {}
+    settings_payload: dict[str, Any] = settings if isinstance(settings, dict) else {}
+    links = _normalize_knowledge_qa_share_links(
+        settings_payload.get(_KNOWLEDGE_QA_SHARE_LINKS_SETTINGS_KEY)
+    )
+    return settings_payload, links
+
+
+def _persist_knowledge_qa_share_links(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    settings_payload: dict[str, Any],
+    links: list[dict[str, Any]],
+) -> None:
+    settings_payload[_KNOWLEDGE_QA_SHARE_LINKS_SETTINGS_KEY] = links
+    if not db.upsert_conversation_settings(conversation_id, settings_payload):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist share link settings",
+        )
+
+
+def _prune_knowledge_qa_share_links(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    pruned: list[dict[str, Any]] = []
+    for link in links:
+        expires_at = _coerce_datetime(link.get("expires_at"))
+        revoked_at = _coerce_datetime(link.get("revoked_at"))
+        if revoked_at and (now - revoked_at) > timedelta(days=30):
+            continue
+        if expires_at and (now - expires_at) > timedelta(days=30):
+            continue
+        pruned.append(link)
+    return pruned
+
+
+class ConversationShareLinkCreateRequest(BaseModel):
+    permission: Literal["view"] = Field("view", description="Share permission")
+    ttl_seconds: int | None = Field(
+        None,
+        ge=300,
+        le=_KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS,
+        description="Token lifetime in seconds",
+    )
+    label: str | None = Field(
+        None,
+        max_length=80,
+        description="Optional human-readable label",
+    )
+
+
+class ConversationShareLinkResponse(BaseModel):
+    share_id: str
+    permission: Literal["view"]
+    created_at: datetime
+    expires_at: datetime
+    token: str
+    share_path: str
+
+
+class ConversationShareLinkListItem(BaseModel):
+    id: str
+    permission: Literal["view"]
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    label: str | None = None
+    share_path: str | None = None
+    token: str | None = None
+
+
+class ConversationShareLinksResponse(BaseModel):
+    conversation_id: str
+    links: list[ConversationShareLinkListItem]
+
+
+class ConversationShareLinkRevokeResponse(BaseModel):
+    success: bool
+    share_id: str
+
+
+class SharedConversationResolveResponse(BaseModel):
+    conversation_id: str
+    title: str | None = None
+    source: str | None = None
+    permission: Literal["view"]
+    shared_by_user_id: str
+    expires_at: datetime
+    messages: list[dict[str, Any]]
+
+
 @router.post(
     "/knowledge/save",
     response_model=KnowledgeSaveResponse,
@@ -4280,6 +4575,271 @@ async def get_conversation_tree(
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Conversation tree failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load conversation tree") from exc
+
+
+@router.post(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinkResponse,
+    summary="Create a tokenized share link for a conversation",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+)
+@conversations_alias_router.post(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinkResponse,
+    summary="Create a tokenized share link for a conversation [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+    include_in_schema=False,
+)
+async def create_conversation_share_link(
+    request_body: ConversationShareLinkCreateRequest,
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    now = datetime.now(timezone.utc)
+    ttl_seconds = request_body.ttl_seconds or _KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS
+    ttl_seconds = max(300, min(ttl_seconds, _KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS))
+    expires_at = now + timedelta(seconds=ttl_seconds)
+
+    settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
+    links = _prune_knowledge_qa_share_links(existing_links)
+
+    share_id = str(uuid.uuid4())
+    link_entry = {
+        "id": share_id,
+        "permission": "view",
+        "created_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "revoked_at": None,
+        "created_by_user_id": str(current_user.id),
+        "label": request_body.label.strip() if isinstance(request_body.label, str) and request_body.label.strip() else None,
+    }
+    links.append(link_entry)
+    _persist_knowledge_qa_share_links(db, conversation_id, settings_payload, links)
+
+    token_payload = {
+        "v": _KNOWLEDGE_QA_SHARE_TOKEN_VERSION,
+        "conversation_id": conversation.get("id") or conversation_id,
+        "share_id": share_id,
+        "shared_by_user_id": str(current_user.id),
+        "permission": "view",
+        "exp": int(expires_at.timestamp()),
+    }
+    token = _build_knowledge_qa_share_token(token_payload)
+    share_path = f"/knowledge/shared/{token}"
+
+    return ConversationShareLinkResponse(
+        share_id=share_id,
+        permission="view",
+        created_at=now,
+        expires_at=expires_at,
+        token=token,
+        share_path=share_path,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinksResponse,
+    summary="List tokenized share links for a conversation",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}/share-links",
+    response_model=ConversationShareLinksResponse,
+    summary="List tokenized share links for a conversation [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+    include_in_schema=False,
+)
+async def list_conversation_share_links(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
+    links = _prune_knowledge_qa_share_links(existing_links)
+    if links != existing_links:
+        _persist_knowledge_qa_share_links(db, conversation_id, settings_payload, links)
+
+    now = datetime.now(timezone.utc)
+    response_links: list[ConversationShareLinkListItem] = []
+    for link in links:
+        expires_at_dt = _coerce_datetime(link.get("expires_at"))
+        if not expires_at_dt:
+            continue
+        revoked_at_dt = _coerce_datetime(link.get("revoked_at"))
+        token: str | None = None
+        share_path: str | None = None
+        if revoked_at_dt is None and expires_at_dt > now:
+            token_payload = {
+                "v": _KNOWLEDGE_QA_SHARE_TOKEN_VERSION,
+                "conversation_id": conversation.get("id") or conversation_id,
+                "share_id": link.get("id"),
+                "shared_by_user_id": str(link.get("created_by_user_id") or current_user.id),
+                "permission": "view",
+                "exp": int(expires_at_dt.timestamp()),
+            }
+            token = _build_knowledge_qa_share_token(token_payload)
+            share_path = f"/knowledge/shared/{token}"
+        created_at_dt = _coerce_datetime(link.get("created_at")) or now
+        response_links.append(
+            ConversationShareLinkListItem(
+                id=str(link.get("id") or ""),
+                permission="view",
+                created_at=created_at_dt,
+                expires_at=expires_at_dt,
+                revoked_at=revoked_at_dt,
+                label=link.get("label"),
+                share_path=share_path,
+                token=token,
+            )
+        )
+
+    return ConversationShareLinksResponse(
+        conversation_id=conversation.get("id") or conversation_id,
+        links=response_links,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/share-links/{share_id}",
+    response_model=ConversationShareLinkRevokeResponse,
+    summary="Revoke a tokenized share link",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+)
+@conversations_alias_router.delete(
+    "/conversations/{conversation_id}/share-links/{share_id}",
+    response_model=ConversationShareLinkRevokeResponse,
+    summary="Revoke a tokenized share link [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.share_links")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.share_links")),
+    ],
+    include_in_schema=False,
+)
+async def revoke_conversation_share_link(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    share_id: str = Path(..., description="Share link ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    _verify_conversation_ownership(db, conversation_id, current_user)
+    settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
+    links = _prune_knowledge_qa_share_links(existing_links)
+
+    share_found = False
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for link in links:
+        if str(link.get("id")) != share_id:
+            continue
+        share_found = True
+        if not link.get("revoked_at"):
+            link["revoked_at"] = now_iso
+        break
+
+    if not share_found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found")
+
+    _persist_knowledge_qa_share_links(db, conversation_id, settings_payload, links)
+    return ConversationShareLinkRevokeResponse(success=True, share_id=share_id)
+
+
+@router.get(
+    "/shared/conversations/{share_token}",
+    response_model=SharedConversationResolveResponse,
+    summary="Resolve a public share token to conversation content",
+    tags=["chat"],
+)
+@conversations_alias_router.get(
+    "/shared/conversations/{share_token}",
+    response_model=SharedConversationResolveResponse,
+    summary="Resolve a public share token to conversation content [alias]",
+    tags=["chat"],
+    include_in_schema=False,
+)
+async def resolve_conversation_share_token(
+    share_token: str = Path(..., description="Share token"),
+    limit: int = Query(200, ge=1, le=500, description="Maximum messages to return"),
+):
+    payload = _decode_knowledge_qa_share_token(share_token)
+    if int(payload.get("v") or 0) != _KNOWLEDGE_QA_SHARE_TOKEN_VERSION:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported share token version")
+
+    conversation_id = str(payload.get("conversation_id") or "").strip()
+    share_id = str(payload.get("share_id") or "").strip()
+    shared_by_user_id = str(payload.get("shared_by_user_id") or "").strip()
+    permission = str(payload.get("permission") or "").strip().lower()
+    exp_raw = payload.get("exp")
+    if not conversation_id or not share_id or not shared_by_user_id or permission != "view":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token payload")
+    if not isinstance(exp_raw, (int, float)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Malformed share token expiry")
+
+    expires_at = datetime.fromtimestamp(int(exp_raw), tz=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Share link expired")
+
+    try:
+        owner_user_id = int(shared_by_user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid share link owner") from exc
+
+    db = await get_chacha_db_for_user_id(owner_user_id, str(owner_user_id))
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation or conversation.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    _, links = _load_knowledge_qa_share_links(db, conversation_id)
+    share_link = next((entry for entry in links if str(entry.get("id")) == share_id), None)
+    if not share_link:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found")
+    if share_link.get("revoked_at"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Share link revoked")
+
+    link_expires_at = _coerce_datetime(share_link.get("expires_at"))
+    if link_expires_at is None or datetime.now(timezone.utc) > link_expires_at:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Share link expired")
+
+    messages = db.get_messages_with_rag_context(
+        conversation_id,
+        limit=limit,
+        offset=0,
+        include_rag_context=True,
+    )
+    safe_messages = messages if isinstance(messages, list) else []
+
+    return SharedConversationResolveResponse(
+        conversation_id=conversation_id,
+        title=conversation.get("title"),
+        source=conversation.get("source"),
+        permission="view",
+        shared_by_user_id=shared_by_user_id,
+        expires_at=link_expires_at,
+        messages=safe_messages,
+    )
 
 
 @router.get(

@@ -2,6 +2,8 @@ export type DictionaryListItem = {
   id?: number
   name?: string | null
   description?: string | null
+  category?: string | null
+  tags?: string[] | string | null
   is_active?: boolean | null
   entry_count?: number | null
   regex_entries?: number | null
@@ -21,6 +23,35 @@ export type DictionaryConfirmationConfig = {
 function safeText(value: unknown): string {
   if (typeof value !== "string") return ""
   return value.trim().toLowerCase()
+}
+
+export function normalizeDictionaryTags(value: unknown): string[] {
+  if (!value) return []
+  if (Array.isArray(value)) {
+    const seen = new Set<string>()
+    const tags: string[] = []
+    for (const item of value) {
+      const tag = typeof item === "string" ? item.trim() : String(item || "").trim()
+      if (!tag) continue
+      const key = tag.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      tags.push(tag)
+    }
+    return tags
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim()
+    if (!normalized) return []
+    try {
+      const parsed = JSON.parse(normalized)
+      if (Array.isArray(parsed)) return normalizeDictionaryTags(parsed)
+    } catch {
+      // noop, fall through to comma-split parsing
+    }
+    return normalizeDictionaryTags(normalized.split(","))
+  }
+  return []
 }
 
 export function compareDictionaryName(a: DictionaryListItem, b: DictionaryListItem): number {
@@ -51,7 +82,14 @@ export function filterDictionariesBySearch(
   return dictionaries.filter((item) => {
     const name = safeText(item.name)
     const description = safeText(item.description)
-    return name.includes(normalized) || description.includes(normalized)
+    const category = safeText(item.category)
+    const tags = normalizeDictionaryTags(item.tags).map(safeText).join(" ")
+    return (
+      name.includes(normalized) ||
+      description.includes(normalized) ||
+      category.includes(normalized) ||
+      tags.includes(normalized)
+    )
   })
 }
 

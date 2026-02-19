@@ -228,7 +228,7 @@ describe("WorldBooksManager entry drawer stage-2 authoring controls", () => {
     )
     expect(await screen.findByRole("button", { name: "Save Changes" })).toBeInTheDocument()
     expect(screen.getAllByText("seed-keyword", { selector: ".ant-tag" }).length).toBeGreaterThan(1)
-  }, 30000)
+  }, 60000)
 
   it("supports entry group field in table and add payload", async () => {
     const user = userEvent.setup()

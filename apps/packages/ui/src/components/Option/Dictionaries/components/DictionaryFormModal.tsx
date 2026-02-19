@@ -1,6 +1,7 @@
 import React from "react"
-import { Button, Form, Input, InputNumber, Modal, Switch } from "antd"
+import { Button, Form, Input, InputNumber, Modal, Select, Switch } from "antd"
 import { LabelWithHelp } from "@/components/Common/LabelWithHelp"
+import { DICTIONARY_STARTER_TEMPLATES } from "./dictionaryStarterTemplates"
 
 type DictionaryFormModalProps = {
   title: string
@@ -34,6 +35,41 @@ export const DictionaryFormModal: React.FC<DictionaryFormModalProps> = ({
         <Form.Item name="description" label="Description">
           <Input />
         </Form.Item>
+        <Form.Item
+          name="category"
+          label="Category"
+          extra="Optional. Use a broad grouping such as Medical, Roleplay, or Product."
+        >
+          <Input placeholder="Optional category" />
+        </Form.Item>
+        <Form.Item
+          name="tags"
+          label="Tags"
+          extra="Optional. Add searchable tags to organize dictionaries."
+        >
+          <Select
+            mode="tags"
+            tokenSeparators={[","]}
+            placeholder="Add tags"
+            maxTagCount="responsive"
+          />
+        </Form.Item>
+        {!includeActiveField ? (
+          <Form.Item
+            name="starter_template"
+            label="Starter Template"
+            extra="Optional. Adds prebuilt sample entries after the dictionary is created."
+          >
+            <Select
+              allowClear
+              placeholder="Start from a blank dictionary"
+              options={DICTIONARY_STARTER_TEMPLATES.map((template) => ({
+                label: `${template.label} - ${template.description}`,
+                value: template.id,
+              }))}
+            />
+          </Form.Item>
+        ) : null}
         {includeActiveField ? (
           <Form.Item name="is_active" label="Active" valuePropName="checked">
             <Switch checkedChildren="On" unCheckedChildren="Off" />

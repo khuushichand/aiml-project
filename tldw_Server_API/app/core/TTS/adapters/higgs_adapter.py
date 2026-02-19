@@ -4,7 +4,9 @@
 # Imports
 import asyncio
 import contextlib
+import importlib
 import os
+import sys
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
 
@@ -12,7 +14,6 @@ import numpy as np
 
 #
 # Third-party Imports
-import torch
 from loguru import logger
 
 from ..tts_exceptions import (
@@ -34,6 +35,53 @@ from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSR
 #######################################################################################################################
 #
 # Higgs Audio V2 TTS Adapter Implementation
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _is_test_runtime() -> bool:
+    test_flags = {"1", "true", "yes", "y", "on"}
+    if str(os.getenv("PYTEST_CURRENT_TEST", "")).strip():
+        return True
+    if str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in test_flags:
+        return True
+    if str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in test_flags:
+        return True
+    return any("pytest" in str(arg or "") for arg in sys.argv)
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
 
 class HiggsAdapter(TTSAdapter):
     """Adapter for Higgs Audio V2 TTS model from Boson AI"""
@@ -92,11 +140,7 @@ class HiggsAdapter(TTSAdapter):
             "bosonai/higgs-audio-v2-tokenizer"
         )
         preferred_device = str(self.config.get("higgs_device", "cuda")).lower()
-        cuda_available = False
-        try:
-            cuda_available = torch.cuda.is_available()
-        except Exception:
-            cuda_available = False
+        cuda_available = _torch_cuda_available(allow_import=True)
 
         if preferred_device == "cuda":
             self.device = "cuda" if cuda_available else "cpu"
@@ -130,6 +174,12 @@ class HiggsAdapter(TTSAdapter):
 
     async def initialize(self) -> bool:
         """Initialize the Higgs Audio V2 model"""
+        if _get_torch(allow_import=True) is None:
+            logger.warning(
+                f"{self.provider_name}: torch unavailable; disabling provider. error={_TORCH_IMPORT_ERROR}"
+            )
+            self._status = ProviderStatus.NOT_CONFIGURED
+            return False
         try:
             logger.info(f"{self.provider_name}: Loading Higgs Audio V2 model...")
 
@@ -585,8 +635,9 @@ class HiggsAdapter(TTSAdapter):
             self.serve_engine = None
 
         # Clear GPU cache if using CUDA
-        if self.device == "cuda" and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch_mod = _get_torch(allow_import=False)
+        if self.device == "cuda" and _torch_cuda_available(allow_import=False) and torch_mod is not None:
+            torch_mod.cuda.empty_cache()
 
         await super().close()
 

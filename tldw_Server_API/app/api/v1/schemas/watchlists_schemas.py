@@ -64,6 +64,12 @@ class SourceUpdateRequest(BaseModel):
     group_ids: list[int] | None = None
 
 
+class SourceTestRequest(BaseModel):
+    url: AnyUrl
+    source_type: SourceType
+    settings: dict[str, Any] | None = None
+
+
 class Source(BaseModel):
     id: int
     name: str
@@ -82,6 +88,16 @@ class Source(BaseModel):
 class SourcesListResponse(BaseModel):
     items: list[Source]
     total: int
+
+
+class ReversibleDeleteResponse(BaseModel):
+    success: bool = True
+    restore_window_seconds: int = Field(..., ge=1)
+    restore_expires_at: str
+
+
+class SourceDeleteResponse(ReversibleDeleteResponse):
+    source_id: int
 
 
 class SourceSeenStats(BaseModel):
@@ -250,6 +266,10 @@ class JobsListResponse(BaseModel):
     total: int
 
 
+class JobDeleteResponse(ReversibleDeleteResponse):
+    job_id: int
+
+
 class Run(BaseModel):
     id: int
     job_id: int
@@ -260,10 +280,51 @@ class Run(BaseModel):
     error_msg: str | None = None
 
 
+class RunCancelResponse(BaseModel):
+    run_id: int
+    status: str
+    cancelled: bool
+    message: str | None = None
+
+
 class RunsListResponse(BaseModel):
     items: list[Run]
     total: int
     has_more: bool | None = None
+
+
+WatchlistIaExperimentVariant = Literal["baseline", "experimental"]
+
+
+class WatchlistIaExperimentTelemetryIngestRequest(BaseModel):
+    variant: WatchlistIaExperimentVariant = "experimental"
+    session_id: str = Field(..., min_length=8, max_length=128)
+    previous_tab: str | None = Field(default=None, max_length=64)
+    current_tab: str = Field(..., min_length=1, max_length=64)
+    transitions: int = Field(default=0, ge=0, le=100_000)
+    visited_tabs: list[str] = Field(default_factory=list, max_length=64)
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+
+
+class WatchlistIaExperimentTelemetryIngestResponse(BaseModel):
+    accepted: bool = True
+
+
+class WatchlistIaExperimentVariantSummary(BaseModel):
+    variant: WatchlistIaExperimentVariant
+    events: int = 0
+    sessions: int = 0
+    reached_target_sessions: int = 0
+    avg_transitions: float = 0.0
+    avg_visited_tabs: float = 0.0
+    avg_session_seconds: float = 0.0
+
+
+class WatchlistIaExperimentTelemetrySummaryResponse(BaseModel):
+    items: list[WatchlistIaExperimentVariantSummary]
+    since: str | None = None
+    until: str | None = None
 
 
 class PreviewItem(BaseModel):

@@ -16,6 +16,7 @@
 import asyncio
 import gc
 import hashlib
+import importlib
 import inspect
 import json
 import multiprocessing
@@ -34,7 +35,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import numpy as np
-import torch
 
 #
 # DEBUG Imports
@@ -97,6 +97,42 @@ _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS = (
     CancelCheckError,
     TranscriptionCancelled,
 )
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import)
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
 
 #
 #######################################################################################################################
@@ -1835,6 +1871,11 @@ def load_qwen2audio():
     """
     global qwen_processor, qwen_model
     if qwen_processor is None or qwen_model is None:
+        torch_mod = _get_torch(allow_import=True)
+        if torch_mod is None:
+            raise RuntimeError(
+                f"[Transcription error] Qwen2Audio unavailable because torch failed to import: {_TORCH_IMPORT_ERROR}"
+            )
         # Gate heavy Qwen2Audio loading behind config so typical installs
         # do not attempt to download/initialize this large model unless
         # explicitly enabled.
@@ -1854,7 +1895,7 @@ def load_qwen2audio():
         qwen_processor = AutoProcessor.from_pretrained(model_id)
         qwen_model = Qwen2AudioForConditionalGeneration.from_pretrained(
             model_id,
-            torch_dtype=torch.float16,
+            torch_dtype=torch_mod.float16,
             device_map="auto"
         )
     return qwen_processor, qwen_model
@@ -1898,11 +1939,16 @@ def transcribe_with_qwen2audio(audio: np.ndarray, sample_rate: int = 16000) -> s
         sampling_rate=sample_rate
     )
     device = model.device
+    torch_mod = _get_torch(allow_import=True)
+    if torch_mod is None:
+        raise RuntimeError(
+            f"[Transcription error] Qwen2Audio unavailable because torch failed to import: {_TORCH_IMPORT_ERROR}"
+        )
     for k, v in inputs.items():
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch_mod.Tensor):
             inputs[k] = v.to(device)
 
-    with torch.no_grad():
+    with torch_mod.no_grad():
         generated_ids = model.generate(**inputs, max_new_tokens=128)
     # The raw output has prompt + transcription + possibly more text
     transcription = processor.decode(generated_ids[0], skip_special_tokens=True)
@@ -2213,8 +2259,9 @@ def unload_all_transcription_models():
     gc.collect()
 
     # Clear GPU cache if available
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    torch_mod = _get_torch(allow_import=False)
+    if _torch_cuda_available(allow_import=False) and torch_mod is not None:
+        torch_mod.cuda.empty_cache()
 
     logging.info("Unloaded all transcription models from memory")
 

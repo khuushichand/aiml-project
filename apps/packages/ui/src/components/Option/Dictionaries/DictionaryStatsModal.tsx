@@ -1,5 +1,6 @@
 import React from "react"
-import { Descriptions, Modal, Tag } from "antd"
+import { Button, Descriptions, Modal, Tag } from "antd"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { formatRelativeTimestamp } from "./listUtils"
 
 type DictionaryStatsModalProps = {
@@ -13,6 +14,78 @@ export function DictionaryStatsModal({
   stats,
   onClose
 }: DictionaryStatsModalProps) {
+  const [activityPages, setActivityPages] = React.useState<Record<number, any[]>>({})
+  const [activityPage, setActivityPage] = React.useState(1)
+  const [activityTotal, setActivityTotal] = React.useState(0)
+  const [activityLoading, setActivityLoading] = React.useState(false)
+  const [activityError, setActivityError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    const initialEvents = Array.isArray(stats?.recent_activity) ? stats.recent_activity : []
+    const totalRaw = Number(stats?.recent_activity_total)
+    const totalFromPayload =
+      Number.isFinite(totalRaw) && totalRaw > 0
+        ? Math.floor(totalRaw)
+        : initialEvents.length
+
+    setActivityPages({ 1: initialEvents })
+    setActivityPage(1)
+    setActivityTotal(Math.max(initialEvents.length, totalFromPayload))
+    setActivityLoading(false)
+    setActivityError(null)
+  }, [open, stats?.dictionary_id, stats?.recent_activity, stats?.recent_activity_total])
+
+  const activityPageSize = 10
+  const totalActivityPages = Math.max(1, Math.ceil(activityTotal / activityPageSize))
+  const currentActivityPageEvents = activityPages[activityPage] || []
+
+  const loadActivityPage = React.useCallback(
+    async (page: number) => {
+      if (!open) return
+      if (!stats?.dictionary_id) return
+      if (activityPages[page]) return true
+
+      setActivityLoading(true)
+      setActivityError(null)
+      try {
+        const offset = (page - 1) * activityPageSize
+        const response = await tldwClient.dictionaryActivity(stats.dictionary_id, {
+          limit: activityPageSize,
+          offset,
+        })
+        const events = Array.isArray(response?.events) ? response.events : []
+        const totalRaw = Number(response?.total)
+        const normalizedTotal =
+          Number.isFinite(totalRaw) && totalRaw > 0
+            ? Math.floor(totalRaw)
+            : offset + events.length
+
+        setActivityPages((current) => ({ ...current, [page]: events }))
+        setActivityTotal((current) => Math.max(current, normalizedTotal))
+        return true
+      } catch (error: any) {
+        setActivityError(
+          error?.message || "Could not load additional activity events."
+        )
+        return false
+      } finally {
+        setActivityLoading(false)
+      }
+    },
+    [activityPages, open, stats?.dictionary_id]
+  )
+
+  const goToActivityPage = React.useCallback(
+    async (page: number) => {
+      if (page < 1 || page > totalActivityPages || page === activityPage) return
+      const loaded = await loadActivityPage(page)
+      if (loaded) {
+        setActivityPage(page)
+      }
+    },
+    [activityPage, loadActivityPage, totalActivityPages]
+  )
+
   return (
     <Modal title="Dictionary Statistics" open={open} onCancel={onClose} footer={null}>
       {stats && (
@@ -87,9 +160,9 @@ export function DictionaryStatsModal({
           )}
           <div className="space-y-2">
             <div className="text-xs font-medium text-text">Recent activity</div>
-            {Array.isArray(stats.recent_activity) && stats.recent_activity.length > 0 ? (
+            {currentActivityPageEvents.length > 0 ? (
               <div className="space-y-2 rounded border border-border bg-surface2/40 p-2">
-                {stats.recent_activity.map((event: any, index: number) => (
+                {currentActivityPageEvents.map((event: any, index: number) => (
                   <div
                     key={`dictionary-activity-${event?.id ?? index}`}
                     className="space-y-1 rounded border border-border/70 bg-surface p-2 text-xs"
@@ -122,11 +195,46 @@ export function DictionaryStatsModal({
                     </div>
                   </div>
                 ))}
+                {activityTotal > activityPageSize && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+                    <div className="text-xs text-text-muted">
+                      Page {activityPage} of {totalActivityPages}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="small"
+                        data-testid="dictionary-activity-prev-page"
+                        disabled={activityLoading || activityPage <= 1}
+                        onClick={() => {
+                          void goToActivityPage(activityPage - 1)
+                        }}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        size="small"
+                        data-testid="dictionary-activity-next-page"
+                        disabled={activityLoading || activityPage >= totalActivityPages}
+                        onClick={() => {
+                          void goToActivityPage(activityPage + 1)
+                        }}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-xs text-text-muted">
                 No transformation activity recorded yet.
               </div>
+            )}
+            {activityLoading && (
+              <div className="text-xs text-text-muted">Loading activity…</div>
+            )}
+            {activityError && (
+              <div className="text-xs text-danger">{activityError}</div>
             )}
           </div>
           <div className="space-y-2">

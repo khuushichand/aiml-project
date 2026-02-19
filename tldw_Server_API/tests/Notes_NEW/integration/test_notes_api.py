@@ -201,6 +201,32 @@ def test_keywords_crud_and_linking(client_with_notes_db: TestClient):
     assert bad_upd.status_code in (409, 400)
 
 
+def test_keywords_list_can_include_note_counts(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+
+    n1 = client.post("/api/v1/notes/", json={"title": "Count 1", "content": "Alpha"}).json()
+    n2 = client.post("/api/v1/notes/", json={"title": "Count 2", "content": "Beta"}).json()
+
+    kw_a = client.post("/api/v1/notes/keywords/", json={"keyword": "alpha"}).json()
+    kw_b = client.post("/api/v1/notes/keywords/", json={"keyword": "beta"}).json()
+
+    assert client.post(f"/api/v1/notes/{n1['id']}/keywords/{kw_a['id']}").status_code == 200
+    assert client.post(f"/api/v1/notes/{n2['id']}/keywords/{kw_a['id']}").status_code == 200
+    assert client.post(f"/api/v1/notes/{n2['id']}/keywords/{kw_b['id']}").status_code == 200
+
+    resp = client.get(
+        "/api/v1/notes/keywords/",
+        params={"include_note_counts": True, "limit": 50}
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert isinstance(payload, list)
+
+    by_keyword = {str(row.get("keyword")): row for row in payload}
+    assert by_keyword.get("alpha", {}).get("note_count") == 2
+    assert by_keyword.get("beta", {}).get("note_count") == 1
+
+
 def test_list_and_search_pagination_and_404s(client_with_notes_db: TestClient):
     client = client_with_notes_db
 
@@ -359,6 +385,83 @@ def test_keyword_update_not_supported(client_with_notes_db: TestClient):
     # Attempt an update (not supported by API) should yield 405 Method Not Allowed
     resp = client.put(f"/api/v1/notes/keywords/{kw_id}", json={"keyword": "renamed"})
     assert resp.status_code in (405, 404)
+
+
+def test_keyword_rename_endpoint_and_conflict(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+
+    kw_a = client.post("/api/v1/notes/keywords/", json={"keyword": "alpha"}).json()
+    kw_b = client.post("/api/v1/notes/keywords/", json={"keyword": "beta"}).json()
+
+    rename_resp = client.patch(
+        f"/api/v1/notes/keywords/{kw_a['id']}",
+        json={"keyword": "alpha-renamed"},
+        headers={"expected-version": str(kw_a.get("version", 1))},
+    )
+    assert rename_resp.status_code == 200, rename_resp.text
+    renamed = rename_resp.json()
+    assert renamed.get("keyword") == "alpha-renamed"
+    assert int(renamed.get("version", 0)) == int(kw_a.get("version", 1)) + 1
+
+    duplicate_conflict = client.patch(
+        f"/api/v1/notes/keywords/{kw_a['id']}",
+        json={"keyword": kw_b["keyword"]},
+        headers={"expected-version": str(renamed.get("version", 1))},
+    )
+    assert duplicate_conflict.status_code == 409
+
+
+def test_keyword_merge_moves_note_links_and_soft_deletes_source(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+
+    n1 = client.post("/api/v1/notes/", json={"title": "Merge 1", "content": "A"}).json()
+    n2 = client.post("/api/v1/notes/", json={"title": "Merge 2", "content": "B"}).json()
+    n3 = client.post("/api/v1/notes/", json={"title": "Merge 3", "content": "C"}).json()
+
+    source_kw = client.post("/api/v1/notes/keywords/", json={"keyword": "ml"}).json()
+    target_kw = client.post("/api/v1/notes/keywords/", json={"keyword": "machine-learning"}).json()
+
+    assert client.post(f"/api/v1/notes/{n1['id']}/keywords/{source_kw['id']}").status_code == 200
+    assert client.post(f"/api/v1/notes/{n2['id']}/keywords/{source_kw['id']}").status_code == 200
+    assert client.post(f"/api/v1/notes/{n2['id']}/keywords/{target_kw['id']}").status_code == 200
+    assert client.post(f"/api/v1/notes/{n3['id']}/keywords/{target_kw['id']}").status_code == 200
+
+    stale_merge = client.post(
+        f"/api/v1/notes/keywords/{source_kw['id']}/merge",
+        json={"target_keyword_id": target_kw["id"]},
+        headers={"expected-version": str(max(0, int(source_kw.get("version", 1)) - 1))},
+    )
+    assert stale_merge.status_code in (409, 400)
+
+    merge_resp = client.post(
+        f"/api/v1/notes/keywords/{source_kw['id']}/merge",
+        json={
+            "target_keyword_id": target_kw["id"],
+            "expected_target_version": target_kw.get("version", 1),
+        },
+        headers={"expected-version": str(source_kw.get("version", 1))},
+    )
+    assert merge_resp.status_code == 200, merge_resp.text
+    merged = merge_resp.json()
+    assert merged.get("source_keyword_id") == source_kw["id"]
+    assert merged.get("target_keyword_id") == target_kw["id"]
+    assert int(merged.get("merged_note_links", 0)) >= 1
+
+    source_get = client.get(f"/api/v1/notes/keywords/{source_kw['id']}")
+    assert source_get.status_code == 404
+
+    notes_for_target = client.get(f"/api/v1/notes/keywords/{target_kw['id']}/notes/")
+    assert notes_for_target.status_code == 200
+    target_note_ids = {note.get("id") for note in notes_for_target.json().get("notes", [])}
+    assert n1["id"] in target_note_ids
+    assert n2["id"] in target_note_ids
+    assert n3["id"] in target_note_ids
+
+    keywords_for_n1 = client.get(f"/api/v1/notes/{n1['id']}/keywords/")
+    assert keywords_for_n1.status_code == 200
+    keyword_ids_for_n1 = {kw.get("id") for kw in keywords_for_n1.json().get("keywords", [])}
+    assert source_kw["id"] not in keyword_ids_for_n1
+    assert target_kw["id"] in keyword_ids_for_n1
 
 
 def test_keyword_delete_conflict(client_with_notes_db: TestClient):

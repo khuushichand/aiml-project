@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -26,6 +27,7 @@ import {
 import { useCreateQuizMutation, useCreateQuestionMutation } from "../hooks"
 import type { QuestionType, QuestionCreate } from "@/services/quizzes"
 import type { TakeTabNavigationIntent } from "../navigation"
+import { normalizeMatchingAnswerMap } from "../utils/matchingAnswer"
 
 interface CreateTabProps {
   onNavigateToTake: (intent?: TakeTabNavigationIntent) => void
@@ -37,8 +39,10 @@ interface QuestionFormData {
   question_type: QuestionType
   question_text: string
   options: string[]
-  correct_answer: number | string
+  correct_answer: number | string | number[] | Record<string, string>
   explanation?: string
+  hint?: string
+  hint_penalty_points?: number
 }
 
 type QuizCreateDraft = {
@@ -53,6 +57,9 @@ type QuizCreateDraft = {
 const CREATE_TAB_DRAFT_KEY = "quiz-create-draft-v1"
 const MIN_MULTIPLE_CHOICE_OPTIONS = 2
 const MAX_MULTIPLE_CHOICE_OPTIONS = 6
+const MIN_MATCHING_PAIRS = 2
+const MAX_MATCHING_PAIRS = 8
+const TOUCH_TARGET_CLASS = "min-h-11 px-4"
 
 type SaveProgressState = {
   phase: "creating_quiz" | "saving_questions"
@@ -148,11 +155,23 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
     const hasQuestionData = questions.some((question) => {
       if (question.question_text.trim()) return true
       if ((question.explanation ?? "").trim()) return true
+      if ((question.hint ?? "").trim()) return true
+      if ((question.hint_penalty_points ?? 0) > 0) return true
       if (question.question_type === "fill_blank") {
         return String(question.correct_answer ?? "").trim().length > 0
       }
       if (question.question_type === "multiple_choice") {
         return question.options.some((option) => option.trim().length > 0)
+      }
+      if (question.question_type === "multi_select") {
+        return question.options.some((option) => option.trim().length > 0)
+      }
+      if (question.question_type === "matching") {
+        const map = normalizeMatchingAnswerMap(question.correct_answer)
+        return (
+          question.options.some((option) => option.trim().length > 0) ||
+          Object.keys(map).length > 0
+        )
       }
       return true
     })
@@ -220,7 +239,9 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       question_text: "",
       options: ["", "", "", ""],
       correct_answer: 0,
-      explanation: ""
+      explanation: "",
+      hint: "",
+      hint_penalty_points: 0
     }
     setQuestions([...questions, newQuestion])
   }
@@ -252,7 +273,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
 
   const addMultipleChoiceOption = (key: string) => {
     setQuestions((prev) => prev.map((question) => {
-      if (question.key !== key || question.question_type !== "multiple_choice") {
+      if (
+        question.key !== key ||
+        (question.question_type !== "multiple_choice" && question.question_type !== "multi_select")
+      ) {
         return question
       }
       if (question.options.length >= MAX_MULTIPLE_CHOICE_OPTIONS) {
@@ -267,7 +291,10 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
 
   const removeMultipleChoiceOption = (key: string, optionIndex: number) => {
     setQuestions((prev) => prev.map((question) => {
-      if (question.key !== key || question.question_type !== "multiple_choice") {
+      if (
+        question.key !== key ||
+        (question.question_type !== "multiple_choice" && question.question_type !== "multi_select")
+      ) {
         return question
       }
       if (question.options.length <= MIN_MULTIPLE_CHOICE_OPTIONS) {
@@ -275,9 +302,28 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       }
 
       const nextOptions = question.options.filter((_, idx) => idx !== optionIndex)
+      if (question.question_type === "multi_select") {
+        const selected = Array.isArray(question.correct_answer)
+          ? question.correct_answer
+            .map((entry) => Number(entry))
+            .filter((entry) => Number.isFinite(entry))
+          : []
+        const nextSelected = Array.from(new Set(
+          selected
+            .filter((entry) => entry !== optionIndex)
+            .map((entry) => (entry > optionIndex ? entry - 1 : entry))
+            .filter((entry) => entry >= 0 && entry < nextOptions.length)
+        )).sort((a, b) => a - b)
+
+        return {
+          ...question,
+          options: nextOptions,
+          correct_answer: nextSelected
+        }
+      }
+
       const currentAnswerIndex = Number(question.correct_answer)
       let nextAnswerIndex = Number.isNaN(currentAnswerIndex) ? 0 : currentAnswerIndex
-
       if (optionIndex < nextAnswerIndex) {
         nextAnswerIndex -= 1
       } else if (optionIndex === nextAnswerIndex) {
@@ -286,11 +332,47 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       if (nextAnswerIndex >= nextOptions.length) {
         nextAnswerIndex = Math.max(0, nextOptions.length - 1)
       }
-
       return {
         ...question,
         options: nextOptions,
         correct_answer: nextAnswerIndex
+      }
+    }))
+  }
+
+  const addMatchingPair = (key: string) => {
+    setQuestions((prev) => prev.map((question) => {
+      if (question.key !== key || question.question_type !== "matching") {
+        return question
+      }
+      if (question.options.length >= MAX_MATCHING_PAIRS) {
+        return question
+      }
+      return {
+        ...question,
+        options: [...question.options, ""]
+      }
+    }))
+  }
+
+  const removeMatchingPair = (key: string, pairIndex: number) => {
+    setQuestions((prev) => prev.map((question) => {
+      if (question.key !== key || question.question_type !== "matching") {
+        return question
+      }
+      if (question.options.length <= MIN_MATCHING_PAIRS) {
+        return question
+      }
+      const removedLeft = question.options[pairIndex]?.trim()
+      const nextOptions = question.options.filter((_, idx) => idx !== pairIndex)
+      const nextMap = { ...normalizeMatchingAnswerMap(question.correct_answer) }
+      if (removedLeft) {
+        delete nextMap[removedLeft]
+      }
+      return {
+        ...question,
+        options: nextOptions,
+        correct_answer: nextMap
       }
     }))
   }
@@ -310,10 +392,11 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i]
         let questionOptions: string[] | undefined
-        let normalizedCorrectAnswer: number | string = q.correct_answer
+        let normalizedCorrectAnswer: number | string | number[] | Record<string, string> = q.correct_answer
 
-        if (q.question_type === "multiple_choice") {
-          const normalizedOptions = q.options.map((option) => option.trim()).filter(Boolean)
+        if (q.question_type === "multiple_choice" || q.question_type === "multi_select") {
+          const trimmedOptions = q.options.map((option) => option.trim())
+          const normalizedOptions = trimmedOptions.filter(Boolean)
           if (normalizedOptions.length < MIN_MULTIPLE_CHOICE_OPTIONS) {
             messageApi.warning(
               t("option:quiz.optionsRequired", {
@@ -323,25 +406,79 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
             return
           }
           questionOptions = normalizedOptions
-          const rawIndex = Number(q.correct_answer)
-          const fallbackIndex = 0
-          const safeIndex = Number.isNaN(rawIndex)
-            ? fallbackIndex
-            : Math.max(0, Math.min(rawIndex, normalizedOptions.length - 1))
-          normalizedCorrectAnswer = safeIndex
+          const indexMap = new Map<number, number>()
+          let nextIndex = 0
+          trimmedOptions.forEach((option, originalIndex) => {
+            if (!option) return
+            indexMap.set(originalIndex, nextIndex)
+            nextIndex += 1
+          })
+          if (q.question_type === "multiple_choice") {
+            const rawIndex = Number(q.correct_answer)
+            const fallbackIndex = 0
+            const mapped = indexMap.get(Number.isNaN(rawIndex) ? fallbackIndex : rawIndex)
+            const safeIndex = mapped ?? fallbackIndex
+            normalizedCorrectAnswer = Math.max(0, Math.min(safeIndex, normalizedOptions.length - 1))
+          } else {
+            const selectedIndicesRaw = Array.isArray(q.correct_answer)
+              ? q.correct_answer
+              : []
+            const selectedIndices = selectedIndicesRaw
+              .map((entry) => Number(entry))
+              .filter((entry) => Number.isFinite(entry))
+              .map((entry) => indexMap.get(entry))
+              .filter((entry): entry is number => typeof entry === "number")
+            const uniqueSelected = Array.from(new Set(selectedIndices)).sort((a, b) => a - b)
+            if (uniqueSelected.length === 0) {
+              messageApi.warning(
+                t("option:quiz.multiSelectCorrectRequired", {
+                  defaultValue: "Select at least one correct option."
+                })
+              )
+              return
+            }
+            normalizedCorrectAnswer = uniqueSelected
+          }
         } else if (q.question_type === "true_false") {
           normalizedCorrectAnswer =
             String(q.correct_answer || "true").toLowerCase() === "true" ? "true" : "false"
+        } else if (q.question_type === "matching") {
+          const rawLeftOptions = q.options.map((option) => option.trim())
+          const leftOptions = rawLeftOptions.filter(Boolean)
+          const answerMap = normalizeMatchingAnswerMap(q.correct_answer)
+          const normalizedPairs = leftOptions
+            .map((left) => {
+              const right = String(answerMap[left] ?? "").trim()
+              return { left, right }
+            })
+            .filter((pair) => pair.left.length > 0 && pair.right.length > 0)
+
+          if (normalizedPairs.length < MIN_MATCHING_PAIRS) {
+            messageApi.warning(
+              t("option:quiz.matchingPairsRequired", {
+                defaultValue: "Provide at least two complete matching pairs."
+              })
+            )
+            return
+          }
+
+          questionOptions = normalizedPairs.map((pair) => pair.left)
+          normalizedCorrectAnswer = Object.fromEntries(
+            normalizedPairs.map((pair) => [pair.left, pair.right])
+          )
         } else {
           normalizedCorrectAnswer = String(q.correct_answer || "").trim()
         }
 
+        const hintText = (q.hint ?? "").trim()
         normalizedQuestions.push({
           question_type: q.question_type,
           question_text: q.question_text,
           options: questionOptions,
           correct_answer: normalizedCorrectAnswer,
           explanation: q.explanation || undefined,
+          ...(hintText ? { hint: hintText } : {}),
+          ...((q.hint_penalty_points ?? 0) > 0 ? { hint_penalty_points: q.hint_penalty_points } : {}),
           order_index: i
         })
       }
@@ -453,6 +590,20 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
         </div>
       )
     }
+    if (question.question_type === "multi_select") {
+      return (
+        <div className="text-sm text-text-muted italic">
+          {t("option:quiz.multiSelect", { defaultValue: "Multi-Select" })}
+        </div>
+      )
+    }
+    if (question.question_type === "matching") {
+      return (
+        <div className="text-sm text-text-muted italic">
+          {t("option:quiz.matching", { defaultValue: "Matching" })}
+        </div>
+      )
+    }
     return (
       <div className="text-sm text-text-muted italic">
         {t("option:quiz.fillBlank", { defaultValue: "Fill in the Blank" })}
@@ -474,6 +625,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
               icon={<ArrowUpOutlined />}
               onClick={() => moveQuestion(question.key, "up")}
               disabled={isSaving || index === 0}
+              className="min-h-11 min-w-11"
               aria-label={t("option:quiz.moveQuestionUp", {
                 defaultValue: "Move question {{number}} up",
                 number: index + 1
@@ -484,6 +636,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
               icon={<ArrowDownOutlined />}
               onClick={() => moveQuestion(question.key, "down")}
               disabled={isSaving || index === questions.length - 1}
+              className="min-h-11 min-w-11"
               aria-label={t("option:quiz.moveQuestionDown", {
                 defaultValue: "Move question {{number}} down",
                 number: index + 1
@@ -495,6 +648,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
               icon={<DeleteOutlined />}
               onClick={() => removeQuestion(question.key)}
               disabled={isSaving}
+              className="min-h-11 min-w-11"
               aria-label={t("option:quiz.removeQuestion", {
                 defaultValue: "Remove question {{number}}",
                 number: index + 1
@@ -518,6 +672,22 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
                   }
                   updates.options = paddedOptions
                 }
+              } else if (value === "multi_select") {
+                updates.correct_answer = []
+                if (question.options.length < MIN_MULTIPLE_CHOICE_OPTIONS) {
+                  const paddedOptions = [...question.options]
+                  while (paddedOptions.length < MIN_MULTIPLE_CHOICE_OPTIONS) {
+                    paddedOptions.push("")
+                  }
+                  updates.options = paddedOptions
+                }
+              } else if (value === "matching") {
+                updates.correct_answer = {}
+                const paddedOptions = [...question.options]
+                while (paddedOptions.length < MIN_MATCHING_PAIRS) {
+                  paddedOptions.push("")
+                }
+                updates.options = paddedOptions
               } else if (value === "true_false") {
                 updates.correct_answer = "true"
               } else {
@@ -527,10 +697,12 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
             }}
             options={[
               { label: t("option:quiz.multipleChoice", { defaultValue: "Multiple Choice" }), value: "multiple_choice" },
+              { label: t("option:quiz.multiSelect", { defaultValue: "Multi-Select" }), value: "multi_select" },
+              { label: t("option:quiz.matching", { defaultValue: "Matching" }), value: "matching" },
               { label: t("option:quiz.trueFalse", { defaultValue: "True/False" }), value: "true_false" },
               { label: t("option:quiz.fillBlank", { defaultValue: "Fill in the Blank" }), value: "fill_blank" }
             ]}
-            className="w-48"
+            className="w-full sm:w-48"
           />
 
           <Input.TextArea
@@ -541,24 +713,53 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
             disabled={isSaving}
           />
 
-          {question.question_type === "multiple_choice" && (
+          {(question.question_type === "multiple_choice" || question.question_type === "multi_select") && (
             <div className="space-y-2">
               <div className="text-sm font-medium">
                 {t("option:quiz.options", { defaultValue: "Options" })}
               </div>
               {question.options.map((option, optIndex) => (
-                <div key={optIndex} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`correct-${question.key}`}
-                    checked={Number(question.correct_answer) === optIndex}
-                    onChange={() => updateQuestion(question.key, { correct_answer: optIndex })}
-                    disabled={isSaving}
-                    aria-label={t("option:quiz.markOptionCorrect", {
-                      defaultValue: "Mark option {{number}} as correct",
-                      number: optIndex + 1
-                    })}
-                  />
+                <div
+                  key={optIndex}
+                  data-testid={`create-option-row-${index}-${optIndex}`}
+                  className="flex flex-col gap-2 sm:flex-row sm:items-center"
+                >
+                  <label className="inline-flex min-h-11 min-w-11 items-center justify-center rounded border border-border p-2">
+                    {question.question_type === "multi_select" ? (
+                      <Checkbox
+                        checked={Array.isArray(question.correct_answer) && question.correct_answer.includes(optIndex)}
+                        onChange={(event) => {
+                          const existing = Array.isArray(question.correct_answer)
+                            ? question.correct_answer
+                              .map((entry) => Number(entry))
+                              .filter((entry) => Number.isFinite(entry))
+                            : []
+                          const next = event.target.checked
+                            ? Array.from(new Set([...existing, optIndex])).sort((a, b) => a - b)
+                            : existing.filter((entry) => entry !== optIndex)
+                          updateQuestion(question.key, { correct_answer: next })
+                        }}
+                        disabled={isSaving}
+                        aria-label={t("option:quiz.markOptionCorrect", {
+                          defaultValue: "Mark option {{number}} as correct",
+                          number: optIndex + 1
+                        })}
+                      />
+                    ) : (
+                      <input
+                        type="radio"
+                        name={`correct-${question.key}`}
+                        checked={Number(question.correct_answer) === optIndex}
+                        onChange={() => updateQuestion(question.key, { correct_answer: optIndex })}
+                        disabled={isSaving}
+                        className="h-4 w-4"
+                        aria-label={t("option:quiz.markOptionCorrect", {
+                          defaultValue: "Mark option {{number}} as correct",
+                          number: optIndex + 1
+                        })}
+                      />
+                    )}
+                  </label>
                   <Input
                     placeholder={`${t("option:quiz.option", { defaultValue: "Option" })} ${optIndex + 1}`}
                     value={option}
@@ -568,11 +769,12 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
                       updateQuestion(question.key, { options: newOptions })
                     }}
                     disabled={isSaving}
-                    className="flex-1"
+                    className="w-full sm:flex-1"
                   />
                   <Button
                     type="text"
                     icon={<MinusCircleOutlined />}
+                    className="min-h-11 min-w-11 self-start sm:self-auto"
                     aria-label={t("option:quiz.removeOption", {
                       defaultValue: "Remove option {{option}} for question {{question}}",
                       option: optIndex + 1,
@@ -588,6 +790,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
                 icon={<PlusOutlined />}
                 onClick={() => addMultipleChoiceOption(question.key)}
                 disabled={isSaving || question.options.length >= MAX_MULTIPLE_CHOICE_OPTIONS}
+                className={TOUCH_TARGET_CLASS}
               >
                 {t("option:quiz.addOption", { defaultValue: "Add Option" })}
               </Button>
@@ -595,13 +798,14 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
           )}
 
           {question.question_type === "true_false" && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <span>{t("option:quiz.correctAnswer", { defaultValue: "Correct answer" })}:</span>
               <Switch
                 checkedChildren={t("option:quiz.true", { defaultValue: "True" })}
                 unCheckedChildren={t("option:quiz.false", { defaultValue: "False" })}
                 checked={question.correct_answer === "true"}
                 disabled={isSaving}
+                className="min-h-11"
                 onChange={(checked) =>
                   updateQuestion(question.key, { correct_answer: checked ? "true" : "false" })
                 }
@@ -610,14 +814,112 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
           )}
 
           {question.question_type === "fill_blank" && (
-            <Input
-              placeholder={t("option:quiz.correctAnswerPlaceholder", {
-                defaultValue: "Enter the correct answer..."
+            <Space orientation="vertical" className="w-full" size={4}>
+              <Input
+                placeholder={t("option:quiz.correctAnswerPlaceholder", {
+                  defaultValue: "Enter the correct answer..."
+                })}
+                value={typeof question.correct_answer === "string" ? question.correct_answer : ""}
+                onChange={(e) => updateQuestion(question.key, { correct_answer: e.target.value })}
+                disabled={isSaving}
+              />
+              <Typography.Text type="secondary" className="text-xs">
+                {t("option:quiz.fillBlankAuthoringHelp", {
+                  defaultValue:
+                    "Use `answer1 || answer2` for alternates. Prefix with `~` (or `~0.85:`) to allow fuzzy matching."
+                })}
+              </Typography.Text>
+            </Space>
+          )}
+
+          {question.question_type === "matching" && (
+            <div className="space-y-2">
+              <div className="text-sm font-medium">
+                {t("option:quiz.matchingPairs", { defaultValue: "Matching Pairs" })}
+              </div>
+              {question.options.map((leftOption, pairIndex) => {
+                const answerMap = normalizeMatchingAnswerMap(question.correct_answer)
+                const leftTrimmed = leftOption.trim()
+                const rightValue = leftTrimmed ? (answerMap[leftTrimmed] ?? "") : ""
+                return (
+                  <div
+                    key={pairIndex}
+                    className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-center"
+                  >
+                    <Input
+                      placeholder={t("option:quiz.matchingLeftPlaceholder", {
+                        defaultValue: "Left item"
+                      })}
+                      value={leftOption}
+                      onChange={(e) => {
+                        const nextLeftRaw = e.target.value
+                        const previousLeft = question.options[pairIndex] ?? ""
+                        const previousTrimmed = previousLeft.trim()
+                        const nextTrimmed = nextLeftRaw.trim()
+                        const nextOptions = [...question.options]
+                        nextOptions[pairIndex] = nextLeftRaw
+                        const nextMap = { ...normalizeMatchingAnswerMap(question.correct_answer) }
+                        const carryValue = previousTrimmed ? nextMap[previousTrimmed] : undefined
+                        if (previousTrimmed) {
+                          delete nextMap[previousTrimmed]
+                        }
+                        if (nextTrimmed && carryValue) {
+                          nextMap[nextTrimmed] = carryValue
+                        }
+                        updateQuestion(question.key, {
+                          options: nextOptions,
+                          correct_answer: nextMap
+                        })
+                      }}
+                      disabled={isSaving}
+                    />
+                    <Input
+                      placeholder={t("option:quiz.matchingRightPlaceholder", {
+                        defaultValue: "Matching item"
+                      })}
+                      value={rightValue}
+                      onChange={(e) => {
+                        const nextMap = { ...normalizeMatchingAnswerMap(question.correct_answer) }
+                        const mapKey = (question.options[pairIndex] ?? "").trim()
+                        if (!mapKey) {
+                          updateQuestion(question.key, { correct_answer: nextMap })
+                          return
+                        }
+                        const nextRight = e.target.value.trim()
+                        if (nextRight) {
+                          nextMap[mapKey] = nextRight
+                        } else {
+                          delete nextMap[mapKey]
+                        }
+                        updateQuestion(question.key, { correct_answer: nextMap })
+                      }}
+                      disabled={isSaving}
+                    />
+                    <Button
+                      type="text"
+                      icon={<MinusCircleOutlined />}
+                      className="min-h-11 min-w-11 self-start sm:self-auto"
+                      aria-label={t("option:quiz.removeMatchingPair", {
+                        defaultValue: "Remove matching pair {{pair}} for question {{question}}",
+                        pair: pairIndex + 1,
+                        question: index + 1
+                      })}
+                      onClick={() => removeMatchingPair(question.key, pairIndex)}
+                      disabled={isSaving || question.options.length <= MIN_MATCHING_PAIRS}
+                    />
+                  </div>
+                )
               })}
-              value={typeof question.correct_answer === "string" ? question.correct_answer : ""}
-              onChange={(e) => updateQuestion(question.key, { correct_answer: e.target.value })}
-              disabled={isSaving}
-            />
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                onClick={() => addMatchingPair(question.key)}
+                disabled={isSaving || question.options.length >= MAX_MATCHING_PAIRS}
+                className={TOUCH_TARGET_CLASS}
+              >
+                {t("option:quiz.addMatchingPair", { defaultValue: "Add Pair" })}
+              </Button>
+            </div>
           )}
 
           <Input.TextArea
@@ -632,6 +934,30 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
           <Typography.Text type="secondary" className="text-xs">
             {t("option:quiz.explanationVisibilityHelp", {
               defaultValue: "Shown to the learner after they submit the quiz."
+            })}
+          </Typography.Text>
+          <Input.TextArea
+            placeholder={t("option:quiz.hintPlaceholder", {
+              defaultValue: "Optional hint (learner can reveal during quiz)..."
+            })}
+            value={question.hint ?? ""}
+            onChange={(e) => updateQuestion(question.key, { hint: e.target.value })}
+            rows={2}
+            disabled={isSaving}
+          />
+          <InputNumber
+            min={0}
+            className="w-full sm:w-56"
+            value={question.hint_penalty_points ?? 0}
+            onChange={(value) => updateQuestion(question.key, { hint_penalty_points: Number(value) || 0 })}
+            placeholder={t("option:quiz.hintPenaltyPoints", {
+              defaultValue: "Hint penalty (points)"
+            })}
+            disabled={isSaving}
+          />
+          <Typography.Text type="secondary" className="text-xs">
+            {t("option:quiz.hintPenaltyHelp", {
+              defaultValue: "Applied only when the learner answers correctly after revealing the hint."
             })}
           </Typography.Text>
         </Space>
@@ -702,7 +1028,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
             />
           </Form.Item>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div data-testid="create-details-grid" className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Form.Item
               name="timeLimit"
               label={t("option:quiz.timeLimit", { defaultValue: "Time Limit (minutes)" })}
@@ -725,7 +1051,13 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
           <h3 className="text-lg font-medium">
             {t("option:quiz.questionsSection", { defaultValue: "Questions" })} ({questions.length})
           </h3>
-          <Button type="dashed" icon={<PlusOutlined />} onClick={addQuestion} disabled={isSaving}>
+          <Button
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={addQuestion}
+            disabled={isSaving}
+            className={TOUCH_TARGET_CLASS}
+          >
             {t("option:quiz.addQuestion", { defaultValue: "Add Question" })}
           </Button>
         </div>
@@ -735,7 +1067,13 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
             <p className="mb-4 text-text-subtle">
               {t("option:quiz.noQuestionsYet", { defaultValue: "No questions added yet" })}
             </p>
-            <Button type="primary" icon={<PlusOutlined />} onClick={addQuestion} disabled={isSaving}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={addQuestion}
+              disabled={isSaving}
+              className={TOUCH_TARGET_CLASS}
+            >
               {t("option:quiz.addFirstQuestion", { defaultValue: "Add Your First Question" })}
             </Button>
           </Card>
@@ -777,6 +1115,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
         <Button
           onClick={() => setPreviewOpen(true)}
           disabled={questions.length === 0 || isSaving}
+          className={TOUCH_TARGET_CLASS}
           block
         >
           {t("option:quiz.preview", { defaultValue: "Preview" })}
@@ -788,6 +1127,7 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
           onClick={handleSave}
           loading={isSaving}
           disabled={questions.length === 0 || isSaving}
+          className={TOUCH_TARGET_CLASS}
           block
         >
           {t("option:quiz.saveQuiz", { defaultValue: "Save Quiz" })}
@@ -829,6 +1169,19 @@ export const CreateTab: React.FC<CreateTabProps> = ({ onNavigateToTake, onDirtyS
                 {(question.explanation ?? "").trim() && (
                   <Typography.Text type="secondary" className="block text-sm">
                     {t("option:quiz.explanation", { defaultValue: "Explanation" })}: {question.explanation}
+                  </Typography.Text>
+                )}
+                {(question.hint ?? "").trim() && (
+                  <Typography.Text type="secondary" className="block text-sm">
+                    {t("option:quiz.hint", { defaultValue: "Hint" })}: {question.hint}
+                  </Typography.Text>
+                )}
+                {(question.hint_penalty_points ?? 0) > 0 && (
+                  <Typography.Text type="secondary" className="block text-xs">
+                    {t("option:quiz.hintPenaltyPreview", {
+                      defaultValue: "Hint penalty: -{{points}} point(s)",
+                      points: question.hint_penalty_points
+                    })}
                   </Typography.Text>
                 )}
               </div>

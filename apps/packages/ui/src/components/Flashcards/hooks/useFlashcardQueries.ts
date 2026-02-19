@@ -8,8 +8,11 @@ import {
   deleteFlashcard,
   resetFlashcardScheduling,
   reviewFlashcard,
+  generateFlashcards,
   getFlashcard,
   importFlashcards,
+  importFlashcardsJson,
+  importFlashcardsApkg,
   getFlashcardsAnalyticsSummary,
   exportFlashcards,
   exportFlashcardsFile,
@@ -167,28 +170,210 @@ export interface ManageQueryParams {
   deckId?: number | null
   query?: string
   tag?: string
+  tags?: string[]
   dueStatus?: DueStatus
+  sortBy?: ManageSortBy
   page?: number
   pageSize?: number
+}
+
+export type ManageSortBy =
+  | "due"
+  | "created"
+  | "ease"
+  | "last_reviewed"
+  | "front_alpha"
+
+const parseTimestamp = (value?: string | null): number => {
+  if (!value) return Number.POSITIVE_INFINITY
+  const parsed = new Date(value).getTime()
+  if (Number.isNaN(parsed)) return Number.POSITIVE_INFINITY
+  return parsed
+}
+
+export const getManageServerOrderBy = (
+  sortBy: ManageSortBy
+): "due_at" | "created_at" => (sortBy === "created" ? "created_at" : "due_at")
+
+export const applyManageClientSort = (
+  items: Flashcard[],
+  sortBy: ManageSortBy
+): Flashcard[] => {
+  const next = [...items]
+  switch (sortBy) {
+    case "created":
+      return next.sort((a, b) => parseTimestamp(a.created_at) - parseTimestamp(b.created_at))
+    case "ease":
+      return next.sort((a, b) => a.ef - b.ef)
+    case "last_reviewed":
+      return next.sort((a, b) => {
+        const left = a.last_reviewed_at
+          ? new Date(a.last_reviewed_at).getTime()
+          : null
+        const right = b.last_reviewed_at
+          ? new Date(b.last_reviewed_at).getTime()
+          : null
+        if (left === null && right === null) return 0
+        if (left === null) return 1
+        if (right === null) return -1
+        if (left === right) return 0
+        return right - left
+      })
+    case "front_alpha":
+      return next.sort((a, b) =>
+        (a.front || "").localeCompare(b.front || "", undefined, {
+          sensitivity: "base"
+        })
+      )
+    case "due":
+    default:
+      return next.sort((a, b) => parseTimestamp(a.due_at) - parseTimestamp(b.due_at))
+  }
+}
+
+export const normalizeManageTags = (
+  tags?: string[] | null,
+  singleTag?: string | null
+): string[] => {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  const input = [...(tags || []), singleTag || ""]
+  for (const raw of input) {
+    const tag = String(raw || "").trim().toLowerCase()
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    normalized.push(tag)
+  }
+  return normalized
+}
+
+export const cardHasAllTags = (card: Flashcard, normalizedTags: string[]): boolean => {
+  if (normalizedTags.length === 0) return true
+  const cardTags = new Set((card.tags || []).map((tag) => String(tag || "").trim().toLowerCase()))
+  return normalizedTags.every((tag) => cardTags.has(tag))
 }
 
 export function useManageQuery(params: ManageQueryParams, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
 
-  const { deckId, query, tag, dueStatus = "all", page = 1, pageSize = 20 } = params
+  const {
+    deckId,
+    query,
+    tag,
+    tags,
+    dueStatus = "all",
+    sortBy = "due",
+    page = 1,
+    pageSize = 20
+  } = params
+  const normalizedTags = normalizeManageTags(tags, tag)
+  const primaryTag = normalizedTags[0]
 
   return useQuery({
-    queryKey: ["flashcards:list", deckId, query, tag, dueStatus, page, pageSize],
-    queryFn: async () =>
-      await listFlashcards({
+    queryKey: [
+      "flashcards:list",
+      deckId,
+      query,
+      normalizedTags.join("|"),
+      dueStatus,
+      sortBy,
+      page,
+      pageSize
+    ],
+    queryFn: async () => {
+      if (normalizedTags.length > 1) {
+        const bulk: Flashcard[] = []
+        const PAGE_SCAN_SIZE = 500
+        const MAX_SCAN = 10000
+        let offset = 0
+
+        while (offset < MAX_SCAN) {
+          const chunk = await listFlashcards({
+            deck_id: deckId ?? undefined,
+            q: query || undefined,
+            tag: primaryTag,
+            due_status: dueStatus,
+            limit: PAGE_SCAN_SIZE,
+            offset,
+            order_by: getManageServerOrderBy(sortBy)
+          })
+          const items = chunk.items || []
+          if (items.length === 0) break
+          bulk.push(...items.filter((card) => cardHasAllTags(card, normalizedTags)))
+          if (items.length < PAGE_SCAN_SIZE) break
+          offset += PAGE_SCAN_SIZE
+        }
+
+        const sorted = applyManageClientSort(bulk, sortBy)
+        const start = (page - 1) * pageSize
+        const pageItems = sorted.slice(start, start + pageSize)
+        return {
+          items: pageItems,
+          count: pageItems.length,
+          total: sorted.length
+        }
+      }
+
+      const response = await listFlashcards({
         deck_id: deckId ?? undefined,
         q: query || undefined,
-        tag: tag || undefined,
+        tag: primaryTag,
         due_status: dueStatus,
         limit: pageSize,
         offset: (page - 1) * pageSize,
-        order_by: "due_at"
-      }),
+        order_by: getManageServerOrderBy(sortBy)
+      })
+      return {
+        ...response,
+        items: applyManageClientSort(response.items || [], sortBy)
+      }
+    },
+    enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+/**
+ * Hook for fetching tag suggestions for autocomplete/multi-tag filter chips.
+ */
+export function useTagSuggestionsQuery(
+  deckId?: number | null,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:tags:suggestions", deckId ?? null],
+    queryFn: async () => {
+      const PAGE_SCAN_SIZE = 500
+      const MAX_SCAN = 10000
+      const tagSet = new Set<string>()
+      let offset = 0
+
+      while (offset < MAX_SCAN) {
+        const response = await listFlashcards({
+          deck_id: deckId ?? undefined,
+          due_status: "all",
+          limit: PAGE_SCAN_SIZE,
+          offset,
+          order_by: "created_at"
+        })
+        const items = response.items || []
+        if (items.length === 0) break
+        for (const card of items) {
+          for (const rawTag of card.tags || []) {
+            const tag = String(rawTag || "").trim()
+            if (!tag) continue
+            tagSet.add(tag)
+          }
+        }
+        if (items.length < PAGE_SCAN_SIZE) break
+        offset += PAGE_SCAN_SIZE
+      }
+
+      return Array.from(tagSet).sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: "base" })
+      )
+    },
     enabled: options?.enabled ?? flashcardsEnabled
   })
 }
@@ -346,6 +531,36 @@ export function useReviewFlashcardMutation() {
 }
 
 /**
+ * Hook for generating flashcards from free text via LLM adapter.
+ */
+export function useGenerateFlashcardsMutation() {
+  return useMutation({
+    mutationKey: ["flashcards:generate"],
+    mutationFn: (params: {
+      text: string
+      numCards?: number
+      cardType?: "basic" | "basic_reverse" | "cloze"
+      difficulty?: "easy" | "medium" | "hard" | "mixed"
+      focusTopics?: string[]
+      provider?: string
+      model?: string
+    }) =>
+      generateFlashcards({
+        text: params.text,
+        num_cards: params.numCards,
+        card_type: params.cardType,
+        difficulty: params.difficulty,
+        focus_topics: params.focusTopics,
+        provider: params.provider,
+        model: params.model
+      }),
+    onError: (error) => {
+      console.error("Failed to generate flashcards:", error)
+    }
+  })
+}
+
+/**
  * Hook for importing flashcards
  */
 export function useImportFlashcardsMutation() {
@@ -364,6 +579,50 @@ export function useImportFlashcardsMutation() {
     },
     onError: (error) => {
       console.error("Failed to import flashcards:", error)
+    }
+  })
+}
+
+/**
+ * Hook for importing flashcards from JSON/JSONL content via upload endpoint.
+ */
+export function useImportFlashcardsJsonMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:import-json"],
+    mutationFn: (params: { content: string; filename?: string }) =>
+      importFlashcardsJson({
+        content: params.content,
+        filename: params.filename
+      }),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to import JSON flashcards:", error)
+    }
+  })
+}
+
+/**
+ * Hook for importing flashcards from APKG upload endpoint.
+ */
+export function useImportFlashcardsApkgMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:import-apkg"],
+    mutationFn: (params: { bytes: Uint8Array; filename?: string }) =>
+      importFlashcardsApkg({
+        bytes: params.bytes,
+        filename: params.filename
+      }),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to import APKG flashcards:", error)
     }
   })
 }

@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoints
+from tldw_Server_API.app.api.v1.endpoints import chat_dictionaries as chat_dictionary_endpoints
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     BulkEntryOperation,
     ChatDictionaryCreate,
@@ -13,6 +14,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     DictionaryEntryCreate,
     DictionaryEntryReorderRequest,
     DictionaryEntryUpdate,
+    ImportDictionaryJSONRequest,
     ProcessTextRequest,
 )
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
@@ -27,6 +29,12 @@ def chacha_db(tmp_path):
         yield db
     finally:
         db.close_connection()
+
+
+def test_chat_dictionary_router_exposes_markdown_export_alias():
+    paths = {route.path for route in chat_dictionary_endpoints.router.routes}
+    assert "/dictionaries/{dictionary_id}/export" in paths
+    assert "/dictionaries/{dictionary_id}/export/markdown" in paths
 
 
 @pytest.mark.asyncio
@@ -435,6 +443,59 @@ async def test_create_and_update_dictionary_default_token_budget(
 
 
 @pytest.mark.asyncio
+async def test_create_and_update_dictionary_metadata_fields(
+    chacha_db: CharactersRAGDB,
+):
+    base_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(
+            name="Metadata Base Dictionary",
+            description="base dictionary",
+        ),
+        db=chacha_db,
+    )
+    created = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(
+            name="Metadata Dictionary",
+            description="with metadata",
+            category="Medical",
+            tags=["abbreviations", "clinical", "abbreviations"],
+            included_dictionary_ids=[base_dictionary.id],
+        ),
+        db=chacha_db,
+    )
+    assert created.category == "Medical"
+    assert created.tags == ["abbreviations", "clinical"]
+    assert created.included_dictionary_ids == [base_dictionary.id]
+
+    updated = await chat_endpoints.update_chat_dictionary(
+        created.id,
+        ChatDictionaryUpdate(
+            category="Emergency",
+            tags=["urgent", "triage"],
+            included_dictionary_ids=[base_dictionary.id],
+        ),
+        db=chacha_db,
+    )
+    assert updated.category == "Emergency"
+    assert updated.tags == ["urgent", "triage"]
+    assert updated.included_dictionary_ids == [base_dictionary.id]
+
+    cleared = await chat_endpoints.update_chat_dictionary(
+        created.id,
+        ChatDictionaryUpdate(category=None, tags=[], included_dictionary_ids=[]),
+        db=chacha_db,
+    )
+    assert cleared.category is None
+    assert cleared.tags == []
+    assert cleared.included_dictionary_ids == []
+
+    listed = await chat_endpoints.list_chat_dictionaries(include_inactive=True, db=chacha_db)
+    listed_dict = next(item for item in listed.dictionaries if item.id == created.id)
+    assert listed_dict.category is None
+    assert listed_dict.tags == []
+
+
+@pytest.mark.asyncio
 async def test_process_text_uses_dictionary_default_token_budget_and_records_activity(
     chacha_db: CharactersRAGDB,
 ):
@@ -596,6 +657,39 @@ async def test_dictionary_entry_usage_counts_increment_after_processing(
 
 
 @pytest.mark.asyncio
+async def test_dictionary_usage_updates_when_processing_without_dictionary_id(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_a = service.create_dictionary("Usage A", "desc")
+    dictionary_b = service.create_dictionary("Usage B", "desc")
+    service.add_entry(dictionary_a, pattern="foo", replacement="FOO")
+    service.add_entry(dictionary_b, pattern="bar", replacement="BAR")
+
+    before_a = service.get_usage_statistics(dictionary_a)
+    before_b = service.get_usage_statistics(dictionary_b)
+    assert before_a["times_used"] == 0
+    assert before_a["last_used_at"] is None
+    assert before_b["times_used"] == 0
+    assert before_b["last_used_at"] is None
+
+    response = await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(text="foo bar"),
+        db=chacha_db,
+    )
+
+    assert response.processed_text == "FOO BAR"
+    assert response.replacements >= 2
+
+    after_a = service.get_usage_statistics(dictionary_a)
+    after_b = service.get_usage_statistics(dictionary_b)
+    assert after_a["times_used"] >= 1
+    assert after_a["last_used_at"] is not None
+    assert after_b["times_used"] >= 1
+    assert after_b["last_used_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_dictionary_statistics_reports_pattern_conflicts(
     chacha_db: CharactersRAGDB,
 ):
@@ -638,3 +732,244 @@ async def test_update_chat_dictionary_returns_409_on_version_conflict(
     detail = str(exc_info.value.detail).lower()
     assert "modified by another session" in detail
     assert "expected version 1" in detail
+
+
+@pytest.mark.asyncio
+async def test_update_chat_dictionary_rejects_include_cycles(
+    chacha_db: CharactersRAGDB,
+):
+    dictionary_a = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(name="Cycle Dictionary A"),
+        db=chacha_db,
+    )
+    dictionary_b = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(name="Cycle Dictionary B"),
+        db=chacha_db,
+    )
+
+    await chat_endpoints.update_chat_dictionary(
+        dictionary_a.id,
+        ChatDictionaryUpdate(included_dictionary_ids=[dictionary_b.id]),
+        db=chacha_db,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chat_endpoints.update_chat_dictionary(
+            dictionary_b.id,
+            ChatDictionaryUpdate(included_dictionary_ids=[dictionary_a.id]),
+            db=chacha_db,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "cycle" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_process_text_with_dictionary_includes_applies_base_then_child(
+    chacha_db: CharactersRAGDB,
+):
+    base_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(name="Include Base Dictionary"),
+        db=chacha_db,
+    )
+    child_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(
+            name="Include Child Dictionary",
+            included_dictionary_ids=[base_dictionary.id],
+        ),
+        db=chacha_db,
+    )
+
+    await chat_endpoints.add_dictionary_entry(
+        base_dictionary.id,
+        DictionaryEntryCreate(pattern="token", replacement="base"),
+        db=chacha_db,
+    )
+    await chat_endpoints.add_dictionary_entry(
+        child_dictionary.id,
+        DictionaryEntryCreate(pattern="base", replacement="child"),
+        db=chacha_db,
+    )
+
+    response = await chat_endpoints.process_text_with_dictionaries(
+        ProcessTextRequest(
+            text="token",
+            dictionary_id=child_dictionary.id,
+            max_iterations=2,
+        ),
+        db=chacha_db,
+    )
+
+    assert response.processed_text == "child"
+    assert response.replacements >= 2
+
+
+@pytest.mark.asyncio
+async def test_export_import_json_preserves_included_dictionary_ids_when_targets_exist(
+    chacha_db: CharactersRAGDB,
+):
+    base_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(name="Roundtrip Base Dictionary"),
+        db=chacha_db,
+    )
+    composed_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(
+            name="Roundtrip Composed Dictionary",
+            included_dictionary_ids=[base_dictionary.id],
+        ),
+        db=chacha_db,
+    )
+
+    await chat_endpoints.add_dictionary_entry(
+        composed_dictionary.id,
+        DictionaryEntryCreate(pattern="x", replacement="y"),
+        db=chacha_db,
+    )
+
+    exported = await chat_endpoints.export_dictionary_json(
+        composed_dictionary.id,
+        db=chacha_db,
+    )
+    assert exported.included_dictionary_ids == [base_dictionary.id]
+
+    import_payload = exported.model_dump()
+    import_payload["name"] = "Roundtrip Imported Dictionary"
+    imported = await chat_endpoints.import_dictionary_json(
+        ImportDictionaryJSONRequest(data=import_payload, activate=True),
+        db=chacha_db,
+    )
+    imported_dictionary = await chat_endpoints.get_chat_dictionary(imported.dictionary_id, db=chacha_db)
+    assert imported_dictionary.included_dictionary_ids == [base_dictionary.id]
+
+
+@pytest.mark.asyncio
+async def test_dictionary_version_history_endpoints_list_and_read_snapshots(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Version History Dictionary", "initial")
+    service.add_entry(dictionary_id, pattern="term", replacement="TERM")
+
+    await chat_endpoints.update_chat_dictionary(
+        dictionary_id,
+        ChatDictionaryUpdate(description="updated description"),
+        db=chacha_db,
+    )
+
+    versions_response = await chat_endpoints.list_dictionary_versions(
+        dictionary_id,
+        limit=20,
+        offset=0,
+        db=chacha_db,
+    )
+    assert versions_response.dictionary_id == dictionary_id
+    assert versions_response.total >= 3
+    assert len(versions_response.versions) >= 3
+    latest_revision = versions_response.versions[0].revision
+    assert latest_revision >= 1
+
+    detail_response = await chat_endpoints.get_dictionary_version(
+        dictionary_id,
+        latest_revision,
+        db=chacha_db,
+    )
+    assert detail_response.dictionary_id == dictionary_id
+    assert detail_response.revision == latest_revision
+    assert detail_response.dictionary.id == dictionary_id
+    assert detail_response.dictionary.entry_count == len(detail_response.entries)
+    assert any(entry.pattern == "term" for entry in detail_response.entries)
+
+
+@pytest.mark.asyncio
+async def test_revert_dictionary_version_restores_prior_entry_state(
+    chacha_db: CharactersRAGDB,
+):
+    service = ChatDictionaryService(chacha_db)
+    dictionary_id = service.create_dictionary("Revertable Dictionary", "baseline")
+    service.add_entry(dictionary_id, pattern="alpha", replacement="A")
+
+    first_versions = await chat_endpoints.list_dictionary_versions(
+        dictionary_id,
+        limit=20,
+        offset=0,
+        db=chacha_db,
+    )
+    revision_with_single_entry = max(
+        version.revision for version in first_versions.versions if version.entry_count == 1
+    )
+
+    service.add_entry(dictionary_id, pattern="beta", replacement="B")
+    entries_before_revert = await chat_endpoints.list_dictionary_entries(
+        dictionary_id,
+        group=None,
+        db=chacha_db,
+    )
+    assert entries_before_revert.total == 2
+
+    revert_response = await chat_endpoints.revert_dictionary_version(
+        dictionary_id,
+        revision_with_single_entry,
+        db=chacha_db,
+    )
+    assert revert_response.dictionary_id == dictionary_id
+    assert revert_response.reverted_to_revision == revision_with_single_entry
+    assert revert_response.current_dictionary_version >= 1
+    assert revert_response.current_revision > revision_with_single_entry
+
+    entries_after_revert = await chat_endpoints.list_dictionary_entries(
+        dictionary_id,
+        group=None,
+        db=chacha_db,
+    )
+    assert entries_after_revert.total == 1
+    assert entries_after_revert.entries[0].pattern == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_revert_dictionary_version_restores_included_dictionary_ids(
+    chacha_db: CharactersRAGDB,
+):
+    base_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(name="Revert Includes Base Dictionary"),
+        db=chacha_db,
+    )
+    composed_dictionary = await chat_endpoints.create_chat_dictionary(
+        ChatDictionaryCreate(
+            name="Revert Includes Composed Dictionary",
+            included_dictionary_ids=[base_dictionary.id],
+        ),
+        db=chacha_db,
+    )
+    await chat_endpoints.update_chat_dictionary(
+        composed_dictionary.id,
+        ChatDictionaryUpdate(included_dictionary_ids=[]),
+        db=chacha_db,
+    )
+    after_clear = await chat_endpoints.get_chat_dictionary(composed_dictionary.id, db=chacha_db)
+    assert after_clear.included_dictionary_ids == []
+
+    versions_response = await chat_endpoints.list_dictionary_versions(
+        composed_dictionary.id,
+        limit=20,
+        offset=0,
+        db=chacha_db,
+    )
+    revision_with_include = None
+    for version in versions_response.versions:
+        detail = await chat_endpoints.get_dictionary_version(
+            composed_dictionary.id,
+            version.revision,
+            db=chacha_db,
+        )
+        if detail.dictionary.included_dictionary_ids == [base_dictionary.id]:
+            revision_with_include = version.revision
+            break
+
+    assert revision_with_include is not None
+    await chat_endpoints.revert_dictionary_version(
+        composed_dictionary.id,
+        revision_with_include,
+        db=chacha_db,
+    )
+    reverted = await chat_endpoints.get_chat_dictionary(composed_dictionary.id, db=chacha_db)
+    assert reverted.included_dictionary_ids == [base_dictionary.id]

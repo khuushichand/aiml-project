@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
 const testState = {
@@ -92,15 +92,47 @@ vi.mock("../StudioPane", () => ({
   StudioPane: () => <div data-testid="workspace-studio-pane">Studio</div>
 }))
 
+const suppressExpectedWindowError = (expectedMessage: string): (() => void) => {
+  const handler = (event: ErrorEvent) => {
+    const message =
+      event.error instanceof Error
+        ? event.error.message
+        : typeof event.message === "string"
+          ? event.message
+          : ""
+
+    if (message.includes(expectedMessage)) {
+      event.preventDefault()
+    }
+  }
+
+  window.addEventListener("error", handler)
+  return () => window.removeEventListener("error", handler)
+}
+
 describe("WorkspacePlayground error boundary", () => {
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null
+
   beforeEach(() => {
     vi.clearAllMocks()
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    consoleErrorSpy?.mockRestore()
+    consoleErrorSpy = null
   })
 
   it("shows recoverable fallback and reload action on render crash", () => {
-    render(<WorkspacePlayground />)
+    const restoreWindowError = suppressExpectedWindowError("chat pane crash")
 
-    expect(screen.getByText("Something went wrong")).toBeInTheDocument()
-    expect(screen.getByTestId("workspace-reload-button")).toBeInTheDocument()
+    try {
+      render(<WorkspacePlayground />)
+
+      expect(screen.getByText("Something went wrong")).toBeInTheDocument()
+      expect(screen.getByTestId("workspace-reload-button")).toBeInTheDocument()
+    } finally {
+      restoreWindowError()
+    }
   })
 })

@@ -38,6 +38,27 @@ def client_with_user(monkeypatch, tmp_path):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture()
+def client_with_mutable_user(monkeypatch, tmp_path):
+    user_state: dict[str, int] = {"id": 555}
+
+    async def override_user():
+        current_id = int(user_state["id"])
+        return User(id=current_id, username=f"wluser{current_id}", email=None, is_active=True)
+
+    base_dir = tmp_path / "test_user_dbs_mutable"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("WATCHLISTS_SEED_OUTPUT_TEMPLATES", "false")
+
+    mod = import_module("tldw_Server_API.app.main")
+    app = getattr(mod, "app")
+    app.dependency_overrides[get_request_user] = override_user
+    with TestClient(app) as client:
+        yield client, user_state
+    app.dependency_overrides.clear()
+
+
 def test_sources_crud_and_tags(client_with_user):
 
 
@@ -102,8 +123,22 @@ def test_sources_crud_and_tags(client_with_user):
     # Delete source
     r = c.delete(f"/api/v1/watchlists/sources/{sid}")
     assert r.status_code == 200
+    delete_payload = r.json()
+    assert delete_payload["success"] is True
+    assert int(delete_payload["source_id"]) == sid
+    assert int(delete_payload["restore_window_seconds"]) >= 1
+    assert delete_payload.get("restore_expires_at")
+
     r = c.get(f"/api/v1/watchlists/sources/{sid}")
     assert r.status_code == 404
+
+    # Restore source
+    r = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert r.status_code == 200, r.text
+    restored = r.json()
+    assert int(restored["id"]) == sid
+    assert set(restored.get("tags", [])) == {"updates", "tech"}
+    assert restored.get("group_ids") == [group_b["id"]]
 
 
 def test_sources_test_endpoint(client_with_user, monkeypatch):
@@ -134,6 +169,42 @@ def test_sources_test_endpoint(client_with_user, monkeypatch):
     assert data["ingestable"] == data["total"]
     assert data["filtered"] == 0
     assert all(it["source_id"] == sid for it in data["items"])
+
+
+def test_sources_test_draft_endpoint_create_mode(client_with_user, monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "1")
+    c = client_with_user
+
+    r = c.post(
+        "/api/v1/watchlists/sources/test",
+        params={"limit": 3},
+        json={
+            "url": "https://example.com/draft-source",
+            "source_type": "site",
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] >= 1
+    assert data["ingestable"] == data["total"]
+    assert data["filtered"] == 0
+    assert all(int(it["source_id"]) == 0 for it in data["items"])
+    assert all(str(it["source_type"]) == "site" for it in data["items"])
+
+
+def test_sources_test_draft_endpoint_forum_disabled(client_with_user, monkeypatch):
+    monkeypatch.delenv("WATCHLIST_FORUMS_ENABLED", raising=False)
+    c = client_with_user
+
+    r = c.post(
+        "/api/v1/watchlists/sources/test",
+        json={
+            "url": "https://forum.example.com/thread/1",
+            "source_type": "forum",
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "forum_sources_disabled" in r.text
 
 
 def test_sources_check_now_endpoint_triggers_runs_and_items(client_with_user, monkeypatch):
@@ -274,6 +345,141 @@ def test_source_group_validation_and_idempotent_create(client_with_user):
     assert "group_not_found" in r.text
 
 
+def test_source_restore_expired_window_returns_gone(client_with_user):
+    c = client_with_user
+
+    create_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Expiring Source",
+            "url": "https://example.com/expiring-source.xml",
+            "source_type": "rss",
+            "tags": ["expiring"],
+            "group_ids": [],
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    sid = int(create_resp.json()["id"])
+
+    delete_resp = c.delete(f"/api/v1/watchlists/sources/{sid}")
+    assert delete_resp.status_code == 200, delete_resp.text
+
+    db = WatchlistsDatabase.for_user(555)
+    db.backend.execute(
+        "UPDATE deleted_sources SET expires_at = ? WHERE user_id = ? AND source_id = ?",
+        ("2000-01-01T00:00:00+00:00", "555", sid),
+    )
+
+    restore_resp = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert restore_resp.status_code == 410, restore_resp.text
+    assert restore_resp.json().get("detail") == "source_restore_expired"
+
+    # Expired tombstones are purged on first restore attempt.
+    restore_again_resp = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert restore_again_resp.status_code == 404, restore_again_resp.text
+
+
+def test_restore_requires_original_user_context(client_with_mutable_user):
+    c, user_state = client_with_mutable_user
+
+    create_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Scoped Source",
+            "url": "https://example.com/scoped-source.xml",
+            "source_type": "rss",
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    sid = int(create_resp.json()["id"])
+
+    delete_resp = c.delete(f"/api/v1/watchlists/sources/{sid}")
+    assert delete_resp.status_code == 200, delete_resp.text
+
+    user_state["id"] = 777
+    unauthorized_restore = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert unauthorized_restore.status_code == 404, unauthorized_restore.text
+    assert unauthorized_restore.json().get("detail") == "source_restore_not_found"
+
+    user_state["id"] = 555
+    authorized_restore = c.post(f"/api/v1/watchlists/sources/{sid}/restore")
+    assert authorized_restore.status_code == 200, authorized_restore.text
+    assert int(authorized_restore.json()["id"]) == sid
+
+
+def test_job_delete_and_restore_fidelity(client_with_user):
+    c = client_with_user
+
+    source_resp = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Source For Job Restore",
+            "url": "https://example.com/job-restore-source.xml",
+            "source_type": "rss",
+            "tags": ["restore-tag"],
+        },
+    )
+    assert source_resp.status_code == 200, source_resp.text
+    source_id = int(source_resp.json()["id"])
+
+    group_resp = c.post(
+        "/api/v1/watchlists/groups",
+        json={"name": "Restore Group", "description": "for restore"},
+    )
+    assert group_resp.status_code == 200, group_resp.text
+    group_id = int(group_resp.json()["id"])
+
+    job_body = {
+        "name": "Restore Fidelity Job",
+        "description": "Ensure restored jobs preserve payload fields",
+        "scope": {"sources": [source_id], "groups": [group_id], "tags": ["restore-tag"]},
+        "schedule_expr": "*/15 * * * *",
+        "timezone": "UTC",
+        "active": False,
+        "max_concurrency": 2,
+        "per_host_delay_ms": 500,
+        "retry_policy": {"retries": 3, "backoff_seconds": 10},
+        "output_prefs": {"template_name": "daily-brief", "delivery_config": {"create_chatbook": True}},
+        "job_filters": {"filters": [{"type": "keyword", "action": "include", "value": {"keywords": ["ai"]}}]},
+    }
+    create_job_resp = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert create_job_resp.status_code == 200, create_job_resp.text
+    created_job = create_job_resp.json()
+    job_id = int(created_job["id"])
+
+    delete_job_resp = c.delete(f"/api/v1/watchlists/jobs/{job_id}")
+    assert delete_job_resp.status_code == 200, delete_job_resp.text
+    delete_payload = delete_job_resp.json()
+    assert delete_payload["success"] is True
+    assert int(delete_payload["job_id"]) == job_id
+    assert int(delete_payload["restore_window_seconds"]) >= 1
+    assert delete_payload.get("restore_expires_at")
+
+    get_deleted = c.get(f"/api/v1/watchlists/jobs/{job_id}")
+    assert get_deleted.status_code == 404, get_deleted.text
+
+    restore_job_resp = c.post(f"/api/v1/watchlists/jobs/{job_id}/restore")
+    assert restore_job_resp.status_code == 200, restore_job_resp.text
+    restored_job = restore_job_resp.json()
+
+    assert int(restored_job["id"]) == job_id
+    assert restored_job["name"] == job_body["name"]
+    assert restored_job["description"] == job_body["description"]
+    assert restored_job["scope"] == job_body["scope"]
+    assert restored_job["schedule_expr"] == job_body["schedule_expr"]
+    assert restored_job["timezone"] == job_body["timezone"]
+    assert restored_job["active"] is job_body["active"]
+    assert restored_job["max_concurrency"] == job_body["max_concurrency"]
+    assert restored_job["per_host_delay_ms"] == job_body["per_host_delay_ms"]
+    assert restored_job["retry_policy"] == job_body["retry_policy"]
+    assert restored_job["output_prefs"] == job_body["output_prefs"]
+    restored_filters = restored_job.get("job_filters") or {}
+    assert restored_filters.get("require_include") is None
+    assert isinstance(restored_filters.get("filters"), list) and len(restored_filters["filters"]) == 1
+    assert restored_filters["filters"][0]["type"] == "keyword"
+    assert restored_filters["filters"][0]["action"] == "include"
+    assert restored_filters["filters"][0]["value"] == {"keywords": ["ai"]}
+
 def test_bulk_sources_and_groups_and_jobs(client_with_user):
 
 
@@ -336,6 +542,179 @@ def test_bulk_sources_and_groups_and_jobs(client_with_user):
     r = c.get(f"/api/v1/watchlists/runs/{rid}")
     assert r.status_code == 200
 
+
+def _assert_watchlists_validation_error(resp, *, rule: str, message_key: str) -> dict:
+    assert resp.status_code == 422, resp.text
+    payload = resp.json()
+    detail = payload.get("detail")
+    assert isinstance(detail, dict), payload
+    assert detail.get("code") == "watchlists_validation_error"
+    assert detail.get("rule") == rule
+    assert detail.get("message_key") == message_key
+    assert isinstance(detail.get("message"), str) and detail.get("message")
+    assert isinstance(detail.get("remediation"), str) and detail.get("remediation")
+    return detail
+
+
+def test_create_job_scope_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Invalid Scope Job",
+            "scope": {"sources": [], "groups": [], "tags": []},
+            "schedule_expr": None,
+            "timezone": "UTC",
+            "active": True,
+        },
+    )
+    _assert_watchlists_validation_error(
+        r,
+        rule="scope_required",
+        message_key="watchlists:jobs.form.scopeRequired",
+    )
+
+
+def test_create_job_schedule_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Too Frequent Job",
+            "scope": {"tags": ["alpha"]},
+            "schedule_expr": "* * * * *",
+            "timezone": "UTC",
+            "active": True,
+        },
+    )
+    detail = _assert_watchlists_validation_error(
+        r,
+        rule="schedule_too_frequent",
+        message_key="watchlists:jobs.form.scheduleTooFrequent",
+    )
+    meta = detail.get("meta")
+    assert isinstance(meta, dict)
+    assert int(meta.get("minimum_minutes", 0)) >= 1
+    assert float(meta.get("detected_interval_minutes", 0)) <= 1.0
+
+
+def test_create_job_email_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Invalid Email Job",
+            "scope": {"tags": ["alpha"]},
+            "schedule_expr": None,
+            "timezone": "UTC",
+            "active": True,
+            "output_prefs": {
+                "deliveries": {
+                    "email": {
+                        "recipients": ["valid@example.com", "bad-email", "also bad"]
+                    }
+                }
+            },
+        },
+    )
+    detail = _assert_watchlists_validation_error(
+        r,
+        rule="invalid_email_recipients",
+        message_key="watchlists:jobs.form.emailRecipientsInvalidSubmit",
+    )
+    meta = detail.get("meta")
+    assert isinstance(meta, dict)
+    assert int(meta.get("count", 0)) == 2
+    assert "bad-email" in (meta.get("invalid_recipients") or [])
+
+
+def test_update_job_email_validation_returns_structured_detail(client_with_user):
+    c = client_with_user
+    create_resp = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Updatable Job",
+            "scope": {"tags": ["alpha"]},
+            "schedule_expr": None,
+            "timezone": "UTC",
+            "active": True,
+        },
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    job_id = int(create_resp.json()["id"])
+
+    update_resp = c.patch(
+        f"/api/v1/watchlists/jobs/{job_id}",
+        json={
+            "output_prefs": {
+                "deliveries": {"email": {"recipients": ["not-an-email"]}}
+            }
+        },
+    )
+    detail = _assert_watchlists_validation_error(
+        update_resp,
+        rule="invalid_email_recipients",
+        message_key="watchlists:jobs.form.emailRecipientsInvalidSubmit",
+    )
+    meta = detail.get("meta")
+    assert isinstance(meta, dict)
+    assert int(meta.get("count", 0)) == 1
+    assert "not-an-email" in (meta.get("invalid_recipients") or [])
+
+
+def test_cancel_run_endpoint_marks_running_run_cancelled(client_with_user):
+    c = client_with_user
+    db = WatchlistsDatabase.for_user(555)
+    job = db.create_job(
+        name="Cancelable Job",
+        description=None,
+        scope_json=json.dumps({"sources": []}),
+        schedule_expr=None,
+        schedule_timezone=None,
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+    run = db.create_run(job_id=job.id, status="running")
+
+    cancel_resp = c.post(f"/api/v1/watchlists/runs/{run.id}/cancel")
+    assert cancel_resp.status_code == 200, cancel_resp.text
+    payload = cancel_resp.json()
+    assert payload["run_id"] == run.id
+    assert payload["cancelled"] is True
+    assert payload["status"] == "cancelled"
+
+    run_resp = c.get(f"/api/v1/watchlists/runs/{run.id}")
+    assert run_resp.status_code == 200, run_resp.text
+    assert run_resp.json()["status"] == "cancelled"
+
+
+def test_cancel_run_endpoint_rejects_terminal_runs(client_with_user):
+    c = client_with_user
+    db = WatchlistsDatabase.for_user(555)
+    job = db.create_job(
+        name="Terminal Job",
+        description=None,
+        scope_json=json.dumps({"sources": []}),
+        schedule_expr=None,
+        schedule_timezone=None,
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+    run = db.create_run(job_id=job.id, status="completed")
+
+    cancel_resp = c.post(f"/api/v1/watchlists/runs/{run.id}/cancel")
+    assert cancel_resp.status_code == 200, cancel_resp.text
+    payload = cancel_resp.json()
+    assert payload["run_id"] == run.id
+    assert payload["cancelled"] is False
+    assert payload["status"] == "completed"
+    assert payload["message"] == "run_not_cancellable"
 
 def test_forum_sources_feature_flag(client_with_user, monkeypatch):
     c = client_with_user

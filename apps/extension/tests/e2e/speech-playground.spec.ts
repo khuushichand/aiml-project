@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
@@ -46,7 +47,7 @@ const waitForSpeechPageReady = async (page: Page) => {
 test.describe('Speech Playground UX', () => {
   test('shows ElevenLabs timeout hint and recovers on retry in listen mode', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,
@@ -172,7 +173,7 @@ test.describe('Speech Playground UX', () => {
 
   test('supports transcript lock/unlock, copy toast, and download tooltip', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         tldwConfig: {
           serverUrl: 'http://127.0.0.1:8000',

@@ -83,7 +83,7 @@ export const JobPreviewModal: React.FC<JobPreviewModalProps> = ({
 
   return (
     <Modal
-      title={t("watchlists:jobs.preview.title", "Job Preview")}
+      title={t("watchlists:jobs.preview.title", "Monitor Preview")}
       open={open}
       onCancel={onClose}
       footer={null}

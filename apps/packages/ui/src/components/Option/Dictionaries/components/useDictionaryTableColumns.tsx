@@ -32,6 +32,7 @@ type UseDictionaryTableColumnsParams = {
   onExportJson: (record: any) => void
   onExportMarkdown: (record: any) => void
   onOpenStats: (record: any) => void
+  onOpenVersions: (record: any) => void
   onDuplicate: (record: any) => void
   onDelete: (record: any) => void
 }
@@ -49,6 +50,7 @@ export function useDictionaryTableColumns({
   onExportJson,
   onExportMarkdown,
   onOpenStats,
+  onOpenVersions,
   onDuplicate,
   onDelete
 }: UseDictionaryTableColumnsParams): any[] {
@@ -250,6 +252,7 @@ export function useDictionaryTableColumns({
             onExportJson={onExportJson}
             onExportMarkdown={onExportMarkdown}
             onOpenStats={onOpenStats}
+            onOpenVersions={onOpenVersions}
             onDuplicate={onDuplicate}
             onDelete={onDelete}
           />
@@ -267,6 +270,7 @@ export function useDictionaryTableColumns({
       onOpenEntries,
       onOpenQuickAssign,
       onOpenStats,
+      onOpenVersions,
       onToggleActive,
       onValidateDictionary,
       useCompactDictionaryActions,

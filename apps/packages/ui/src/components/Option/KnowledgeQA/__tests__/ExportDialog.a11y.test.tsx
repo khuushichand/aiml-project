@@ -2,9 +2,20 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ExportDialog } from "../ExportDialog"
 
-const { messageOpenMock, createNoteMock } = vi.hoisted(() => ({
+const {
+  messageOpenMock,
+  createNoteMock,
+  exportChatbookMock,
+  downloadChatbookExportMock,
+  createShareLinkMock,
+  revokeShareLinkMock,
+} = vi.hoisted(() => ({
   messageOpenMock: vi.fn(),
   createNoteMock: vi.fn(),
+  exportChatbookMock: vi.fn(),
+  downloadChatbookExportMock: vi.fn(),
+  createShareLinkMock: vi.fn(),
+  revokeShareLinkMock: vi.fn(),
 }))
 const state = {
   messages: [] as Array<{ role: string; content: string }>,
@@ -33,14 +44,35 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     createNote: createNoteMock,
+    exportChatbook: exportChatbookMock,
+    downloadChatbookExport: downloadChatbookExportMock,
+    createConversationShareLink: createShareLinkMock,
+    revokeConversationShareLink: revokeShareLinkMock,
   },
 }))
 
 describe("ExportDialog accessibility", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubGlobal("fetch", vi.fn())
     createNoteMock.mockResolvedValue({ id: 1 })
+    exportChatbookMock.mockResolvedValue({
+      success: true,
+      job_id: "job-1",
+      download_url: "/api/v1/chatbooks/download/job-1",
+    })
+    downloadChatbookExportMock.mockResolvedValue({
+      blob: new Blob(["chatbook-content"], { type: "application/zip" }),
+      filename: "knowledge.chatbook.zip",
+    })
+    createShareLinkMock.mockResolvedValue({
+      share_id: "share-1",
+      token: "token-1",
+      share_path: "/knowledge/shared/token-1",
+      created_at: "2026-02-19T10:00:00.000Z",
+      expires_at: "2026-02-20T10:00:00.000Z",
+      permission: "view",
+    })
+    revokeShareLinkMock.mockResolvedValue({ success: true, share_id: "share-1" })
     state.messages = []
     state.currentThreadId = "thread-1"
     state.results = []
@@ -94,13 +126,7 @@ describe("ExportDialog accessibility", () => {
   })
 
   it("shows actionable error feedback when chatbook export fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        text: async () => "thread not found",
-      })
-    )
+    exportChatbookMock.mockRejectedValueOnce(new Error("thread not found"))
 
     render(<ExportDialog open onClose={vi.fn()} />)
 
@@ -119,19 +145,133 @@ describe("ExportDialog accessibility", () => {
     expect(screen.getByRole("button", { name: "Retry export" })).toBeInTheDocument()
   })
 
-  it("shows citation transparency guidance and staged share-link control", () => {
+  it.each([
+    {
+      error: "HTTP 401 unauthorized",
+      expected:
+        "Chatbook export failed. You are not authorized to export this thread.",
+    },
+    {
+      error: "HTTP 422 validation failed: content_selections is required",
+      expected:
+        "Chatbook export failed. Export request is invalid. Check the selected thread and try again.",
+    },
+    {
+      error: "network unreachable",
+      expected: "Chatbook export failed. Cannot reach server.",
+    },
+  ])("maps chatbook export failure copy for '$error'", async ({ error, expected }) => {
+    exportChatbookMock.mockRejectedValueOnce(new Error(error))
+
+    render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Chatbook/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+    await waitFor(() =>
+      expect(messageOpenMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          content: expected,
+        })
+      )
+    )
+    expect(screen.getByText(expected)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry export" })).toBeInTheDocument()
+  })
+
+  it("uses chatbook export contract and downloads by returned job id", async () => {
+    const onClose = vi.fn()
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    const createObjectURLMock = vi.fn(() => "blob:test-download")
+    const revokeObjectURLMock = vi.fn(() => undefined)
+
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: createObjectURLMock,
+    })
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: revokeObjectURLMock,
+    })
+
+    try {
+      render(<ExportDialog open onClose={onClose} />)
+
+      fireEvent.click(screen.getByRole("button", { name: /Chatbook/i }))
+      fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+      await waitFor(() =>
+        expect(exportChatbookMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content_selections: { conversation: ["thread-1"] },
+            async_mode: false,
+          })
+        )
+      )
+      await waitFor(() => expect(downloadChatbookExportMock).toHaveBeenCalledWith("job-1"))
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    } finally {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: originalCreateObjectURL,
+      })
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: originalRevokeObjectURL,
+      })
+    }
+  })
+
+  it("uses browser print fallback for PDF exports", async () => {
+    vi.useFakeTimers()
+    const printSpy = vi.spyOn(window, "print").mockImplementation(() => {})
+    try {
+      render(<ExportDialog open onClose={vi.fn()} />)
+
+      fireEvent.click(screen.getByRole("button", { name: /PDF/i }))
+      fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+      await Promise.resolve()
+      expect(printSpy).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(500)
+      expect(printSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      printSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it("shows citation transparency guidance and active share-link control", async () => {
+    const writeTextMock = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
     render(<ExportDialog open onClose={vi.fn()} />)
 
     expect(
       screen.getByText(/Citation formatting is approximate/i)
     ).toBeInTheDocument()
 
-    const shareButton = screen.getByRole("button", {
-      name: "Copy thread link (coming soon)"
-    })
-    expect(shareButton).toBeDisabled()
+    const shareButton = screen.getByRole("button", { name: "Create share link" })
+    expect(shareButton).toBeEnabled()
+    fireEvent.click(shareButton)
+
+    await waitFor(() =>
+      expect(writeTextMock).toHaveBeenCalledWith(
+        expect.stringContaining("/knowledge/shared/")
+      )
+    )
     expect(
-      screen.getByText(/staged behind server access controls/i)
+      screen.getByText(/dedicated token with read-only access/i)
     ).toBeInTheDocument()
   })
 
@@ -189,6 +329,14 @@ describe("ExportDialog accessibility", () => {
         })
       )
     )
+  })
+
+  it("disables share-link action for local-only threads", () => {
+    state.currentThreadId = "local-thread-123"
+
+    render(<ExportDialog open onClose={vi.fn()} />)
+
+    expect(screen.getByRole("button", { name: "Create share link" })).toBeDisabled()
   })
 
   it("preserves format defaults and preview copy feedback behavior", async () => {

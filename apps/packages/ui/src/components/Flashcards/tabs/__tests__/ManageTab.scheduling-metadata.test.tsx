@@ -7,11 +7,17 @@ import type { Flashcard } from "@/services/flashcards"
 import {
   useDecksQuery,
   useManageQuery,
+  useTagSuggestionsQuery,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
-  useCardsKeyboardNav
+  useCardsKeyboardNav,
+  getManageServerOrderBy
 } from "../../hooks"
+
+const { trackShortcutHintTelemetryMock } = vi.hoisted(() => ({
+  trackShortcutHintTelemetryMock: vi.fn().mockResolvedValue(undefined)
+}))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -68,13 +74,19 @@ vi.mock("@/hooks/useUndoNotification", () => ({
   })
 }))
 
+vi.mock("@/utils/flashcards-shortcut-hint-telemetry", () => ({
+  trackFlashcardsShortcutHintTelemetry: trackShortcutHintTelemetryMock
+}))
+
 vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
   useManageQuery: vi.fn(),
+  useTagSuggestionsQuery: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
   useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
-  useCardsKeyboardNav: vi.fn()
+  useCardsKeyboardNav: vi.fn(),
+  getManageServerOrderBy: vi.fn(() => "due_at")
 }))
 
 vi.mock("../../components", () => ({
@@ -158,6 +170,10 @@ describe("ManageTab scheduling metadata visibility", () => {
       },
       isFetching: false
     } as any)
+    vi.mocked(useTagSuggestionsQuery).mockReturnValue({
+      data: ["biology", "chemistry", "physics"],
+      isLoading: false
+    } as any)
     vi.mocked(useUpdateFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn(),
       isPending: false
@@ -171,6 +187,7 @@ describe("ManageTab scheduling metadata visibility", () => {
       isPending: false
     } as any)
     vi.mocked(useCardsKeyboardNav).mockImplementation(() => undefined)
+    vi.mocked(getManageServerOrderBy).mockReturnValue("due_at")
   })
 
   it("shows scheduling metadata in compact list rows", () => {
@@ -178,7 +195,7 @@ describe("ManageTab scheduling metadata visibility", () => {
       <ManageTab
         onNavigateToImport={() => {}}
         onReviewCard={() => {}}
-        isActive={false}
+        isActive
       />
     )
 
@@ -188,6 +205,7 @@ describe("ManageTab scheduling metadata visibility", () => {
     expect(screen.getByText("Relearns 1")).toBeInTheDocument()
     expect(screen.getByText("Media #42")).toBeInTheDocument()
     expect(screen.getByTestId("flashcards-manage-shortcut-chips")).toBeInTheDocument()
+    expect(screen.getByText("Sort: Due date")).toBeInTheDocument()
   }, 15000)
 
   it("shows scheduling metadata in expanded list rows", () => {
@@ -266,12 +284,47 @@ describe("ManageTab scheduling metadata visibility", () => {
         "Show hints"
       )
     })
+    expect(trackShortcutHintTelemetryMock).toHaveBeenCalledWith({
+      type: "flashcards_shortcut_hints_dismissed",
+      surface: "cards",
+      from_density: "compact"
+    })
     expect(screen.queryByText("J/K · Enter · Space · Delete")).not.toBeInTheDocument()
     expect(screen.queryByText("J/K Navigate")).not.toBeInTheDocument()
     await waitFor(() => {
       expect(window.localStorage.getItem("tldw:flashcards:shortcutHintDensity")).toBe(
         "hidden"
       )
+    })
+  }, 15000)
+
+  it("supports multi-tag filter chips with suggestions", async () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "More" }))
+    const input = screen.getByTestId("flashcards-manage-tag-input")
+    fireEvent.change(input, { target: { value: "chemistry" } })
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("flashcards-manage-active-tag-filters")).toHaveTextContent(
+        "chemistry"
+      )
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "biology" }))
+
+    await waitFor(() => {
+      const lastManageCall = vi.mocked(useManageQuery).mock.calls.at(-1)
+      expect(lastManageCall?.[0]).toMatchObject({
+        tags: ["chemistry", "biology"]
+      })
     })
   }, 15000)
 })

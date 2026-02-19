@@ -4,8 +4,10 @@
 # Imports
 import asyncio
 import contextlib
+import importlib
 import os
 import re
+import sys
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
 
@@ -13,7 +15,6 @@ import numpy as np
 
 #
 # Third-party Imports
-import torch
 from loguru import logger
 
 from ..tts_exceptions import (
@@ -34,6 +35,63 @@ from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSR
 #######################################################################################################################
 #
 # Dia TTS Adapter Implementation
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _is_test_runtime() -> bool:
+    test_flags = {"1", "true", "yes", "y", "on"}
+    if str(os.getenv("PYTEST_CURRENT_TEST", "")).strip():
+        return True
+    if str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in test_flags:
+        return True
+    if str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in test_flags:
+        return True
+    return any("pytest" in str(arg or "") for arg in sys.argv)
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _torch_mps_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(hasattr(torch_mod.backends, "mps") and torch_mod.backends.mps.is_available())
+    except Exception:
+        return False
 
 class DiaAdapter(TTSAdapter):
     """Adapter for Dia TTS model (dialogue generation specialist)"""
@@ -85,16 +143,15 @@ class DiaAdapter(TTSAdapter):
         if preferred:
             pref = str(preferred).lower()
             if pref == "cuda":
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
             elif pref == "cpu":
                 self.device = "cpu"
             elif pref == "mps":
-                mps_avail = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
-                self.device = "mps" if mps_avail else ("cuda" if torch.cuda.is_available() else "cpu")
+                self.device = "mps" if _torch_mps_available(allow_import=True) else ("cuda" if _torch_cuda_available(allow_import=True) else "cpu")
             else:
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
         else:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
 
         # Auto-download toggle: config override > env overrides > default True
         cfg_auto = self.config.get("dia_auto_download")
@@ -118,6 +175,12 @@ class DiaAdapter(TTSAdapter):
 
     async def initialize(self) -> bool:
         """Initialize the Dia TTS model"""
+        if _get_torch(allow_import=True) is None:
+            logger.warning(
+                f"{self.provider_name}: torch unavailable; disabling provider. error={_TORCH_IMPORT_ERROR}"
+            )
+            self._status = ProviderStatus.NOT_CONFIGURED
+            return False
         try:
             logger.info(f"{self.provider_name}: Loading Dia TTS model (1.6B parameters)...")
 
@@ -191,8 +254,15 @@ class DiaAdapter(TTSAdapter):
             "trust_remote_code": True,
             "use_safetensors": self.use_safetensors,
         }
+        torch_mod = _get_torch(allow_import=True)
+        if torch_mod is None:
+            raise TTSModelLoadError(
+                "Failed to import required dependencies",
+                provider=self.provider_name,
+                details={"error": str(_TORCH_IMPORT_ERROR), "suggestion": "pip install torch"},
+            )
         if self.use_bf16:
-            model_kwargs["torch_dtype"] = torch.bfloat16
+            model_kwargs["torch_dtype"] = torch_mod.bfloat16
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
@@ -330,10 +400,18 @@ class DiaAdapter(TTSAdapter):
             # Add seed for consistent voice if specified
             if request.seed:
                 gen_kwargs["seed"] = request.seed
-                torch.manual_seed(request.seed)
+                torch_mod = _get_torch(allow_import=True)
+                if torch_mod is not None:
+                    torch_mod.manual_seed(request.seed)
 
             # Generate audio
-            with torch.no_grad():
+            torch_mod = _get_torch(allow_import=True)
+            if torch_mod is None:
+                raise TTSProviderNotConfiguredError(
+                    "Dia generation requires torch, which is unavailable",
+                    provider=self.provider_name,
+                )
+            with torch_mod.no_grad():
                 outputs = self.model.generate(**inputs, **gen_kwargs)
 
             # Decode to audio waveform
@@ -521,8 +599,9 @@ class DiaAdapter(TTSAdapter):
         self.processor = None
 
         # Clear GPU cache if CUDA is available
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch_mod = _get_torch(allow_import=False)
+        if _torch_cuda_available(allow_import=False) and torch_mod is not None:
+            torch_mod.cuda.empty_cache()
 
         await super().close()
 

@@ -11,6 +11,7 @@ import {
   formatDictionaryChatReferenceTitle,
   formatDictionaryUsageLabel,
   formatRelativeTimestamp,
+  normalizeDictionaryTags,
   normalizeDictionaryChatState,
   resolveDictionaryChatReferenceId
 } from "../listUtils"
@@ -18,7 +19,13 @@ import {
 describe("dictionary list utils", () => {
   it("filters dictionaries by name and description case-insensitively", () => {
     const dictionaries = [
-      { id: 1, name: "Medical Terms", description: "Abbreviations" },
+      {
+        id: 1,
+        name: "Medical Terms",
+        description: "Abbreviations",
+        category: "Clinical",
+        tags: ["medicine", "provider"]
+      },
       { id: 2, name: "Chat Speak", description: "casual slang" },
       { id: 3, name: "Engineering", description: "Infra acronyms" }
     ]
@@ -29,7 +36,20 @@ describe("dictionary list utils", () => {
     expect(filterDictionariesBySearch(dictionaries, "SLaNg")).toEqual([
       dictionaries[1]
     ])
+    expect(filterDictionariesBySearch(dictionaries, "clinical")).toEqual([
+      dictionaries[0]
+    ])
+    expect(filterDictionariesBySearch(dictionaries, "provider")).toEqual([
+      dictionaries[0]
+    ])
     expect(filterDictionariesBySearch(dictionaries, "")).toEqual(dictionaries)
+  })
+
+  it("normalizes dictionary tags from list and string representations", () => {
+    expect(normalizeDictionaryTags(["One", " two ", "ONE"])).toEqual(["One", "two"])
+    expect(normalizeDictionaryTags('["alpha","beta"]')).toEqual(["alpha", "beta"])
+    expect(normalizeDictionaryTags("foo, bar")).toEqual(["foo", "bar"])
+    expect(normalizeDictionaryTags("")).toEqual([])
   })
 
   it("sorts by dictionary name alphabetically", () => {

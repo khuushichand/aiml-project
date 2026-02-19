@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 
@@ -6,7 +7,7 @@ const EXT_PATH = path.resolve("build/chrome-mv3")
 
 test.describe("Sidepanel chat tabs", () => {
   test("opens, switches, and closes tabs", async () => {
-    const { context, openSidepanel } = (await launchWithExtension(EXT_PATH)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, EXT_PATH)) as any
     const page = await openSidepanel()
 
     await page.waitForSelector("#root >> *", { timeout: 15_000 })
@@ -30,7 +31,7 @@ test.describe("Sidepanel chat tabs", () => {
 
   test("keeps drafts and model settings per tab", async () => {
     test.setTimeout(90_000)
-    const { context, openSidepanel } = (await launchWithExtension(EXT_PATH, {
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, EXT_PATH, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true

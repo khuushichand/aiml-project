@@ -81,6 +81,15 @@ describe("DictionaryFormModal", () => {
     )
 
     await user.type(screen.getByRole("textbox", { name: "Name" }), "Clinical Terms")
+    await user.type(screen.getByRole("textbox", { name: "Category" }), "Medical")
+    await user.click(screen.getByRole("combobox", { name: "Starter Template" }))
+    await user.click(
+      await screen.findByText(/Medical Abbreviations/i, {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+    await user.click(screen.getByRole("combobox", { name: "Tags" }))
+    await user.keyboard("clinical{Enter}abbr{Enter}")
     await user.type(
       screen.getByRole("spinbutton", { name: "Default Token Budget" }),
       "450"
@@ -91,12 +100,15 @@ describe("DictionaryFormModal", () => {
       expect(onFinish).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Clinical Terms",
+          category: "Medical",
+          tags: ["clinical", "abbr"],
+          starter_template: "medical_abbreviations",
           default_token_budget: 450
         })
       )
     })
     expect(screen.queryByText("Active")).not.toBeInTheDocument()
-  })
+  }, 20000)
 
   it("renders active switch in edit mode", () => {
     render(
@@ -110,5 +122,8 @@ describe("DictionaryFormModal", () => {
 
     expect(screen.getByText("Active")).toBeInTheDocument()
     expect(screen.getByRole("switch")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("combobox", { name: "Starter Template" })
+    ).not.toBeInTheDocument()
   })
 })

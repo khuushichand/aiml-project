@@ -22,8 +22,16 @@ const getQuizAttemptsClient = (quizId: number) =>
   })
 
 // Question types
-export type QuestionType = "multiple_choice" | "true_false" | "fill_blank"
-export type AnswerValue = number | string
+export type QuestionType = "multiple_choice" | "multi_select" | "matching" | "true_false" | "fill_blank"
+export type AnswerValue = number | string | number[] | Record<string, string>
+export type SourceCitation = {
+  label?: string | null
+  quote?: string | null
+  media_id?: number | null
+  chunk_id?: string | null
+  timestamp_seconds?: number | null
+  source_url?: string | null
+}
 
 // Quiz container
 export type Quiz = {
@@ -49,6 +57,9 @@ export type QuestionBase = {
   question_type: QuestionType
   question_text: string
   options?: string[] | null
+  hint?: string | null
+  hint_penalty_points?: number | null
+  source_citations?: SourceCitation[] | null
   points: number
   order_index: number
   tags?: string[] | null
@@ -75,7 +86,17 @@ export type QuizAnswer = {
   is_correct: boolean
   correct_answer?: AnswerValue
   explanation?: string | null
+  hint_used?: boolean | null
+  hint_penalty_points?: number | null
+  source_citations?: SourceCitation[] | null
   points_awarded?: number | null
+  time_spent_ms?: number | null
+}
+
+export type QuizAnswerInput = {
+  question_id: number
+  user_answer: AnswerValue
+  hint_used?: boolean | null
   time_spent_ms?: number | null
 }
 
@@ -118,6 +139,9 @@ export type QuestionCreate = {
   options?: string[] | null
   correct_answer: AnswerValue
   explanation?: string | null
+  hint?: string | null
+  hint_penalty_points?: number | null
+  source_citations?: SourceCitation[] | null
   points?: number
   order_index?: number
   tags?: string[] | null
@@ -129,6 +153,9 @@ export type QuestionUpdate = {
   options?: string[] | null
   correct_answer?: AnswerValue | null
   explanation?: string | null
+  hint?: string | null
+  hint_penalty_points?: number | null
+  source_citations?: SourceCitation[] | null
   points?: number | null
   order_index?: number | null
   tags?: string[] | null
@@ -187,6 +214,53 @@ export type AttemptListParams = {
 export type QuizGenerateResponse = {
   quiz: Quiz
   questions: QuestionAdmin[]
+}
+
+export type QuizImportQuestion = {
+  question_type: QuestionType
+  question_text: string
+  options?: string[] | null
+  correct_answer: AnswerValue
+  explanation?: string | null
+  hint?: string | null
+  hint_penalty_points?: number | null
+  source_citations?: SourceCitation[] | null
+  points?: number
+  order_index?: number
+  tags?: string[] | null
+}
+
+export type QuizImportEntry = {
+  quiz: QuizCreate
+  questions: QuizImportQuestion[]
+}
+
+export type QuizImportRequest = {
+  export_format?: string | null
+  quizzes: QuizImportEntry[]
+}
+
+export type QuizImportItemResult = {
+  source_index: number
+  quiz_id: number
+  imported_questions: number
+  failed_questions: number
+}
+
+export type QuizImportError = {
+  source_index: number
+  quiz_name?: string | null
+  question_index?: number | null
+  error: string
+}
+
+export type QuizImportResponse = {
+  imported_quizzes: number
+  failed_quizzes: number
+  imported_questions: number
+  failed_questions: number
+  items: QuizImportItemResult[]
+  errors: QuizImportError[]
 }
 
 // --- Quizzes CRUD ---
@@ -263,7 +337,7 @@ export async function startAttempt(quizId: number): Promise<QuizAttempt> {
 
 export async function submitAttempt(
   attemptId: number,
-  answers: Omit<QuizAnswer, "is_correct">[]
+  answers: QuizAnswerInput[]
 ): Promise<QuizAttempt> {
   return await quizAttemptsClient.update<QuizAttempt>(attemptId, { answers })
 }
@@ -297,6 +371,19 @@ export async function generateQuiz(
 ): Promise<QuizGenerateResponse> {
   return await bgRequest<QuizGenerateResponse, AllowedPath, "POST">({
     path: "/api/v1/quizzes/generate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: request,
+    abortSignal: options?.signal
+  })
+}
+
+export async function importQuizzesJson(
+  request: QuizImportRequest,
+  options?: { signal?: AbortSignal }
+): Promise<QuizImportResponse> {
+  return await bgRequest<QuizImportResponse, AllowedPath, "POST">({
+    path: "/api/v1/quizzes/import/json",
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: request,

@@ -85,7 +85,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 }))
 
 vi.mock("@/services/note-keywords", () => ({
-  getAllNoteKeywords: vi.fn(async () => []),
+  getAllNoteKeywordStats: vi.fn(async () => []),
   searchNoteKeywords: vi.fn(async () => [])
 }))
 
@@ -199,6 +199,23 @@ describe("NotesManagerPage stage 11 search filtering", () => {
     ).toBeInTheDocument()
   })
 
+  it("filters search tips by text inside the popover", async () => {
+    renderPage()
+    fireEvent.click(screen.getByTestId("notes-search-tips-button"))
+
+    const filterInput = await screen.findByTestId("notes-search-tips-filter")
+    fireEvent.change(filterInput, { target: { value: "prefix" } })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Use prefix terms (like analy*) for broader matches.")
+      ).toBeInTheDocument()
+    })
+    expect(
+      screen.queryByText('Use quotes for phrases, e.g. "project roadmap".')
+    ).not.toBeInTheDocument()
+  })
+
   it("debounces rapid typing and issues only one final search request", async () => {
     renderPage()
     const input = screen.getByPlaceholderText("Search titles & content...")
@@ -232,5 +249,43 @@ describe("NotesManagerPage stage 11 search filtering", () => {
       String(request?.path || "").includes("/api/v1/notes/search/?")
     )
     expect(String(finalSearchCall?.[0]?.path || "")).toContain("query=alpha")
+  })
+
+  it("tracks request metrics for active search sessions and clears metrics when filters reset", async () => {
+    renderPage()
+    const input = screen.getByPlaceholderText("Search titles & content...")
+
+    fireEvent.change(input, { target: { value: "alpha" } })
+    await waitFor(
+      () => {
+        const searchCalls = mockBgRequest.mock.calls.filter(([request]) =>
+          String(request?.path || "").startsWith("/api/v1/notes/search/?")
+        )
+        expect(searchCalls.length).toBe(1)
+      },
+      { timeout: 1500 }
+    )
+    expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
+      "Requests in this filter session: 1"
+    )
+
+    fireEvent.change(input, { target: { value: "alpha beta" } })
+    await waitFor(
+      () => {
+        const searchCalls = mockBgRequest.mock.calls.filter(([request]) =>
+          String(request?.path || "").startsWith("/api/v1/notes/search/?")
+        )
+        expect(searchCalls.length).toBe(2)
+      },
+      { timeout: 1500 }
+    )
+    expect(screen.getByTestId("notes-search-request-metrics")).toHaveTextContent(
+      "Requests in this filter session: 2"
+    )
+
+    fireEvent.change(input, { target: { value: "" } })
+    await waitFor(() => {
+      expect(screen.queryByTestId("notes-search-request-metrics")).not.toBeInTheDocument()
+    })
   })
 })

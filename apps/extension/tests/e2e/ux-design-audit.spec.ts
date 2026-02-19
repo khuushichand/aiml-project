@@ -7,9 +7,8 @@
  */
 
 import { test as base, expect } from "@playwright/test"
-import { launchWithExtension } from "./utils/extension"
 import path from "path"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 const TEST_EXT_PATH = path.resolve("build/chrome-mv3")
 
@@ -39,7 +38,7 @@ function logIssue(uxIssues: UXIssue[], issue: UXIssue) {
 }
 
 async function launchExtension(options?: { seedConfig?: Record<string, any> }) {
-  return await launchWithExtension(TEST_EXT_PATH, options || {})
+  return await launchWithExtensionOrSkip(test, TEST_EXT_PATH, options || {})
 }
 
 test.describe("UX Design Audit", () => {

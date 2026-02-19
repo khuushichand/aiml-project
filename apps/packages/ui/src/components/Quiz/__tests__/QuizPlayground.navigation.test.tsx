@@ -36,13 +36,13 @@ vi.mock("antd", () => ({
       {children}
     </button>
   ),
-  Tabs: ({ items, activeKey, onChange, destroyInactiveTabPane }: any) => {
+  Tabs: ({ items, activeKey, onChange, destroyInactiveTabPane, className }: any) => {
     const activeItem = Array.isArray(items)
       ? items.find((item: any) => item.key === activeKey)
       : null
 
     return (
-      <div>
+      <div data-testid="quiz-tabs" className={className}>
         <div data-testid="destroy-inactive-tab-pane">
           {String(destroyInactiveTabPane)}
         </div>
@@ -67,23 +67,46 @@ vi.mock("antd", () => ({
 }))
 
 vi.mock("../tabs", () => ({
-  TakeQuizTab: ({ startQuizId, highlightQuizId, navigationSource, externalSearchQuery }: any) => (
+  TakeQuizTab: ({
+    startQuizId,
+    highlightQuizId,
+    navigationSource,
+    assignmentMode,
+    assignmentDueAt,
+    assignmentNote,
+    assignedByRole,
+    externalSearchQuery
+  }: any) => (
     <div data-testid="take-intent">
-      {JSON.stringify({ startQuizId, highlightQuizId, navigationSource, externalSearchQuery })}
+      {JSON.stringify({
+        startQuizId,
+        highlightQuizId,
+        navigationSource,
+        assignmentMode,
+        assignmentDueAt,
+        assignmentNote,
+        assignedByRole,
+        externalSearchQuery
+      })}
     </div>
   ),
-  GenerateTab: ({ onNavigateToTake }: any) => (
-    <button
-      type="button"
-      onClick={() =>
-        onNavigateToTake({
-          highlightQuizId: 77,
-          sourceTab: "generate"
-        })
-      }
-    >
-      Mock Generate Navigate
-    </button>
+  GenerateTab: ({ onNavigateToTake, onNavigateToManage }: any) => (
+    <div>
+      <button
+        type="button"
+        onClick={() =>
+          onNavigateToTake({
+            highlightQuizId: 77,
+            sourceTab: "generate"
+          })
+        }
+      >
+        Mock Generate Navigate
+      </button>
+      <button type="button" onClick={() => onNavigateToManage?.()}>
+        Mock Generate Review
+      </button>
+    </div>
   ),
   CreateTab: ({ onNavigateToTake, onDirtyStateChange }: any) => (
     <div>
@@ -193,6 +216,10 @@ describe("QuizPlayground navigation intents", () => {
         startQuizId: null,
         highlightQuizId: 77,
         navigationSource: "generate",
+        assignmentMode: null,
+        assignmentDueAt: null,
+        assignmentNote: null,
+        assignedByRole: null,
         externalSearchQuery: null
       })
     )
@@ -205,6 +232,10 @@ describe("QuizPlayground navigation intents", () => {
         startQuizId: null,
         highlightQuizId: null,
         navigationSource: null,
+        assignmentMode: null,
+        assignmentDueAt: null,
+        assignmentNote: null,
+        assignedByRole: null,
         externalSearchQuery: null
       })
     )
@@ -225,6 +256,15 @@ describe("QuizPlayground navigation intents", () => {
     expect(screen.getByTestId("destroy-inactive-tab-pane")).toHaveTextContent("false")
   })
 
+  it("configures mobile-friendly tab overflow and short labels", () => {
+    render(<QuizPlayground />)
+    const tabsRoot = screen.getByTestId("quiz-tabs")
+    expect(tabsRoot.className).toContain("quiz-tabs")
+    expect(tabsRoot.className).toContain("ant-tabs-nav-wrap")
+    expect(screen.getByText("Gen")).toBeInTheDocument()
+    expect(screen.getByText("Stats")).toBeInTheDocument()
+  })
+
   it("routes generate navigation payload into Take tab intent", () => {
     render(<QuizPlayground />)
 
@@ -237,9 +277,22 @@ describe("QuizPlayground navigation intents", () => {
         startQuizId: null,
         highlightQuizId: 77,
         navigationSource: "generate",
+        assignmentMode: null,
+        assignmentDueAt: null,
+        assignmentNote: null,
+        assignedByRole: null,
         externalSearchQuery: null
       })
     )
+  })
+
+  it("routes generate preview-review action into Manage tab", () => {
+    render(<QuizPlayground />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Mock Generate Review" }))
+
+    expect(screen.getByTestId("active-tab")).toHaveTextContent("manage")
   })
 
   it("routes results retake payload into Take tab intent", () => {
@@ -254,9 +307,39 @@ describe("QuizPlayground navigation intents", () => {
         startQuizId: 7,
         highlightQuizId: 7,
         navigationSource: "results",
+        assignmentMode: null,
+        assignmentDueAt: null,
+        assignmentNote: null,
+        assignedByRole: null,
         externalSearchQuery: null
       })
     )
+  })
+
+  it("hydrates shared-assignment URL params into Take tab intent", () => {
+    const originalUrl = window.location.href
+    window.history.replaceState(
+      {},
+      "",
+      "/quiz?tab=take&start_quiz_id=7&highlight_quiz_id=7&assignment_mode=shared&assignment_due_at=2026-03-01T14%3A30%3A00.000Z&assignment_note=Complete%20before%20lab&assigned_by_role=lead"
+    )
+
+    render(<QuizPlayground />)
+
+    expect(screen.getByTestId("take-intent")).toHaveTextContent(
+      JSON.stringify({
+        startQuizId: 7,
+        highlightQuizId: 7,
+        navigationSource: "assignment",
+        assignmentMode: "shared",
+        assignmentDueAt: "2026-03-01T14:30:00.000Z",
+        assignmentNote: "Complete before lab",
+        assignedByRole: "lead",
+        externalSearchQuery: null
+      })
+    )
+
+    window.history.replaceState({}, "", originalUrl)
   })
 
   it("renders count badges on take, manage, and results tab labels", () => {

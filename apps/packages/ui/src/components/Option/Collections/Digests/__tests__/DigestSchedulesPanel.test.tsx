@@ -194,7 +194,7 @@ describe("DigestSchedulesPanel suggestions form", () => {
         })
       })
     )
-  })
+  }, 30000)
 
   it("validates suggestions limit client-side against API constraints", async () => {
     render(<DigestSchedulesPanel />)

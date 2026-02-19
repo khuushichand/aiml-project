@@ -287,7 +287,10 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
 
-    await user.click(screen.getByRole("button", { name: "Inline edit pattern BP" }))
+    const inlinePatternButton = await screen.findByRole("button", {
+      name: "Inline edit pattern BP"
+    })
+    await user.click(inlinePatternButton)
     const inlinePatternInput = await screen.findByLabelText(
       "Inline edit pattern for BP"
     )
@@ -301,7 +304,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     })
 
     await user.click(
-      screen.getByRole("button", { name: "Inline edit replacement BP" })
+      await screen.findByRole("button", { name: "Inline edit replacement BP" })
     )
     const inlineReplacementInput = await screen.findByLabelText(
       "Inline edit replacement for BP"
@@ -317,7 +320,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     })
 
     await user.click(
-      screen.getByRole("button", { name: "Inline edit replacement BP" })
+      await screen.findByRole("button", { name: "Inline edit replacement BP" })
     )
     const cancelledInput = await screen.findByLabelText(
       "Inline edit replacement for BP"
@@ -338,6 +341,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     await user.click(
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
+    await screen.findByRole("button", { name: "Add Entry" })
 
     await user.click(screen.getByRole("button", { name: "Advanced options" }))
     await user.type(
@@ -374,7 +378,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
           }
         })
       )
-    })
+    }, { timeout: 20000 })
 
     await user.click(screen.getByRole("button", { name: "Edit entry BP" }))
 
@@ -406,8 +410,8 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
           }
         })
       )
-    })
-  }, 60000)
+    }, { timeout: 20000 })
+  }, 90000)
 
   it("preserves advanced timed-effect values when toggling simple/advanced mode", async () => {
     const user = userEvent.setup()
@@ -416,6 +420,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     await user.click(
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
+    await screen.findByRole("button", { name: "Add Entry" })
 
     await user.click(screen.getByRole("button", { name: "Advanced options" }))
 
@@ -445,6 +450,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     await user.click(
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
+    await screen.findByRole("button", { name: "Add Entry" })
     await user.type(
       screen.getByPlaceholderText("e.g., KCl or /hel+o/i"),
       "Temp"
@@ -474,6 +480,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     await user.click(
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
+    await screen.findByRole("button", { name: "Add Entry" })
     await user.click(screen.getByRole("button", { name: "Advanced options" }))
 
     expect(screen.getAllByRole("slider").length).toBeGreaterThan(0)
@@ -514,6 +521,7 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     await user.click(
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
+    await screen.findByRole("button", { name: "Add Entry" })
 
     await user.click(screen.getByRole("combobox", { name: "Match type" }))
     await user.click(
@@ -521,6 +529,9 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
         selector: ".ant-select-item-option-content"
       })
     )
+    expect(
+      await screen.findByText(/Regex helper: `\.\*` = any text/i)
+    ).toBeInTheDocument()
     await user.type(
       screen.getByPlaceholderText("e.g., KCl or /hel+o/i"),
       "(.+)+"

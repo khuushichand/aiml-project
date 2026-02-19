@@ -105,6 +105,30 @@ class FlashcardReviewResponse(BaseModel):
     version: int
 
 
+class FlashcardGenerateRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Source text to generate flashcards from")
+    num_cards: int = Field(10, ge=1, le=100, description="Requested number of generated cards")
+    card_type: Literal['basic', 'basic_reverse', 'cloze'] = Field('basic')
+    difficulty: Literal['easy', 'medium', 'hard', 'mixed'] = Field('mixed')
+    focus_topics: list[str] = Field(default_factory=list)
+    provider: Optional[str] = Field(None, description="Optional LLM provider override")
+    model: Optional[str] = Field(None, description="Optional LLM model override")
+
+
+class GeneratedFlashcard(BaseModel):
+    front: str
+    back: str
+    tags: list[str] = Field(default_factory=list)
+    model_type: Literal['basic', 'basic_reverse', 'cloze'] = Field('basic')
+    notes: Optional[str] = None
+    extra: Optional[str] = None
+
+
+class FlashcardGenerateResponse(BaseModel):
+    flashcards: list[GeneratedFlashcard] = Field(default_factory=list)
+    count: int
+
+
 class FlashcardDeckProgress(BaseModel):
     deck_id: int
     deck_name: str

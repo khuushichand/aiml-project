@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ReviewTab } from "../ReviewTab"
 import { clearSetting } from "@/services/settings/registry"
-import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
+import {
+  FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING,
+  FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING
+} from "@/services/settings/ui-settings"
 import {
   useDecksQuery,
   useCramQueueQuery,
@@ -19,6 +22,10 @@ import {
   useHasCardsQuery,
   useNextDueQuery
 } from "../../hooks"
+
+const { trackShortcutHintTelemetryMock } = vi.hoisted(() => ({
+  trackShortcutHintTelemetryMock: vi.fn().mockResolvedValue(undefined)
+}))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -53,6 +60,10 @@ vi.mock("@/hooks/useAntdMessage", () => ({
     open: vi.fn(),
     destroy: vi.fn()
   })
+}))
+
+vi.mock("@/utils/flashcards-shortcut-hint-telemetry", () => ({
+  trackFlashcardsShortcutHintTelemetry: trackShortcutHintTelemetryMock
 }))
 
 vi.mock("../../hooks", () => ({
@@ -100,6 +111,7 @@ describe("ReviewTab edit-in-review workflow", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
+    await clearSetting(FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [{ id: 1, name: "Biology" }],
       isLoading: false
@@ -181,6 +193,13 @@ describe("ReviewTab edit-in-review workflow", () => {
     ).toBeInTheDocument()
     const hintToggle = screen.getByTestId("flashcards-review-shortcut-hints-toggle")
     expect(hintToggle).toHaveTextContent("Compact hints")
+    await waitFor(() => {
+      expect(trackShortcutHintTelemetryMock).toHaveBeenCalledWith({
+        type: "flashcards_shortcut_hints_exposed",
+        surface: "review",
+        density: "expanded"
+      })
+    })
     fireEvent.click(hintToggle)
     await waitFor(() => {
       expect(screen.getByText("Space / E")).toBeInTheDocument()
@@ -203,6 +222,39 @@ describe("ReviewTab edit-in-review workflow", () => {
       expect(screen.getByText("Edit Flashcard")).not.toBeVisible()
     })
     expect(screen.getByTestId("flashcards-review-edit-card")).toBeInTheDocument()
+  }, 15000)
+
+  it("can hide shortcut hints and records dismissal telemetry", async () => {
+    render(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={1}
+        onReviewDeckChange={() => {}}
+        isActive
+      />
+    )
+
+    const toggle = screen.getByTestId("flashcards-review-shortcut-hints-toggle")
+    fireEvent.click(toggle)
+    await waitFor(() => {
+      expect(screen.getByText("Space / E")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("flashcards-review-shortcut-hints-toggle"))
+    await waitFor(() => {
+      expect(screen.getByTestId("flashcards-review-shortcut-hints-toggle")).toHaveTextContent(
+        "Show hints"
+      )
+    })
+
+    expect(screen.queryByText("Space / E")).not.toBeInTheDocument()
+    expect(screen.queryByText("Space Flip")).not.toBeInTheDocument()
+    expect(trackShortcutHintTelemetryMock).toHaveBeenCalledWith({
+      type: "flashcards_shortcut_hints_dismissed",
+      surface: "review",
+      from_density: "compact"
+    })
   }, 15000)
 
   it("passes an edit shortcut callback when a review card is active", () => {

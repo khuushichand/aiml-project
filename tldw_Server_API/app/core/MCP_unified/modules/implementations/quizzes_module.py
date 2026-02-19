@@ -167,11 +167,11 @@ class QuizzesModule(BaseModule):
                 parameters={
                     "properties": {
                         "quiz_id": {"type": "integer"},
-                        "question_type": {"type": "string", "enum": ["multiple_choice", "true_false", "fill_blank"]},
+                        "question_type": {"type": "string", "enum": ["multiple_choice", "multi_select", "true_false", "fill_blank"]},
                         "question_text": {"type": "string", "minLength": 1, "maxLength": 5000},
                         "options": {"type": "array", "items": {"type": "string"}, "description": "Choices for multiple_choice"},
                         "correct_answer": {
-                            "oneOf": [{"type": "integer"}, {"type": "string"}, {"type": "boolean"}],
+                            "oneOf": [{"type": "integer"}, {"type": "string"}, {"type": "boolean"}, {"type": "array", "items": {"type": "integer"}}],
                             "description": "Index (0-based for MC), text, or boolean for true/false",
                         },
                         "explanation": {"type": "string", "maxLength": 2000},
@@ -192,10 +192,10 @@ class QuizzesModule(BaseModule):
                         "updates": {
                             "type": "object",
                             "properties": {
-                                "question_type": {"type": "string", "enum": ["multiple_choice", "true_false", "fill_blank"]},
+                                "question_type": {"type": "string", "enum": ["multiple_choice", "multi_select", "true_false", "fill_blank"]},
                                 "question_text": {"type": "string", "maxLength": 5000},
                                 "options": {"type": "array", "items": {"type": "string"}},
-                                "correct_answer": {"oneOf": [{"type": "integer"}, {"type": "string"}, {"type": "boolean"}]},
+                                "correct_answer": {"oneOf": [{"type": "integer"}, {"type": "string"}, {"type": "boolean"}, {"type": "array", "items": {"type": "integer"}}]},
                                 "explanation": {"type": "string", "maxLength": 2000},
                                 "points": {"type": "integer", "minimum": 1},
                                 "order_index": {"type": "integer", "minimum": 0},
@@ -245,7 +245,7 @@ class QuizzesModule(BaseModule):
                                 "type": "object",
                                 "properties": {
                                     "question_id": {"type": "integer"},
-                                    "user_answer": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                    "user_answer": {"oneOf": [{"type": "integer"}, {"type": "string"}, {"type": "array", "items": {"type": "integer"}}]},
                                     "time_spent_ms": {"type": "integer", "minimum": 0},
                                 },
                                 "required": ["question_id", "user_answer"],
@@ -292,7 +292,7 @@ class QuizzesModule(BaseModule):
                         "num_questions": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
                         "question_types": {
                             "type": "array",
-                            "items": {"type": "string", "enum": ["multiple_choice", "true_false", "fill_blank"]},
+                            "items": {"type": "string", "enum": ["multiple_choice", "multi_select", "true_false", "fill_blank"]},
                             "default": ["multiple_choice"],
                         },
                         "difficulty": {"type": "string", "enum": ["easy", "medium", "hard"], "default": "medium"},
@@ -354,8 +354,8 @@ class QuizzesModule(BaseModule):
             if not isinstance(quiz_id, int) or quiz_id < 1:
                 raise ValueError("quiz_id must be a positive integer")
             qtype = arguments.get("question_type")
-            if qtype not in {"multiple_choice", "true_false", "fill_blank"}:
-                raise ValueError("question_type must be multiple_choice, true_false, or fill_blank")
+            if qtype not in {"multiple_choice", "multi_select", "true_false", "fill_blank"}:
+                raise ValueError("question_type must be multiple_choice, multi_select, true_false, or fill_blank")
             qtext = arguments.get("question_text")
             if not isinstance(qtext, str) or not (1 <= len(qtext.strip()) <= 5000):
                 raise ValueError("question_text must be 1..5000 chars")
@@ -366,6 +366,15 @@ class QuizzesModule(BaseModule):
                 ans = arguments.get("correct_answer")
                 if not isinstance(ans, int) or ans < 0 or ans >= len(opts):
                     raise ValueError("correct_answer must be valid option index")
+            elif qtype == "multi_select":
+                opts = arguments.get("options")
+                if not isinstance(opts, list) or len(opts) < 2:
+                    raise ValueError("multi_select requires at least 2 options")
+                ans = arguments.get("correct_answer")
+                if not isinstance(ans, list) or len(ans) == 0:
+                    raise ValueError("correct_answer must be a non-empty index list for multi_select questions")
+                if not all(isinstance(entry, int) and 0 <= entry < len(opts) for entry in ans):
+                    raise ValueError("correct_answer entries must be valid option indices for multi_select")
             elif qtype == "true_false":
                 ans = arguments.get("correct_answer")
                 if isinstance(ans, str):

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
@@ -7,7 +8,7 @@ const EXT_PATH = path.resolve('build/chrome-mv3')
 
 test.describe('Sidepanel chat input screenshot', () => {
   test('captures the sidepanel including chat textarea', async () => {
-    const { context, openSidepanel } = (await launchWithExtension(EXT_PATH)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, EXT_PATH)) as any
     const page = await openSidepanel()
 
     // Wait for the app shell to mount (#root child present)

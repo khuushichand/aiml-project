@@ -263,14 +263,19 @@ describe("SourceSeenDrawer", () => {
   })
 
   it("shows error state", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     mockState.getSourceSeenStatsMock.mockRejectedValue(new Error("Network error"))
-    render(
-      <SourceSeenDrawer open={true} onClose={vi.fn()} sourceId={42} />
-    )
-    await waitFor(() => {
-      expect(screen.getByTestId("alert-error")).toBeInTheDocument()
-      expect(screen.getByTestId("alert-error")).toHaveTextContent("Network error")
-    })
+    try {
+      render(
+        <SourceSeenDrawer open={true} onClose={vi.fn()} sourceId={42} />
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId("alert-error")).toBeInTheDocument()
+        expect(screen.getByTestId("alert-error")).toHaveTextContent("Network error")
+      })
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
   })
 
   it("does not show admin section for non-admin", async () => {

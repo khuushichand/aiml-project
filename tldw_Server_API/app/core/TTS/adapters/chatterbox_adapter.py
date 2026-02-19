@@ -11,14 +11,15 @@ Updated to use upstream chatterbox package (v0.1.4):
 # Imports
 import asyncio
 import contextlib
+import importlib
 import os
+import sys
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
 
 import numpy as np
 
 # Third-party Imports
-import torch
 from loguru import logger
 
 from ..tts_exceptions import (
@@ -43,6 +44,63 @@ _CHATTERBOX_NUMERIC_EXCEPTIONS = (TypeError, ValueError)
 
 #######################################################################################################################
 # No-op watermarker to ensure no watermark is applied
+
+torch: Any | None = None
+_TORCH_IMPORT_ERROR: Exception | None = None
+_TORCH_IMPORT_ATTEMPTED: bool = False
+
+
+def _is_test_runtime() -> bool:
+    test_flags = {"1", "true", "yes", "y", "on"}
+    if str(os.getenv("PYTEST_CURRENT_TEST", "")).strip():
+        return True
+    if str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in test_flags:
+        return True
+    if str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in test_flags:
+        return True
+    return any("pytest" in str(arg or "") for arg in sys.argv)
+
+
+def _get_torch(*, allow_import: bool) -> Any | None:
+    global torch, _TORCH_IMPORT_ERROR, _TORCH_IMPORT_ATTEMPTED
+
+    if torch is not None:
+        return torch
+    if _TORCH_IMPORT_ERROR is not None:
+        return None
+    if not allow_import:
+        return None
+    if _TORCH_IMPORT_ATTEMPTED:
+        return None
+
+    _TORCH_IMPORT_ATTEMPTED = True
+    try:
+        torch = importlib.import_module("torch")
+        _TORCH_IMPORT_ERROR = None
+    except Exception as exc:
+        _TORCH_IMPORT_ERROR = exc
+        torch = None
+    return torch
+
+
+def _torch_cuda_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(torch_mod.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _torch_mps_available(*, allow_import: bool = False) -> bool:
+    torch_mod = _get_torch(allow_import=allow_import and not _is_test_runtime())
+    if torch_mod is None:
+        return False
+    try:
+        return bool(hasattr(torch_mod.backends, "mps") and torch_mod.backends.mps.is_available())
+    except Exception:
+        return False
 
 class _NoopWatermarker:
     def apply_watermark(self, wav: np.ndarray, sample_rate: int = 24000):
@@ -121,20 +179,19 @@ class ChatterboxAdapter(TTSAdapter):
         if preferred:
             pref = str(preferred).lower()
             if pref == "cuda":
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
             elif pref == "mps":
-                mps_avail = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
-                if mps_avail:
+                if _torch_mps_available(allow_import=True):
                     self.device = "mps"
                 else:
-                    self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                    self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
             elif pref == "cpu":
                 self.device = "cpu"
             else:
                 # Unknown preference; fall back to CUDA/CPU
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
         else:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = "cuda" if _torch_cuda_available(allow_import=True) else "cpu"
 
         # Provider settings
         self.use_multilingual = self.config.get("chatterbox_use_multilingual", self.config.get("use_multilingual", False))
@@ -165,6 +222,12 @@ class ChatterboxAdapter(TTSAdapter):
 
     async def initialize(self) -> bool:
         """Initialize the Chatterbox TTS adapter (lazy model load)."""
+        if _get_torch(allow_import=True) is None:
+            logger.warning(
+                f"{self.provider_name}: torch unavailable; disabling provider. error={_TORCH_IMPORT_ERROR}"
+            )
+            self._status = ProviderStatus.NOT_CONFIGURED
+            return False
         try:
             # Verify the upstream package is available
             try:
@@ -473,8 +536,9 @@ class ChatterboxAdapter(TTSAdapter):
         self.model_en = None
         self.model_multi = None
         # Clear GPU cache if CUDA is available
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch_mod = _get_torch(allow_import=False)
+        if _torch_cuda_available(allow_import=False) and torch_mod is not None:
+            torch_mod.cuda.empty_cache()
         await super().close()
 
     async def _cleanup_resources(self):

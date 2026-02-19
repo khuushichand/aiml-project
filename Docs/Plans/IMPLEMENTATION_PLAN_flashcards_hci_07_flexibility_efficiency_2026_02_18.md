@@ -23,7 +23,27 @@ Finding IDs: `H7-1` through `H7-5`
 - Query hook tests for sort and multi-tag parameter serialization.
 - Component tests for tag autocomplete behavior and selected-filter chips.
 - E2E tests for bulk tag add/remove and list refresh correctness.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added `ManageSortBy` options and sorting pipeline support in `useManageQuery`.
+  - Server-side order mapping: `due -> due_at`, `created -> created_at`, other modes fall back to `due_at`.
+  - Client-side sorting modes: `due`, `created`, `ease`, `last_reviewed`, `front_alpha`.
+- Added Cards tab sort selector in `ManageTab` with options:
+  - Due date
+  - Created
+  - Ease factor
+  - Last reviewed
+  - Front (A-Z)
+- Applied selected sort mode consistently to the cross-results bulk fetch path used by bulk actions.
+- Added multi-tag filter chips with autocomplete suggestions sourced from existing card tags.
+- Added bulk add/remove tag actions in the floating selection bar, including modal-driven multi-tag input and chunked updates.
+
+**Validation Completed**:
+- `useFlashcardQueries.sorting.test.ts` (sort mapping + client sort behavior)
+- `ManageTab.scheduling-metadata.test.tsx` (sort control + multi-tag chip/suggestion behavior)
+- `ManageTab.undo-stage3.test.tsx` (bulk add/remove tag update payloads)
+- `src/components/Flashcards/**/__tests__/*.test.tsx` + `flashcards-shortcut-hint-telemetry.test.ts` (full flashcards regression run)
 
 ## Stage 2: Import Surface Parity (JSON/JSONL + Extended Options)
 **Goal**: Expose backend import/export flexibility directly in the UI.
@@ -35,7 +55,25 @@ Finding IDs: `H7-1` through `H7-5`
 - Integration tests for JSON/JSONL import success/failure paths.
 - Contract tests for export option mapping to endpoint query params.
 - E2E tests for filtered export count and downloaded format expectations.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added JSON/JSONL import path in UI with explicit import mode selector (`Delimited` vs `JSON / JSONL`) and auto-detection hinting (`JSON`, `JSONL`, or unknown).
+- Added frontend service upload support for `/api/v1/flashcards/import/json` and corresponding mutation hook.
+- Extended export UI with:
+  - deck + tag + text query filters
+  - include-reverse toggle
+  - CSV/TSV delimiter selector
+  - include-header and extended-header toggles
+  - live export preview summary with count + effective filters
+- Updated CSV/TSV export download naming to align with delimiter (`.tsv` for tab, `.csv` otherwise).
+
+**Validation Completed**:
+- `ImportExportTab.import-results.test.tsx`:
+  - JSON/JSONL import routing
+  - export option/query/filter parameter mapping
+  - existing import result and rollback regressions
+- `src/components/Flashcards/**/__tests__/*.test.tsx` + `flashcards-shortcut-hint-telemetry.test.ts` (full flashcards regression run)
 
 ## Stage 3: LLM Generation MVP in Flashcards UI
 **Goal**: Deliver first-class text-to-cards generation in-product.
@@ -47,7 +85,24 @@ Finding IDs: `H7-1` through `H7-5`
 - Integration tests for generate request/response mapping and validation.
 - Component tests for preview-edit-commit loop and cancel behavior.
 - E2E tests for full generation workflow from prompt to saved cards.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added backend endpoint `POST /api/v1/flashcards/generate` that wraps the existing workflows `flashcard_generate` adapter and normalizes generated card payloads.
+- Added frontend service and mutation support for generation requests with config:
+  - `text`, `num_cards`, `card_type`, `difficulty`, `focus_topics`, `provider`, `model`
+- Added new Generate panel in Flashcards Transfer tab:
+  - text input + generation config controls
+  - editable generated-card preview (front/back/tags)
+  - save-to-deck flow with automatic deck fallback creation when no decks exist
+- Added generation failure guidance that points users to provider/model checks and lower-complexity retries.
+
+**Validation Completed**:
+- `ImportExportTab.import-results.test.tsx`:
+  - generate preview/edit/save flow
+  - existing import/export regressions retained
+- `src/components/Flashcards/**/__tests__/*.test.tsx` + `flashcards-shortcut-hint-telemetry.test.ts` (full flashcards regression run)
+- `python -m compileall` for modified backend flashcards endpoint/schema/test modules
 
 ## Stage 4: Cross-Feature Generation Entry Points
 **Goal**: Leverage tldw media and note context to generate cards from source artifacts.
@@ -59,7 +114,39 @@ Finding IDs: `H7-1` through `H7-5`
 - Integration tests for prefilled generation payload from each source type.
 - E2E tests for "generate from source" to review-ready deck flow.
 - Security tests for unauthorized source references and provider misuse.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added cross-surface generate handoff helpers (`buildFlashcardsGenerateRoute`, parser helpers for search/hash routes) so source pages can deep-link to Flashcards Transfer with prefilled generation text/context.
+- Updated `FlashcardsManager` to detect generate intent on load and open the Transfer tab automatically.
+- Updated Generate panel to:
+  - consume deep-link prefill text/context
+  - show source-context notice
+  - attach `source_ref_type` / `source_ref_id` on saved generated cards when launched from context
+- Added Media entry point:
+  - Content viewer Actions menu now includes "Generate flashcards from content"
+  - routes to `/flashcards` with media context + content prefill
+- Added Notes entry point:
+  - Notes header action "Generate cards" routes to `/flashcards` with note content + note source metadata
+- Added Chat surface entry point:
+  - Sidepanel "Save to Notes" modal now includes "Generate flashcards"
+  - opens options `/flashcards` route with message/session context and selected text prefill
+- Permissions/quota behavior remains consistent by funneling all entry points through existing flashcard generate/create APIs (same server-side validation and limits used by native Transfer flow).
+
+**Validation Completed**:
+- `flashcards-generate-handoff.test.ts`:
+  - route build mapping
+  - search/hash parse behavior
+- `FlashcardsManager.consistency.test.tsx`:
+  - transfer tab auto-opens when generate intent is present in URL
+- `ImportExportTab.import-results.test.tsx`:
+  - deep-link prefill render
+  - source attribution persisted on generated-card save
+- Regression coverage:
+  - `src/components/Flashcards/**/__tests__/*.test.tsx` + `flashcards-shortcut-hint-telemetry.test.ts`
+  - `ContentViewer.stage4.accessibility.test.tsx`
+  - `ContentViewer.stage14.export.test.tsx`
+  - `NotesManagerPage.stage3.toolbar-metrics.test.tsx`
 
 ## Dependencies
 

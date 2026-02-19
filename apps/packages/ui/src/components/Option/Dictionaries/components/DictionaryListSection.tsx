@@ -1,11 +1,17 @@
 import React from "react"
-import { Button, Input, Skeleton, Table } from "antd"
+import { Button, Input, Select, Skeleton, Table } from "antd"
 import { Plus } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 
 type DictionaryListSectionProps = {
   dictionarySearch: string
   onDictionarySearchChange: (value: string) => void
+  categoryFilter: string
+  onCategoryFilterChange: (value: string) => void
+  tagFilters: string[]
+  onTagFiltersChange: (value: string[]) => void
+  categoryFilterOptions: string[]
+  tagFilterOptions: string[]
   onOpenImport: () => void
   onOpenCreate: () => void
   status: "pending" | "success" | "error" | string
@@ -24,6 +30,12 @@ type DictionaryListSectionProps = {
 export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
   dictionarySearch,
   onDictionarySearchChange,
+  categoryFilter,
+  onCategoryFilterChange,
+  tagFilters,
+  onTagFiltersChange,
+  categoryFilterOptions,
+  tagFilterOptions,
   onOpenImport,
   onOpenCreate,
   status,
@@ -41,14 +53,42 @@ export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
   return (
     <>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <Input
-          value={dictionarySearch}
-          onChange={(event) => onDictionarySearchChange(event.target.value)}
-          allowClear
-          className="sm:max-w-md"
-          placeholder="Search dictionaries by name or description"
-          aria-label="Search dictionaries"
-        />
+        <div className="flex flex-col gap-2 sm:flex-1 sm:max-w-3xl sm:flex-row">
+          <Input
+            value={dictionarySearch}
+            onChange={(event) => onDictionarySearchChange(event.target.value)}
+            allowClear
+            className="sm:max-w-md"
+            placeholder="Search dictionaries by name, description, category, or tags"
+            aria-label="Search dictionaries"
+          />
+          <Select
+            allowClear
+            value={categoryFilter || undefined}
+            onChange={(value) => onCategoryFilterChange(value || "")}
+            options={categoryFilterOptions.map((category) => ({
+              label: category,
+              value: category,
+            }))}
+            placeholder="All categories"
+            className="sm:min-w-[180px]"
+            aria-label="Filter dictionaries by category"
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            value={tagFilters}
+            onChange={(value) => onTagFiltersChange(value)}
+            options={tagFilterOptions.map((tag) => ({
+              label: tag,
+              value: tag,
+            }))}
+            placeholder="Filter by tags"
+            className="sm:min-w-[220px]"
+            maxTagCount="responsive"
+            aria-label="Filter dictionaries by tags"
+          />
+        </div>
         <div className="flex justify-end gap-2">
           <Button onClick={onOpenImport}>Import</Button>
           <Button type="primary" icon={<Plus className="w-4 h-4" />} onClick={onOpenCreate}>

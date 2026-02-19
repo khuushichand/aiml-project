@@ -1,14 +1,13 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe("Error bubble in chat (real server)", () => {
   test("shows Invalid API key error as assistant message", async () => {
     const { serverUrl } = requireRealServerConfig(test)
 
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
 
     await page.goto(optionsUrl + "#/settings/tldw", {
       waitUntil: "domcontentloaded"

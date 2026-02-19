@@ -1640,6 +1640,30 @@
   "flashcards_importHelp": {
     "message": "Paste TSV/CSV lines: Deck, Front, Back, Tags, Notes"
   },
+  "flashcards_importFormatApkg": {
+    "message": "APKG (Anki)"
+  },
+  "flashcards_importHelpApkg": {
+    "message": "Upload an APKG file exported from Anki. Decks, card templates, tags, and scheduling state will be imported."
+  },
+  "flashcards_importHelpApkgTitle": {
+    "message": "APKG import notes"
+  },
+  "flashcards_importApkgHelp": {
+    "message": "APKG imports preserve deck names, tags, model types (basic/basic reverse/cloze), and scheduling metadata where available."
+  },
+  "flashcards_importApkgSelected": {
+    "message": "Selected file: {{name}}"
+  },
+  "flashcards_importApkgPrompt": {
+    "message": "Select an APKG file to import."
+  },
+  "flashcards_importApkgMissingFile": {
+    "message": "Select an APKG file before importing."
+  },
+  "flashcards_transferSummaryFormatsValue": {
+    "message": "Import: CSV, TSV, JSON, JSONL, APKG · Export: TSV, CSV, APKG"
+  },
   "flashcards_pasteContent": {
     "message": "Paste content here..."
   },

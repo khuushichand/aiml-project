@@ -585,6 +585,8 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     }
   },
   { kind: "options", path: "/knowledge", element: <OptionKnowledgeWorkspace /> },
+  { kind: "options", path: "/knowledge/thread/:threadId", element: <OptionKnowledgeWorkspace /> },
+  { kind: "options", path: "/knowledge/shared/:shareToken", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/world-books", element: <OptionWorldBooksWorkspace /> },
   { kind: "options", path: "/dictionaries", element: <OptionDictionariesWorkspace /> },
   { kind: "options", path: "/characters", element: <OptionCharactersWorkspace /> },

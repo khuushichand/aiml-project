@@ -1273,6 +1273,68 @@ def migration_052_create_org_team_role_permissions(conn: sqlite3.Connection) -> 
     logger.info("Migration 052: Created org/team role permission tables and seeded defaults")
 
 
+def migration_053_create_byok_oauth_state(conn: sqlite3.Connection) -> None:
+    """Create byok_oauth_state table for BYOK OAuth authorize/callback state."""
+    logger.info("Migration 053: START byok_oauth_state table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS byok_oauth_state (
+            state TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            auth_session_id TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            pkce_verifier_encrypted TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            consumed_at TIMESTAMP,
+            return_path TEXT,
+            PRIMARY KEY (state, user_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(byok_oauth_state)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE byok_oauth_state ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("provider", "provider TEXT")
+        add_col("auth_session_id", "auth_session_id TEXT")
+        add_col("redirect_uri", "redirect_uri TEXT")
+        add_col("pkce_verifier_encrypted", "pkce_verifier_encrypted TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("expires_at", "expires_at TIMESTAMP")
+        add_col("consumed_at", "consumed_at TIMESTAMP")
+        add_col("return_path", "return_path TEXT")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_provider_expires "
+        "ON byok_oauth_state(provider, expires_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_user_provider_consumed "
+        "ON byok_oauth_state(user_id, provider, consumed_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 053: Created byok_oauth_state table")
+
+
+def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
+    """Rollback migration 053 by dropping the byok_oauth_state table."""
+    conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
+    conn.commit()
+    logger.info("Rollback 053: Dropped byok_oauth_state table")
+
+
 def rollback_051_drop_storage_quotas_table(conn: sqlite3.Connection) -> None:
     """Rollback migration 051 by dropping storage_quotas table."""
     conn.execute("DROP TABLE IF EXISTS storage_quotas")
@@ -2682,6 +2744,12 @@ def get_authnz_migrations() -> list[Migration]:
             52,
             "Create org/team role permission tables",
             migration_052_create_org_team_role_permissions,
+        ),
+        Migration(
+            53,
+            "Create BYOK OAuth state table",
+            migration_053_create_byok_oauth_state,
+            rollback_053_drop_byok_oauth_state,
         ),
     ]
 

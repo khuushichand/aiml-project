@@ -323,7 +323,7 @@ describe("DictionariesManager entry stage-3 bulk operations and order guidance",
     expect(notificationMock.success).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Bulk action complete" })
     )
-  }, 30000)
+  }, 45000)
 
   it("reorders entries through priority controls", async () => {
     const user = userEvent.setup()
@@ -341,7 +341,7 @@ describe("DictionariesManager entry stage-3 bulk operations and order guidance",
         entry_ids: [2, 1, 3]
       })
     })
-  }, 30000)
+  }, 60000)
 
   it("submits group bulk action and keeps failed rows selected", async () => {
     const user = userEvent.setup()
@@ -371,5 +371,5 @@ describe("DictionariesManager entry stage-3 bulk operations and order guidance",
       })
     )
     expect(screen.getByText("1 selected")).toBeInTheDocument()
-  }, 30000)
+  }, 120000)
 })

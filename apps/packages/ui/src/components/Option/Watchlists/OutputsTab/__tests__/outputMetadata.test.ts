@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  buildDeliveryDisclosureSummary,
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
   getDeliveryStatusLabel,
@@ -96,5 +97,26 @@ describe("outputMetadata helpers", () => {
     expect(getDeliveryStatusLabel("in_progress")).toBe("In progress")
     expect(getDeliveryStatusLabel("failed")).toBe("Failed")
     expect(getDeliveryStatusLabel("mystery")).toBe("mystery")
+  })
+
+  it("builds delivery disclosure summary for collapsed and expanded views", () => {
+    const deliveries = [
+      { channel: "email", status: "sent" },
+      { channel: "chatbook", status: "stored" },
+      { channel: "webhook", status: "failed", detail: "timeout" }
+    ]
+
+    expect(buildDeliveryDisclosureSummary(deliveries)).toEqual({
+      visible: [{ channel: "email", status: "sent" }],
+      hidden: [
+        { channel: "chatbook", status: "stored" },
+        { channel: "webhook", status: "failed", detail: "timeout" }
+      ]
+    })
+
+    expect(buildDeliveryDisclosureSummary(deliveries, { maxVisible: 3 })).toEqual({
+      visible: deliveries,
+      hidden: []
+    })
   })
 })

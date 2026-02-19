@@ -1,6 +1,8 @@
 import React, { useEffect } from "react"
-import { Form, Input, Modal, Select } from "antd"
+import { Alert, Button, Form, Input, Modal, Select, message } from "antd"
 import { useTranslation } from "react-i18next"
+import { testWatchlistSource, testWatchlistSourceDraft } from "@/services/watchlists"
+import type { JobPreviewResult } from "@/types/watchlists"
 import type { WatchlistSource, SourceType } from "@/types/watchlists"
 
 interface SourceFormModalProps {
@@ -16,6 +18,46 @@ interface SourceFormModalProps {
   existingTags: string[]
 }
 
+const resolveTestSourceErrorHint = (
+  rawMessage: string,
+  t: (key: string, defaultValue?: string) => string
+): string => {
+  const normalized = rawMessage.toLowerCase()
+
+  if (normalized.includes("forum_sources_disabled")) {
+    return t(
+      "watchlists:sources.form.testSourceErrorHintForumDisabled",
+      "Forum feeds are not enabled yet. Switch type to RSS Feed or Website."
+    )
+  }
+  if (normalized.includes("invalid_youtube_rss_url")) {
+    return t(
+      "watchlists:sources.form.testSourceErrorHintYoutube",
+      "Use a canonical YouTube feed URL (channel_id or playlist_id) and retry."
+    )
+  }
+  if (normalized.includes("source_not_found")) {
+    return t(
+      "watchlists:sources.form.testSourceErrorHintNotFound",
+      "This saved feed no longer exists. Refresh feeds and open it again."
+    )
+  }
+  if (
+    normalized.includes("failed to fetch") ||
+    normalized.includes("network") ||
+    normalized.includes("timeout")
+  ) {
+    return t(
+      "watchlists:sources.form.testSourceErrorHintNetwork",
+      "Check server connectivity, then run Test Feed again."
+    )
+  }
+  return t(
+    "watchlists:sources.form.testSourceErrorHintGeneric",
+    "Review URL and feed type, then retry. If this persists, check server logs."
+  )
+}
+
 export const SourceFormModal: React.FC<SourceFormModalProps> = ({
   open,
   onClose,
@@ -26,8 +68,13 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
   const { t } = useTranslation(["watchlists", "common"])
   const [form] = Form.useForm()
   const [submitting, setSubmitting] = React.useState(false)
+  const [testingSource, setTestingSource] = React.useState(false)
+  const [testResult, setTestResult] = React.useState<JobPreviewResult | null>(null)
+  const [testError, setTestError] = React.useState<string | null>(null)
+  const [testErrorHint, setTestErrorHint] = React.useState<string | null>(null)
 
   const isEditing = !!initialValues
+  const testSourceId = typeof initialValues?.id === "number" ? initialValues.id : null
 
   // Reset form when modal opens/closes or initialValues change
   useEffect(() => {
@@ -46,6 +93,9 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
           tags: []
         })
       }
+      setTestResult(null)
+      setTestError(null)
+      setTestErrorHint(null)
     }
   }, [open, initialValues, form])
 
@@ -65,7 +115,72 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
 
   const handleCancel = () => {
     form.resetFields()
+    setTestResult(null)
+    setTestError(null)
+    setTestErrorHint(null)
     onClose()
+  }
+
+  const handleTestSource = async () => {
+    try {
+      const values = await form.validateFields(["url", "source_type"])
+      const draftUrl = String(values?.url ?? "")
+      const draftType = String(values?.source_type ?? "")
+      const isSavedSourceUnchanged =
+        !!testSourceId &&
+        !!initialValues &&
+        draftUrl === String(initialValues.url) &&
+        draftType === String(initialValues.source_type)
+
+      setTestingSource(true)
+      setTestError(null)
+      setTestErrorHint(null)
+
+      const preview = isSavedSourceUnchanged
+        ? await testWatchlistSource(testSourceId, { limit: 10 })
+        : await testWatchlistSourceDraft(
+            {
+              url: draftUrl,
+              source_type: draftType as SourceType
+            },
+            { limit: 10 }
+          )
+
+      setTestResult(preview)
+      const previewCount = Number(preview?.total || 0)
+      if (previewCount > 0) {
+        message.success(
+          t(
+            "watchlists:sources.form.testSourceSuccess",
+            "Test succeeded: found {{count}} preview item{{plural}}.",
+            { count: previewCount, plural: previewCount === 1 ? "" : "s" }
+          )
+        )
+      } else {
+        message.warning(
+          t(
+            "watchlists:sources.form.testSourceNoItems",
+            "Test completed, but no preview items were returned."
+          )
+        )
+      }
+    } catch (err) {
+      if (err && typeof err === "object" && "errorFields" in err) {
+        return
+      }
+      console.error("Source test failed:", err)
+      const fallback = t("watchlists:sources.form.testSourceError", "Source test failed")
+      const detailed =
+        err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : fallback
+      setTestResult(null)
+      setTestError(detailed)
+      setTestErrorHint(resolveTestSourceErrorHint(detailed, t))
+      message.error(fallback)
+    } finally {
+      setTestingSource(false)
+    }
   }
 
   return (
@@ -144,9 +259,61 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
           />
         </Form.Item>
 
+        <div className="mb-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Button
+              size="small"
+              onClick={() => void handleTestSource()}
+              loading={testingSource}
+            >
+              {t("watchlists:sources.form.testSource", "Test Feed")}
+            </Button>
+            <span className="text-xs text-text-muted">
+              {isEditing
+                ? t(
+                    "watchlists:sources.form.testSourceHint",
+                    "Runs a quick fetch preview for this feed. Unsaved URL/type edits are tested."
+                  )
+                : t(
+                    "watchlists:sources.form.testSourceDraftHint",
+                    "Run Test Feed to validate URL/type connectivity before saving."
+                  )}
+            </span>
+          </div>
+          {testResult && (
+            <Alert
+              type={Number(testResult.total || 0) > 0 ? "success" : "warning"}
+              showIcon
+              message={t("watchlists:sources.form.testSourceSummary", "Test Summary")}
+              description={t(
+                "watchlists:sources.form.testSourceSummaryDescription",
+                "{{total}} preview item{{plural}}, {{ingestable}} ingestable, {{filtered}} filtered.",
+                {
+                  total: Number(testResult.total || 0),
+                  ingestable: Number(testResult.ingestable || 0),
+                  filtered: Number(testResult.filtered || 0),
+                  plural: Number(testResult.total || 0) === 1 ? "" : "s"
+                }
+              )}
+            />
+          )}
+          {testError && (
+            <Alert
+              type="error"
+              showIcon
+              message={t("watchlists:sources.form.testSourceError", "Source test failed")}
+              description={testErrorHint ? `${testError} ${testErrorHint}` : testError}
+            />
+          )}
+        </div>
+
         <Form.Item
           name="source_type"
           label={t("watchlists:sources.form.type", "Type")}
+          extra={t(
+            "watchlists:sources.form.forumDisabledHelp",
+            "Forum monitoring is coming soon. Use RSS Feed or Website for now."
+          )}
           rules={[
             {
               required: true,
@@ -165,7 +332,7 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
                 value: "site"
               },
               {
-                label: t("watchlists:sources.types.forum", "Forum"),
+                label: t("watchlists:sources.types.forumComingSoon", "Forum (coming soon)"),
                 value: "forum",
                 disabled: true // Forum support coming later
               }

@@ -3,23 +3,30 @@
 #
 # Imports
 import asyncio
+from datetime import datetime, timezone
+import hashlib
+import json
+import mimetypes
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 #
 # 3rd-party Libraries
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     Header,  # Keep Header for expected_version
     HTTPException,
     Query,
     Request,
     Response,
+    UploadFile,
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
@@ -33,18 +40,34 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 #
 # Schemas for notes
 from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
+    CollectionKeywordLinkResponse,
+    CollectionKeywordLinksResponse,
+    ConversationKeywordLinkResponse,
+    ConversationKeywordLinksResponse,
     DetailResponse,
     KeywordCreate,
+    KeywordCollectionCreate,
+    KeywordCollectionResponse,
+    KeywordCollectionsListResponse,
+    KeywordCollectionUpdate,
+    KeywordMergeRequest,
+    KeywordMergeResponse,
     KeywordResponse,
+    KeywordUpdate,
     KeywordsForNoteResponse,
     NoteBulkCreateItemResult,
     NoteBulkCreateRequest,
     NoteBulkCreateResponse,
+    NoteAttachmentsListResponse,
+    NoteAttachmentResponse,
     NoteCreate,
     NoteKeywordLinkResponse,
     NoteResponse,
     NotesExportRequest,
     NotesExportResponse,
+    NotesImportRequest,
+    NotesImportResponse,
+    NotesImportFileResult,
     NotesForKeywordResponse,
     NotesListResponse,
     NoteUpdate,
@@ -63,6 +86,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # Corrected
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Writing.note_title import TitleGenOptions, generate_note_title
 
@@ -95,6 +120,235 @@ _NOTES_NONCRITICAL_EXCEPTIONS = (
 )
 
 router = APIRouter()
+
+_NOTES_ATTACHMENTS_DIRNAME = "notes_attachments"
+_NOTES_ATTACHMENT_META_SUFFIX = ".meta.json"
+_NOTES_ATTACHMENT_MAX_FILENAME_LEN = 180
+_NOTES_ATTACHMENT_DEFAULT_MAX_BYTES = 25 * 1024 * 1024
+_NOTES_ATTACHMENT_ALLOWED_EXTENSIONS = {
+    ".bmp",
+    ".csv",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".gz",
+    ".jpeg",
+    ".jpg",
+    ".json",
+    ".md",
+    ".mp3",
+    ".mp4",
+    ".m4a",
+    ".mov",
+    ".ogg",
+    ".pdf",
+    ".png",
+    ".ppt",
+    ".pptx",
+    ".svg",
+    ".tar.gz",
+    ".txt",
+    ".wav",
+    ".webm",
+    ".webp",
+    ".xlsx",
+    ".xls",
+    ".yaml",
+    ".yml",
+    ".zip",
+}
+
+
+def _resolve_notes_attachment_max_bytes() -> int:
+    try:
+        value = int(core_settings.get("NOTES_ATTACHMENT_MAX_BYTES", _NOTES_ATTACHMENT_DEFAULT_MAX_BYTES))
+        if value <= 0:
+            return _NOTES_ATTACHMENT_DEFAULT_MAX_BYTES
+        return value
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
+        return _NOTES_ATTACHMENT_DEFAULT_MAX_BYTES
+
+
+_NOTES_ATTACHMENT_MAX_BYTES = _resolve_notes_attachment_max_bytes()
+
+
+def _ensure_note_exists_or_404(db: CharactersRAGDB, note_id: str) -> None:
+    note_data = db.get_note_by_id(note_id=note_id)
+    if not note_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+
+
+def _safe_note_attachment_dirname(note_id: str) -> str:
+    text = str(note_id or "").strip()
+    if not text:
+        return "note"
+    safe = sanitize_filename(text, max_total_length=96).replace(" ", "_").strip("._")
+    if safe and safe not in {".", ".."}:
+        return safe
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"note_{digest}"
+
+
+def _get_note_attachments_base_dir(user_id: int | str) -> Path:
+    user_base_dir = DatabasePaths.get_user_base_directory(user_id)
+    base_dir = (user_base_dir / _NOTES_ATTACHMENTS_DIRNAME).resolve()
+    user_base_resolved = user_base_dir.resolve()
+    try:
+        base_dir.relative_to(user_base_resolved)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invalid attachment storage path") from exc
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return base_dir
+
+
+def _get_note_attachments_dir(user_id: int | str, note_id: str, *, create: bool = False) -> Path:
+    base_dir = _get_note_attachments_base_dir(user_id)
+    note_dir = (base_dir / _safe_note_attachment_dirname(note_id)).resolve()
+    try:
+        note_dir.relative_to(base_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid note attachment path") from exc
+    if create:
+        note_dir.mkdir(parents=True, exist_ok=True)
+    return note_dir
+
+
+def _sanitize_attachment_file_name(raw_name: str) -> str:
+    input_name = str(raw_name or "").strip()
+    if not input_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Attachment filename is required")
+    basename = Path(input_name).name
+    if basename != input_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment filename")
+
+    suffixes = [suffix.lower() for suffix in Path(basename).suffixes]
+    extension = ""
+    full_extension = "".join(suffixes)
+    if full_extension and full_extension in _NOTES_ATTACHMENT_ALLOWED_EXTENSIONS:
+        extension = full_extension
+    elif suffixes and suffixes[-1] in _NOTES_ATTACHMENT_ALLOWED_EXTENSIONS:
+        extension = suffixes[-1]
+    if not extension:
+        allowed = ", ".join(sorted(_NOTES_ATTACHMENT_ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported attachment type. Allowed extensions: {allowed}",
+        )
+
+    stem = basename[:-len(extension)] if len(extension) < len(basename) else "attachment"
+    max_stem_len = max(1, _NOTES_ATTACHMENT_MAX_FILENAME_LEN - len(extension))
+    safe_stem = sanitize_filename(stem, max_total_length=max_stem_len).replace(" ", "_").strip("._")
+    if not safe_stem:
+        safe_stem = "attachment"
+    if len(safe_stem) > max_stem_len:
+        safe_stem = safe_stem[:max_stem_len]
+    return f"{safe_stem}{extension}"
+
+
+def _resolve_unique_attachment_path(note_dir: Path, file_name: str) -> Path:
+    candidate = (note_dir / file_name).resolve()
+    try:
+        candidate.relative_to(note_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment filename") from exc
+    if not candidate.exists():
+        return candidate
+
+    suffixes = Path(file_name).suffixes
+    extension = "".join(suffixes) if suffixes else ""
+    stem = file_name[:-len(extension)] if extension else file_name
+    for idx in range(1, 1000):
+        suffix = f"-{idx}"
+        max_stem_len = max(1, _NOTES_ATTACHMENT_MAX_FILENAME_LEN - len(extension) - len(suffix))
+        trimmed_stem = stem[:max_stem_len]
+        next_name = f"{trimmed_stem}{suffix}{extension}"
+        next_candidate = (note_dir / next_name).resolve()
+        try:
+            next_candidate.relative_to(note_dir)
+        except ValueError:
+            continue
+        if not next_candidate.exists():
+            return next_candidate
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unable to allocate unique attachment filename")
+
+
+def _attachment_metadata_path(file_path: Path) -> Path:
+    return file_path.with_name(f"{file_path.name}{_NOTES_ATTACHMENT_META_SUFFIX}")
+
+
+def _parse_uploaded_at(value: Any, fallback: datetime) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            if text.endswith("Z"):
+                text = f"{text[:-1]}+00:00"
+            try:
+                parsed = datetime.fromisoformat(text)
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            except _NOTES_NONCRITICAL_EXCEPTIONS:
+                return fallback
+    return fallback
+
+
+def _read_attachment_metadata(file_path: Path) -> dict[str, Any]:
+    metadata_path = _attachment_metadata_path(file_path)
+    if not metadata_path.exists():
+        return {}
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except _NOTES_NONCRITICAL_EXCEPTIONS:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _write_attachment_metadata(
+    file_path: Path,
+    *,
+    original_file_name: str,
+    content_type: Optional[str],
+    size_bytes: int,
+    uploaded_at: datetime,
+) -> None:
+    metadata_payload = {
+        "original_file_name": original_file_name,
+        "content_type": content_type,
+        "size_bytes": int(size_bytes),
+        "uploaded_at": uploaded_at.astimezone(timezone.utc).isoformat(),
+    }
+    metadata_path = _attachment_metadata_path(file_path)
+    metadata_path.write_text(json.dumps(metadata_payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _to_attachment_response(note_id: str, file_path: Path) -> dict[str, Any]:
+    file_stat = file_path.stat()
+    uploaded_fallback = datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc)
+    metadata = _read_attachment_metadata(file_path)
+    original_file_name = str(metadata.get("original_file_name") or file_path.name)
+    content_type = metadata.get("content_type")
+    if content_type is None:
+        content_type = mimetypes.guess_type(file_path.name)[0]
+    uploaded_at = _parse_uploaded_at(metadata.get("uploaded_at"), uploaded_fallback)
+    size_bytes = metadata.get("size_bytes")
+    if not isinstance(size_bytes, int) or size_bytes < 0:
+        size_bytes = int(file_stat.st_size)
+    encoded_note_id = quote(str(note_id), safe="")
+    encoded_file_name = quote(file_path.name, safe="")
+    return {
+        "file_name": file_path.name,
+        "original_file_name": original_file_name,
+        "content_type": content_type,
+        "size_bytes": int(size_bytes),
+        "uploaded_at": uploaded_at,
+        "url": f"/api/v1/notes/{encoded_note_id}/attachments/{encoded_file_name}",
+    }
 
 # --- Title options helper -----------------------------------------------------
 def _field_supplied(model_obj: Any, field_name: str) -> bool:
@@ -243,6 +497,186 @@ def _notes_csv_response(notes_data: list[dict[str, Any]], include_keywords: bool
     return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
 
 
+def _parse_keyword_tokens_inline(value: str) -> list[str]:
+    raw = value.strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    if not raw:
+        return []
+    out: list[str] = []
+    for part in raw.split(","):
+        token = part.strip().strip('"').strip("'")
+        if token:
+            out.append(token)
+    return out
+
+
+def _normalize_import_keywords(raw_keywords: Any) -> list[str]:
+    if raw_keywords is None:
+        return []
+    tokens: list[str] = []
+    if isinstance(raw_keywords, str):
+        tokens.extend(_parse_keyword_tokens_inline(raw_keywords))
+    elif isinstance(raw_keywords, list):
+        for item in raw_keywords:
+            text = _keyword_text_from_row(item)
+            if text:
+                tokens.append(text)
+    elif isinstance(raw_keywords, dict):
+        maybe = raw_keywords.get("keywords")
+        if maybe is not None:
+            return _normalize_import_keywords(maybe)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(token)
+    return deduped
+
+
+def _fallback_title_from_filename(file_name: str | None) -> str | None:
+    if not file_name:
+        return None
+    stem = Path(file_name).stem.strip()
+    if not stem:
+        return None
+    stem = stem.replace("_", " ").replace("-", " ").strip()
+    return stem[:255] if stem else None
+
+
+def _extract_json_note_rows(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("notes", "data", "items", "results"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                return [item for item in candidate if isinstance(item, dict)]
+        if any(key in payload for key in ("title", "content", "id", "metadata", "keywords")):
+            return [payload]
+    raise InputError(  # noqa: TRY003
+        "JSON import must be a note object, a note array, or an export wrapper containing notes/data/items/results."
+    )
+
+
+def _normalize_import_note_row(row: dict[str, Any], fallback_title: str | None = None) -> dict[str, Any]:
+    raw_id = row.get("id")
+    note_id = str(raw_id).strip() if raw_id is not None else None
+    if note_id == "":
+        note_id = None
+
+    title = _normalize_keyword_text(row.get("title"))
+    raw_content = row.get("content")
+    content = "" if raw_content is None else str(raw_content)
+
+    metadata = row.get("metadata")
+    metadata_keywords = metadata.get("keywords") if isinstance(metadata, dict) else None
+    keywords_provided = ("keywords" in row) or (metadata_keywords is not None)
+    keywords = _normalize_import_keywords(row.get("keywords", metadata_keywords))
+
+    if not title:
+        title = _normalize_keyword_text(fallback_title)
+    if not title:
+        first_line = next((line.strip() for line in content.splitlines() if line.strip()), "")
+        title = first_line[:255] if first_line else None
+    if not title:
+        raise InputError("Imported note is missing a title and usable content.")  # noqa: TRY003
+    if not content:
+        content = title
+
+    return {
+        "id": note_id,
+        "title": title[:255],
+        "content": content,
+        "keywords": keywords,
+        "keywords_provided": keywords_provided,
+    }
+
+
+def _extract_markdown_frontmatter_keywords(text: str) -> tuple[list[str], str]:
+    normalized = text.replace("\r\n", "\n").lstrip("\ufeff")
+    lines = normalized.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return [], normalized
+
+    end_index = None
+    for idx in range(1, min(len(lines), 2000)):
+        if lines[idx].strip() == "---":
+            end_index = idx
+            break
+    if end_index is None:
+        return [], normalized
+
+    keywords: list[str] = []
+    frontmatter_lines = lines[1:end_index]
+    idx = 0
+    while idx < len(frontmatter_lines):
+        stripped = frontmatter_lines[idx].strip()
+        lower = stripped.lower()
+        if lower.startswith("tags:") or lower.startswith("keywords:"):
+            _, _, value = stripped.partition(":")
+            inline_value = value.strip()
+            if inline_value:
+                keywords.extend(_parse_keyword_tokens_inline(inline_value))
+            else:
+                idx += 1
+                while idx < len(frontmatter_lines):
+                    nested = frontmatter_lines[idx].strip()
+                    if not nested.startswith("-"):
+                        idx -= 1
+                        break
+                    token = nested[1:].strip().strip('"').strip("'")
+                    if token:
+                        keywords.append(token)
+                    idx += 1
+        idx += 1
+
+    deduped = _normalize_import_keywords(keywords)
+    body = "\n".join(lines[end_index + 1 :])
+    return deduped, body
+
+
+def _parse_markdown_import_note(content: str, fallback_title: str | None = None) -> dict[str, Any]:
+    keywords, body = _extract_markdown_frontmatter_keywords(content)
+    lines = body.replace("\r\n", "\n").split("\n")
+
+    title: str | None = None
+    content_lines = lines
+    first_non_empty_index = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        first_non_empty_index = idx
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            content_lines = lines[idx + 1 :]
+        break
+
+    if not title:
+        title = _normalize_keyword_text(fallback_title)
+    if not title and first_non_empty_index is not None:
+        title = lines[first_non_empty_index].strip()[:255]
+        content_lines = lines[first_non_empty_index + 1 :]
+    if not title:
+        title = "Imported note"
+
+    note_content = "\n".join(content_lines).strip("\n")
+    if not note_content:
+        note_content = title
+
+    return {
+        "id": None,
+        "title": title[:255],
+        "content": note_content,
+        "keywords": keywords,
+        "keywords_provided": len(keywords) > 0,
+    }
+
+
 # --- Keyword attach helper ----------------------------------------------------
 def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
     note_ids = [nd.get("id") for nd in notes_data if isinstance(nd, dict) and nd.get("id")]
@@ -307,7 +741,12 @@ def _get_or_create_keyword_row(db: CharactersRAGDB, keyword_text: Any) -> Option
     return db.get_keyword_by_id(kw_id)
 
 
-def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) -> None:
+def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) -> dict[str, Any]:
+    """Sync note keywords and return a summary of attachment failures.
+
+    The note save itself should succeed even if one or more keyword operations fail.
+    This summary allows clients to surface a partial-success warning.
+    """
     desired: dict[str, str] = {}
     for kw in keywords:
         text = _normalize_keyword_text(kw)
@@ -332,9 +771,12 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
         existing_by_key[text.lower()] = row
 
     desired_keys = set(desired.keys())
+    failed_keywords: list[str] = []
+    attached_count = 0
 
     for key, row in existing_by_key.items():
         if key in desired_keys:
+            attached_count += 1
             continue
         kw_id = row.get("id") if isinstance(row, dict) else None
         if kw_id is None:
@@ -351,8 +793,19 @@ def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: list[str]) 
             kw_row = _get_or_create_keyword_row(db, text)
             if kw_row and kw_row.get("id") is not None:
                 db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row["id"]))
+                attached_count += 1
+            else:
+                failed_keywords.append(text)
         except _NOTES_NONCRITICAL_EXCEPTIONS as err:
+            failed_keywords.append(text)
             logger.warning(f"Keyword attach failed for '{text}' on note {note_id}: {err}")
+
+    return {
+        "failed_count": len(failed_keywords),
+        "failed_keywords": failed_keywords,
+        "requested_count": len(desired),
+        "attached_count": attached_count,
+    }
 
 
 def _normalize_keyword_tokens(tokens: Optional[list[str]]) -> list[str]:
@@ -372,6 +825,101 @@ def _normalize_keyword_tokens(tokens: Optional[list[str]]) -> list[str]:
         seen.add(key)
         out.append(key)
     return out
+
+
+def _attach_collection_keywords_inline(
+    db: CharactersRAGDB,
+    collection_dict: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        collection_id_raw = collection_dict.get("id")
+        if collection_id_raw is None:
+            return collection_dict
+        collection_id = int(collection_id_raw)
+        collection_dict["keywords"] = db.get_keywords_for_collection(collection_id=collection_id)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as err:
+        logger.warning(
+            "Failed to attach keywords for collection {}: {}",
+            collection_dict.get("id"),
+            err,
+        )
+    return collection_dict
+
+
+def _sync_collection_keywords(
+    db: CharactersRAGDB,
+    collection_id: int,
+    keywords: list[str],
+) -> dict[str, Any]:
+    """Sync keyword links for a collection using desired keyword texts."""
+    desired: dict[str, str] = {}
+    for kw in keywords:
+        text = _normalize_keyword_text(kw)
+        if not text:
+            continue
+        key = text.lower()
+        if key not in desired:
+            desired[key] = text
+
+    try:
+        existing_rows = db.get_keywords_for_collection(collection_id=collection_id)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as err:
+        logger.warning("Collection keyword lookup failed for {}: {}", collection_id, err)
+        existing_rows = []
+
+    existing_by_key: dict[str, dict[str, Any]] = {}
+    for row in existing_rows:
+        text = _keyword_text_from_row(row)
+        if not text:
+            continue
+        existing_by_key[text.lower()] = row
+
+    desired_keys = set(desired.keys())
+    failed_keywords: list[str] = []
+    linked_count = 0
+
+    for key, row in existing_by_key.items():
+        if key in desired_keys:
+            linked_count += 1
+            continue
+        kw_id = row.get("id") if isinstance(row, dict) else None
+        if kw_id is None:
+            continue
+        try:
+            db.unlink_collection_from_keyword(collection_id=collection_id, keyword_id=int(kw_id))
+        except _NOTES_NONCRITICAL_EXCEPTIONS as err:
+            logger.warning(
+                "Collection keyword unlink failed for collection {}, keyword {}: {}",
+                collection_id,
+                kw_id,
+                err,
+            )
+
+    for key, text in desired.items():
+        if key in existing_by_key:
+            continue
+        try:
+            kw_row = _get_or_create_keyword_row(db, text)
+            if kw_row and kw_row.get("id") is not None:
+                db.link_collection_to_keyword(collection_id=collection_id, keyword_id=int(kw_row["id"]))
+                linked_count += 1
+            else:
+                failed_keywords.append(text)
+        except _NOTES_NONCRITICAL_EXCEPTIONS as err:
+            failed_keywords.append(text)
+            logger.warning(
+                "Collection keyword link failed for collection {}, keyword '{}': {}",
+                collection_id,
+                text,
+                err,
+            )
+
+    return {
+        "failed_count": len(failed_keywords),
+        "failed_keywords": failed_keywords,
+        "requested_count": len(desired),
+        "linked_count": linked_count,
+    }
 
 
 # --- Helper for Exception Handling (largely the same) ---
@@ -574,19 +1122,12 @@ async def create_note(
         except _NOTES_NONCRITICAL_EXCEPTIONS:
             pass
 
-        # Handle optional keywords: create if needed and link to this note
+        keyword_sync_summary: dict[str, Any] | None = None
+        # Handle optional keywords without failing note creation on partial errors.
         try:
             kw_list = note_in.normalized_keywords if hasattr(note_in, 'normalized_keywords') else None
             if kw_list:
-                for kw in kw_list:
-                    try:
-                        # Find or create keyword (case-insensitive uniqueness enforced by DB schema)
-                        kw_row = _get_or_create_keyword_row(db, kw)
-                        if kw_row and kw_row.get('id') is not None:
-                            db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row['id']))
-                    except _NOTES_NONCRITICAL_EXCEPTIONS as kw_err:
-                        # Log but do not fail the note creation if a single keyword fails
-                        logger.warning(f"Keyword attach failed for '{kw}' on note {note_id}: {kw_err}")
+                keyword_sync_summary = _sync_note_keywords(db, note_id=note_id, keywords=kw_list)
         except _NOTES_NONCRITICAL_EXCEPTIONS as kw_outer_err:
             logger.warning(f"Keyword processing encountered an issue for note {note_id}: {kw_outer_err}")
 
@@ -598,6 +1139,11 @@ async def create_note(
                                 detail="Note created but could not be retrieved.")
         # Attach keywords inline
         created_note_data = _attach_keywords_inline(db, created_note_data)
+        if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
+            created_note_data["keyword_sync"] = {
+                "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
+                "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
+            }
 
         logger.info(f"Note '{note_id}' created successfully for user (DB client_id: {db.client_id}).")
         return created_note_data  # Pydantic will convert dict to NoteResponse (including keywords)
@@ -987,6 +1533,156 @@ async def export_notes_post_csv(
         handle_db_errors(e, "notes export (POST csv)")
 
 
+@router.post(
+    "/import",
+    response_model=NotesImportResponse,
+    summary="Import notes from JSON or Markdown",
+    tags=["notes"],
+)
+async def import_notes(
+        payload: NotesImportRequest,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.bulk_create")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.bulk_create")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.import",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        files: list[NotesImportFileResult] = []
+        totals = {
+            "detected_notes": 0,
+            "created_count": 0,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+        }
+
+        for item in payload.items:
+            file_result = NotesImportFileResult(
+                file_name=item.file_name,
+                source_format=item.format,
+            )
+            fallback_title = _fallback_title_from_filename(item.file_name)
+            parsed_notes: list[dict[str, Any]] = []
+
+            try:
+                if item.format == "json":
+                    raw_payload = json.loads(item.content)
+                    raw_rows = _extract_json_note_rows(raw_payload)
+                    file_result.detected_notes = len(raw_rows)
+                    for row_index, row in enumerate(raw_rows, start=1):
+                        try:
+                            parsed_notes.append(_normalize_import_note_row(row, fallback_title=fallback_title))
+                        except _NOTES_NONCRITICAL_EXCEPTIONS as row_err:
+                            file_result.failed_count += 1
+                            file_result.errors.append(f"Row {row_index}: {row_err}")
+                else:
+                    file_result.detected_notes = 1
+                    parsed_notes = [_parse_markdown_import_note(item.content, fallback_title=fallback_title)]
+            except json.JSONDecodeError as decode_err:
+                file_result.failed_count += 1
+                file_result.errors.append(f"JSON parse error: {decode_err.msg}")
+            except _NOTES_NONCRITICAL_EXCEPTIONS as parse_err:
+                file_result.failed_count += 1
+                file_result.errors.append(f"Could not parse import content: {parse_err}")
+
+            for note_index, parsed_note in enumerate(parsed_notes, start=1):
+                try:
+                    imported_id = parsed_note.get("id")
+                    existing_note = db.get_note_by_id(imported_id) if imported_id else None
+
+                    if existing_note and payload.duplicate_strategy == "skip":
+                        file_result.skipped_count += 1
+                        continue
+
+                    if existing_note and payload.duplicate_strategy == "overwrite":
+                        expected_version = int(existing_note.get("version", 1))
+                        db.update_note(
+                            note_id=str(imported_id),
+                            update_data={
+                                "title": parsed_note["title"],
+                                "content": parsed_note["content"],
+                            },
+                            expected_version=expected_version,
+                        )
+                        if parsed_note.get("keywords_provided"):
+                            _sync_note_keywords(
+                                db,
+                                note_id=str(imported_id),
+                                keywords=parsed_note.get("keywords", []),
+                            )
+                        file_result.updated_count += 1
+                        continue
+
+                    create_with_id = None if payload.duplicate_strategy == "create_copy" else imported_id
+                    created_note_id = db.add_note(
+                        title=parsed_note["title"],
+                        content=parsed_note["content"],
+                        note_id=create_with_id,
+                    )
+                    if not created_note_id:
+                        raise CharactersRAGDBError("Import create returned no note ID.")  # noqa: TRY003
+                    if parsed_note.get("keywords"):
+                        _sync_note_keywords(
+                            db,
+                            note_id=str(created_note_id),
+                            keywords=parsed_note.get("keywords", []),
+                        )
+                    file_result.created_count += 1
+                except ConflictError as conflict_err:
+                    # If "create_copy" still conflicts (for example, stale imported ID edge case),
+                    # retry once without imported ID before surfacing a failure.
+                    if payload.duplicate_strategy == "create_copy":
+                        try:
+                            created_note_id = db.add_note(
+                                title=parsed_note["title"],
+                                content=parsed_note["content"],
+                                note_id=None,
+                            )
+                            if not created_note_id:
+                                raise CharactersRAGDBError("Import create-copy returned no note ID.")  # noqa: TRY003
+                            if parsed_note.get("keywords"):
+                                _sync_note_keywords(
+                                    db,
+                                    note_id=str(created_note_id),
+                                    keywords=parsed_note.get("keywords", []),
+                                )
+                            file_result.created_count += 1
+                            continue
+                        except _NOTES_NONCRITICAL_EXCEPTIONS as retry_err:
+                            file_result.failed_count += 1
+                            file_result.errors.append(f"Note {note_index}: {retry_err}")
+                            continue
+                    file_result.failed_count += 1
+                    file_result.errors.append(f"Note {note_index}: {conflict_err}")
+                except _NOTES_NONCRITICAL_EXCEPTIONS as note_err:
+                    file_result.failed_count += 1
+                    file_result.errors.append(f"Note {note_index}: {note_err}")
+
+            totals["detected_notes"] += file_result.detected_notes
+            totals["created_count"] += file_result.created_count
+            totals["updated_count"] += file_result.updated_count
+            totals["skipped_count"] += file_result.skipped_count
+            totals["failed_count"] += file_result.failed_count
+            files.append(file_result)
+
+        return NotesImportResponse(files=files, **totals)
+    except HTTPException:
+        raise
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "notes import")
+
+
 @router.get(
     "/keywords",
     response_model=list[KeywordResponse],
@@ -998,6 +1694,10 @@ async def list_keywords_endpoint_no_trailing_slash(
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
+        include_note_counts: bool = Query(
+            False,
+            description="If true, include the active note count linked to each keyword"
+        ),
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
         _: None = Depends(rbac_rate_limit("keywords.list")),
@@ -1008,9 +1708,591 @@ async def list_keywords_endpoint_no_trailing_slash(
         db=db,
         limit=limit,
         offset=offset,
+        include_note_counts=include_note_counts,
         rate_limiter=rate_limiter,
         current_user=current_user,
     )
+
+
+@router.get(
+    "/collections",
+    response_model=KeywordCollectionsListResponse,
+    summary="List keyword collections for the current user",
+    tags=["Notes Collections"],
+)
+@router.get(
+    "/collections/",
+    response_model=KeywordCollectionsListResponse,
+    summary="List keyword collections for the current user",
+    tags=["Notes Collections"],
+    include_in_schema=False,
+)
+async def list_keyword_collections_endpoint(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        include_keywords: bool = Query(
+            False,
+            description="If true, include linked keywords inline per collection."
+        ),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.list")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.list",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        collections_data = db.list_keyword_collections(limit=limit, offset=offset)
+        if include_keywords:
+            collections_data = [
+                _attach_collection_keywords_inline(db, dict(row))
+                for row in collections_data
+            ]
+
+        return {
+            "collections": collections_data,
+            "count": len(collections_data),
+            "limit": limit,
+            "offset": offset,
+            "total": None,
+        }
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.post(
+    "/collections",
+    response_model=KeywordCollectionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a keyword collection",
+    tags=["Notes Collections"],
+)
+@router.post(
+    "/collections/",
+    response_model=KeywordCollectionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a keyword collection",
+    tags=["Notes Collections"],
+    include_in_schema=False,
+)
+async def create_keyword_collection_endpoint(
+        collection_in: KeywordCollectionCreate,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.create")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.create")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.create",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        collection_name = str(collection_in.name or "").strip()
+        if not collection_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Collection name cannot be empty.")
+
+        collection_id = db.add_keyword_collection(
+            name=collection_name,
+            parent_id=collection_in.parent_id,
+        )
+        if collection_id is None:
+            raise CharactersRAGDBError("Collection creation failed to return an ID.")
+
+        kw_list = collection_in.normalized_keywords or []
+        if kw_list:
+            _sync_collection_keywords(db, collection_id=int(collection_id), keywords=kw_list)
+
+        collection_data = db.get_keyword_collection_by_id(collection_id=int(collection_id))
+        if not collection_data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Collection created but could not be retrieved."
+            )
+
+        return _attach_collection_keywords_inline(db, collection_data)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.get(
+    "/collections/keyword-links",
+    response_model=CollectionKeywordLinksResponse,
+    summary="List collection-keyword links",
+    tags=["Notes Collections"],
+)
+async def list_collection_keyword_links_endpoint(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        limit: int = Query(1000, ge=1, le=5000),
+        offset: int = Query(0, ge=0),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.list")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.list",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        cursor = db.execute_query(
+            "SELECT collection_id, keyword_id FROM collection_keywords ORDER BY collection_id ASC, keyword_id ASC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        rows = cursor.fetchall()
+        links = [
+            {
+                "collection_id": int(row["collection_id"]),
+                "keyword_id": int(row["keyword_id"]),
+            }
+            for row in rows
+        ]
+        return {"links": links}
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.patch(
+    "/collections/{collection_id}",
+    response_model=KeywordCollectionResponse,
+    summary="Update a keyword collection",
+    tags=["Notes Collections"],
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
+        status.HTTP_409_CONFLICT: {"model": DetailResponse},
+    },
+)
+async def update_keyword_collection_endpoint(
+        collection_id: int,
+        collection_in: KeywordCollectionUpdate,
+        expected_version: int | None = Header(
+            default=None,
+            description="Expected collection version for optimistic locking.",
+        ),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.update")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.update")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.update",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        current_collection = db.get_keyword_collection_by_id(collection_id=collection_id)
+        if not current_collection:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+
+        update_data: dict[str, Any] = {}
+        if _field_supplied(collection_in, "name"):
+            normalized_name = str(collection_in.name or "").strip()
+            if not normalized_name:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Collection name cannot be empty.")
+            update_data["name"] = normalized_name
+        if _field_supplied(collection_in, "parent_id"):
+            update_data["parent_id"] = collection_in.parent_id
+
+        keywords_supplied = _field_supplied(collection_in, "keywords")
+        kw_list = collection_in.normalized_keywords if keywords_supplied else None
+
+        if not update_data and not keywords_supplied:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes provided.")
+
+        if update_data:
+            version_to_use = (
+                expected_version
+                if expected_version is not None
+                else int(current_collection.get("version", 1))
+            )
+            db.update_keyword_collection(
+                collection_id=collection_id,
+                update_data=update_data,
+                expected_version=version_to_use,
+            )
+
+        if keywords_supplied:
+            _sync_collection_keywords(db, collection_id=collection_id, keywords=kw_list or [])
+
+        updated_collection = db.get_keyword_collection_by_id(collection_id=collection_id)
+        if not updated_collection:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return _attach_collection_keywords_inline(db, updated_collection)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.delete(
+    "/collections/{collection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Soft-delete a keyword collection",
+    tags=["Notes Collections"],
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
+        status.HTTP_409_CONFLICT: {"model": DetailResponse},
+    },
+)
+async def delete_keyword_collection_endpoint(
+        collection_id: int,
+        expected_version: int | None = Header(
+            default=None,
+            description="Expected collection version for optimistic locking.",
+        ),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.delete")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.delete")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.delete",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        current_collection = db.get_keyword_collection_by_id(collection_id=collection_id)
+        if not current_collection:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+
+        version_to_use = (
+            expected_version
+            if expected_version is not None
+            else int(current_collection.get("version", 1))
+        )
+        db.soft_delete_keyword_collection(
+            collection_id=collection_id,
+            expected_version=version_to_use,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.post(
+    "/collections/{collection_id}/keywords/{keyword_id}",
+    response_model=CollectionKeywordLinkResponse,
+    summary="Link a keyword to a collection",
+    tags=["Notes Collections"],
+)
+async def link_collection_to_keyword_endpoint(
+        collection_id: int,
+        keyword_id: int,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.link_keyword")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.link_keyword")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.link_keyword",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        collection = db.get_keyword_collection_by_id(collection_id=collection_id)
+        if not collection:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        keyword = db.get_keyword_by_id(keyword_id=keyword_id)
+        if not keyword:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found")
+
+        linked = db.link_collection_to_keyword(collection_id=collection_id, keyword_id=keyword_id)
+        msg = "Keyword linked to collection." if linked else "Link already exists or was created."
+        return CollectionKeywordLinkResponse(success=True, message=msg)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.delete(
+    "/collections/{collection_id}/keywords/{keyword_id}",
+    response_model=CollectionKeywordLinkResponse,
+    summary="Unlink a keyword from a collection",
+    tags=["Notes Collections"],
+)
+async def unlink_collection_from_keyword_endpoint(
+        collection_id: int,
+        keyword_id: int,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.unlink_keyword")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.unlink_keyword")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.unlink_keyword",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        success = db.unlink_collection_from_keyword(collection_id=collection_id, keyword_id=keyword_id)
+        msg = "Keyword unlinked from collection." if success else "Link not found or no action taken."
+        return CollectionKeywordLinkResponse(success=success, message=msg)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.get(
+    "/collections/{collection_id}/keywords",
+    response_model=list[KeywordResponse],
+    summary="List keywords linked to a collection",
+    tags=["Notes Collections"],
+)
+@router.get(
+    "/collections/{collection_id}/keywords/",
+    response_model=list[KeywordResponse],
+    summary="List keywords linked to a collection",
+    tags=["Notes Collections"],
+    include_in_schema=False,
+)
+async def list_keywords_for_collection_endpoint(
+        collection_id: int,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.keywords.list")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.keywords.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.keywords.list",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        collection = db.get_keyword_collection_by_id(collection_id=collection_id)
+        if not collection:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return db.get_keywords_for_collection(collection_id=collection_id)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "collection")
+
+
+@router.get(
+    "/conversations/keyword-links",
+    response_model=ConversationKeywordLinksResponse,
+    summary="List conversation-keyword links",
+    tags=["Notes Linking"],
+)
+async def list_conversation_keyword_links_endpoint(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        ids: str | None = Query(
+            default=None,
+            description="Optional comma-separated conversation IDs.",
+        ),
+        limit: int = Query(1000, ge=1, le=5000),
+        offset: int = Query(0, ge=0),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.list")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.list",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        conversation_ids = []
+        if ids:
+            conversation_ids = [
+                token.strip()
+                for token in ids.split(",")
+                if token and token.strip()
+            ]
+
+        links: list[dict[str, Any]] = []
+        if conversation_ids:
+            for conversation_id in conversation_ids:
+                kw_rows = db.get_keywords_for_conversation(conversation_id=conversation_id)
+                for kw in kw_rows:
+                    kw_id = kw.get("id") if isinstance(kw, dict) else None
+                    if kw_id is None:
+                        continue
+                    links.append(
+                        {
+                            "conversation_id": conversation_id,
+                            "keyword_id": int(kw_id),
+                        }
+                    )
+        else:
+            cursor = db.execute_query(
+                "SELECT conversation_id, keyword_id FROM conversation_keywords ORDER BY conversation_id ASC, keyword_id ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+            rows = cursor.fetchall()
+            links = [
+                {
+                    "conversation_id": str(row["conversation_id"]),
+                    "keyword_id": int(row["keyword_id"]),
+                }
+                for row in rows
+            ]
+        return {"links": links}
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "conversation-keyword link")
+
+
+@router.post(
+    "/conversations/{conversation_id}/keywords/{keyword_id}",
+    response_model=ConversationKeywordLinkResponse,
+    summary="Link a keyword to a conversation",
+    tags=["Notes Linking"],
+    responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}},
+)
+async def link_conversation_to_keyword_endpoint(
+        conversation_id: str,
+        keyword_id: int,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.link_keyword")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.link_keyword")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.link_keyword",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        conv = db.get_conversation_by_id(conversation_id)
+        if not conv:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        keyword = db.get_keyword_by_id(keyword_id)
+        if not keyword:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found")
+
+        linked = db.link_conversation_to_keyword(conversation_id=conversation_id, keyword_id=keyword_id)
+        msg = "Keyword linked to conversation." if linked else "Link already exists or was created."
+        return ConversationKeywordLinkResponse(success=True, message=msg)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "conversation-keyword link")
+
+
+@router.delete(
+    "/conversations/{conversation_id}/keywords/{keyword_id}",
+    response_model=ConversationKeywordLinkResponse,
+    summary="Unlink a keyword from a conversation",
+    tags=["Notes Linking"],
+)
+async def unlink_conversation_from_keyword_endpoint(
+        conversation_id: str,
+        keyword_id: int,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.unlink_keyword")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.unlink_keyword")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.unlink_keyword",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        success = db.unlink_conversation_from_keyword(conversation_id=conversation_id, keyword_id=keyword_id)
+        msg = "Keyword unlinked from conversation." if success else "Link not found or no action taken."
+        return ConversationKeywordLinkResponse(success=success, message=msg)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "conversation-keyword link")
+
+
+@router.get(
+    "/conversations/{conversation_id}/keywords",
+    response_model=list[KeywordResponse],
+    summary="List keywords linked to a conversation",
+    tags=["Notes Linking"],
+)
+@router.get(
+    "/conversations/{conversation_id}/keywords/",
+    response_model=list[KeywordResponse],
+    summary="List keywords linked to a conversation",
+    tags=["Notes Linking"],
+    include_in_schema=False,
+)
+async def list_keywords_for_conversation_endpoint(
+        conversation_id: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.keywords.list")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.keywords.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.keywords.list",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+
+        conv = db.get_conversation_by_id(conversation_id=conversation_id)
+        if not conv:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        return db.get_keywords_for_conversation(conversation_id=conversation_id)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "conversation-keyword link")
 
 
 @router.get(
@@ -1056,11 +2338,221 @@ async def get_note(
     return note_data
 
 
+@router.post(
+    "/{note_id}/attachments",
+    response_model=NoteAttachmentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload an attachment for a note",
+    tags=["notes"],
+)
+async def upload_note_attachment(
+        note_id: str,
+        file: UploadFile = File(...),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.attachments.upload")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.attachments.upload")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.attachments.upload",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        _ensure_note_exists_or_404(db, note_id)
+        if not file.filename:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Attachment filename is required")
+        safe_file_name = _sanitize_attachment_file_name(file.filename)
+        attachment_dir = _get_note_attachments_dir(current_user.id, note_id, create=True)
+        target_path = _resolve_unique_attachment_path(attachment_dir, safe_file_name)
+        payload = await file.read(_NOTES_ATTACHMENT_MAX_BYTES + 1)
+        if len(payload) == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Attachment file is empty")
+        if len(payload) > _NOTES_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Attachment exceeds maximum size of {_NOTES_ATTACHMENT_MAX_BYTES} bytes",
+            )
+        target_path.write_bytes(payload)
+        content_type = file.content_type or mimetypes.guess_type(target_path.name)[0]
+        uploaded_at = datetime.now(timezone.utc)
+        _write_attachment_metadata(
+            target_path,
+            original_file_name=file.filename,
+            content_type=content_type,
+            size_bytes=len(payload),
+            uploaded_at=uploaded_at,
+        )
+        logger.info(
+            "User {} uploaded attachment '{}' for note '{}'",
+            current_user.id,
+            target_path.name,
+            note_id,
+        )
+        return _to_attachment_response(note_id, target_path)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note attachment")
+    finally:
+        try:
+            await file.close()
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            pass
+
+
+@router.get(
+    "/{note_id}/attachments",
+    response_model=NoteAttachmentsListResponse,
+    summary="List attachments for a note",
+    tags=["notes"],
+)
+async def list_note_attachments(
+        note_id: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.attachments.list")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.attachments.list")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.attachments.list",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        _ensure_note_exists_or_404(db, note_id)
+        attachment_dir = _get_note_attachments_dir(current_user.id, note_id, create=False)
+        if not attachment_dir.exists():
+            return {"note_id": note_id, "attachments": [], "count": 0}
+        attachments: list[dict[str, Any]] = []
+        for item in sorted(attachment_dir.iterdir(), key=lambda p: p.name.lower()):
+            if not item.is_file():
+                continue
+            if item.name.endswith(_NOTES_ATTACHMENT_META_SUFFIX):
+                continue
+            attachments.append(_to_attachment_response(note_id, item))
+        return {
+            "note_id": note_id,
+            "attachments": attachments,
+            "count": len(attachments),
+        }
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note attachment")
+
+
+@router.get(
+    "/{note_id}/attachments/{file_name}",
+    response_class=FileResponse,
+    summary="Download an attachment for a note",
+    tags=["notes"],
+)
+async def download_note_attachment(
+        note_id: str,
+        file_name: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.attachments.get")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.attachments.get")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.attachments.get",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        _ensure_note_exists_or_404(db, note_id)
+        safe_name = _sanitize_attachment_file_name(file_name)
+        if safe_name != file_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment filename")
+        attachment_dir = _get_note_attachments_dir(current_user.id, note_id, create=False)
+        file_path = (attachment_dir / safe_name).resolve()
+        try:
+            file_path.relative_to(attachment_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment path") from exc
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+        metadata = _read_attachment_metadata(file_path)
+        content_type = metadata.get("content_type") or mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        download_name = str(metadata.get("original_file_name") or file_path.name)
+        return FileResponse(
+            path=str(file_path),
+            filename=download_name,
+            media_type=content_type,
+            content_disposition_type="inline",
+        )
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note attachment")
+
+
+@router.delete(
+    "/{note_id}/attachments/{file_name}",
+    response_model=DetailResponse,
+    summary="Delete an attachment from a note",
+    tags=["notes"],
+)
+async def delete_note_attachment(
+        note_id: str,
+        file_name: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.attachments.delete")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.attachments.delete")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for notes.attachments.delete",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        _ensure_note_exists_or_404(db, note_id)
+        safe_name = _sanitize_attachment_file_name(file_name)
+        if safe_name != file_name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment filename")
+        attachment_dir = _get_note_attachments_dir(current_user.id, note_id, create=False)
+        file_path = (attachment_dir / safe_name).resolve()
+        try:
+            file_path.relative_to(attachment_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment path") from exc
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+        metadata_path = _attachment_metadata_path(file_path)
+        file_path.unlink(missing_ok=False)
+        if metadata_path.exists():
+            metadata_path.unlink(missing_ok=True)
+        logger.info("User {} deleted attachment '{}' for note '{}'", current_user.id, safe_name, note_id)
+        return DetailResponse(detail="Attachment deleted")
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "note attachment")
+
+
 async def _list_keywords_impl(
         *,
         db: CharactersRAGDB,
         limit: int,
         offset: int,
+        include_note_counts: bool,
         rate_limiter: RateLimiter,
         current_user: User,
 ):
@@ -1075,6 +2567,20 @@ async def _list_keywords_impl(
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.debug(f"User (DB client_id: {db.client_id}) listing keywords: limit={limit}, offset={offset}")
         keywords_data = db.list_keywords(limit=limit, offset=offset)
+        if include_note_counts and keywords_data:
+            keyword_ids: list[int] = []
+            for row in keywords_data:
+                try:
+                    keyword_ids.append(int(row.get("id")))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            counts = db.get_note_counts_for_keywords(keyword_ids)
+            for row in keywords_data:
+                try:
+                    keyword_id = int(row.get("id"))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                row["note_count"] = counts.get(keyword_id, 0)
         return keywords_data
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "keywords list")
@@ -1208,14 +2714,20 @@ async def update_note(
             if not success:
                 raise CharactersRAGDBError("Note update reported non-success without specific exception.")
 
+        keyword_sync_summary: dict[str, Any] | None = None
         if keywords_supplied:
-            _sync_note_keywords(db, note_id=note_id, keywords=kw_list or [])
+            keyword_sync_summary = _sync_note_keywords(db, note_id=note_id, keywords=kw_list or [])
 
         updated_note_data = db.get_note_by_id(note_id=note_id)
         if not updated_note_data:
             logger.error(f"Note '{note_id}' not found after successful update for user (DB client_id: {db.client_id}).")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
+        if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
+            updated_note_data["keyword_sync"] = {
+                "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
+                "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
+            }
         logger.info(
             f"Note '{note_id}' updated successfully for user (DB client_id: {db.client_id}) to version {updated_note_data['version']}.")
         return updated_note_data
@@ -1333,13 +2845,19 @@ async def patch_note(
             if not success:
                 raise CharactersRAGDBError("Note update reported non-success without specific exception.")
 
+        keyword_sync_summary: dict[str, Any] | None = None
         if keywords_supplied:
-            _sync_note_keywords(db, note_id=note_id, keywords=kw_list or [])
+            keyword_sync_summary = _sync_note_keywords(db, note_id=note_id, keywords=kw_list or [])
 
         updated_note_data = db.get_note_by_id(note_id=note_id)
         if not updated_note_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
+        if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
+            updated_note_data["keyword_sync"] = {
+                "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
+                "failed_keywords": list(keyword_sync_summary.get("failed_keywords", [])),
+            }
         return updated_note_data
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
@@ -1739,6 +3257,10 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
+        include_note_counts: bool = Query(
+            False,
+            description="If true, include the active note count linked to each keyword"
+        ),
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
         _: None = Depends(rbac_rate_limit("keywords.list")),
@@ -1747,9 +3269,101 @@ async def list_keywords_endpoint(  # Renamed to avoid conflict
         db=db,
         limit=limit,
         offset=offset,
+        include_note_counts=include_note_counts,
         rate_limiter=rate_limiter,
         current_user=current_user,
     )
+
+
+@router.patch(
+    "/keywords/{keyword_id}",
+    response_model=KeywordResponse,
+    summary="Rename a keyword",
+    tags=["Keywords (for Notes)"],
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
+        status.HTTP_409_CONFLICT: {"model": DetailResponse},
+    },
+)
+async def rename_keyword(
+        keyword_id: int,
+        keyword_in: KeywordUpdate,
+        expected_version: int = Header(..., description="Expected keyword version for optimistic locking"),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.update")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.update")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for keywords.update",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        logger.info(
+            "User (DB client_id: {}) renaming keyword {} to '{}'",
+            db.client_id,
+            keyword_id,
+            keyword_in.keyword,
+        )
+        return db.rename_keyword(
+            keyword_id=keyword_id,
+            new_keyword_text=keyword_in.keyword,
+            expected_version=expected_version,
+        )
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "keyword")
+
+
+@router.post(
+    "/keywords/{keyword_id}/merge",
+    response_model=KeywordMergeResponse,
+    summary="Merge keyword into another keyword",
+    tags=["Keywords (for Notes)"],
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": DetailResponse},
+        status.HTTP_409_CONFLICT: {"model": DetailResponse},
+    },
+)
+async def merge_keyword(
+        keyword_id: int,
+        merge_in: KeywordMergeRequest,
+        expected_version: int = Header(..., description="Expected source keyword version for optimistic locking"),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.merge")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.merge")
+        except _NOTES_NONCRITICAL_EXCEPTIONS:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for keywords.merge",
+                headers={"Retry-After": str(meta.get("retry_after", 60))}
+            )
+        logger.info(
+            "User (DB client_id: {}) merging keyword {} into {}",
+            db.client_id,
+            keyword_id,
+            merge_in.target_keyword_id,
+        )
+        return db.merge_keywords(
+            source_keyword_id=keyword_id,
+            target_keyword_id=merge_in.target_keyword_id,
+            expected_source_version=expected_version,
+            expected_target_version=merge_in.expected_target_version,
+        )
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        handle_db_errors(e, "keyword")
 
 
 @router.delete(

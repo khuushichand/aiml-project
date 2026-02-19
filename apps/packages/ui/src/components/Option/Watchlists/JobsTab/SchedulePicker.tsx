@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from "react"
 import { Button, Input, InputNumber, Select, Switch } from "antd"
 import { Clock } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { CronDisplay } from "../shared"
+import { CronDisplay, WatchlistsHelpTooltip } from "../shared"
+import { trackWatchlistsPreventionTelemetry } from "@/utils/watchlists-prevention-telemetry"
 import {
   buildCronFromPreset,
   createDefaultPresetState,
@@ -11,6 +12,7 @@ import {
   type SchedulePresetKey,
   type WeekdayToken
 } from "./schedule-utils"
+import { analyzeScheduleFrequency, MIN_SCHEDULE_INTERVAL_MINUTES } from "./schedule-frequency"
 
 interface SchedulePickerProps {
   value: string | null | undefined
@@ -54,6 +56,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
   const [customCron, setCustomCron] = useState(value || "")
   const [advancedMode, setAdvancedMode] = useState(false)
   const [presetState, setPresetState] = useState<PresetScheduleState>(createDefaultPresetState())
+  const [customValidationError, setCustomValidationError] = useState<string | null>(null)
 
   useEffect(() => {
     setCustomCron(value || "")
@@ -151,6 +154,7 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
   const handleAdvancedToggle = (checked: boolean) => {
     setAdvancedMode(checked)
     if (!checked) {
+      setCustomValidationError(null)
       applyPreset(presetState)
     } else {
       setCustomCron(value || buildCronFromPreset(presetState))
@@ -160,11 +164,31 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
   const handleCustomApply = () => {
     const normalized = customCron.trim()
     if (!normalized) return
+    const frequency = analyzeScheduleFrequency(normalized, MIN_SCHEDULE_INTERVAL_MINUTES)
+    if (frequency.tooFrequent) {
+      void trackWatchlistsPreventionTelemetry({
+        type: "watchlists_validation_blocked",
+        surface: "schedule_picker",
+        rule: "schedule_too_frequent",
+        remediation: "increase_interval",
+        minutes: MIN_SCHEDULE_INTERVAL_MINUTES
+      })
+      setCustomValidationError(
+        t(
+          "watchlists:schedule.tooFrequent",
+          "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
+          { minutes: MIN_SCHEDULE_INTERVAL_MINUTES }
+        )
+      )
+      return
+    }
+    setCustomValidationError(null)
     onChange(normalized)
   }
 
   const handleClear = () => {
     setCustomCron("")
+    setCustomValidationError(null)
     setPresetState(createDefaultPresetState())
     setAdvancedMode(false)
     onChange(null)
@@ -247,8 +271,9 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
 
       <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
         <div>
-          <div className="text-sm font-medium">
+          <div className="flex items-center gap-1 text-sm font-medium">
             {t("watchlists:schedule.advancedLabel", "Advanced cron expression")}
+            <WatchlistsHelpTooltip topic="cron" />
           </div>
           <div className="text-xs text-text-muted">
             {t(
@@ -267,7 +292,10 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
           </div>
           <div className="flex gap-2">
             <Input
-              placeholder={t("watchlists:schedule.cronPlaceholder", "Cron expression (e.g., 0 9 * * MON)")}
+              placeholder={t(
+                "watchlists:schedule.cronPlaceholder",
+                "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+              )}
               value={customCron}
               onChange={(event) => setCustomCron(event.target.value)}
               className="flex-1"
@@ -277,6 +305,9 @@ export const SchedulePicker: React.FC<SchedulePickerProps> = ({
               {t("watchlists:schedule.apply", "Apply")}
             </Button>
           </div>
+          {customValidationError ? (
+            <div className="mt-2 text-xs text-danger">{customValidationError}</div>
+          ) : null}
           {customCron.trim().length > 0 && (
             <div className="mt-2 text-sm text-text-muted">
               <span className="font-medium">{t("watchlists:schedule.preview", "Preview")}:</span>{" "}

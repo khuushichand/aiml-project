@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ManageTab } from "../ManageTab"
 import {
+  useCreateQuizMutation,
   useCreateQuestionMutation,
   useDeleteQuestionMutation,
   useDeleteQuizMutation,
@@ -44,6 +45,7 @@ vi.mock("react-i18next", () => ({
 vi.mock("../../hooks", () => ({
   useQuizzesQuery: vi.fn(),
   useQuestionsQuery: vi.fn(),
+  useCreateQuizMutation: vi.fn(),
   useDeleteQuizMutation: vi.fn(),
   useUpdateQuizMutation: vi.fn(),
   useCreateQuestionMutation: vi.fn(),
@@ -95,6 +97,9 @@ describe("ManageTab undo accessibility", () => {
 
     vi.mocked(useDeleteQuizMutation).mockReturnValue({
       mutateAsync: deleteQuizMutateAsync
+    } as any)
+    vi.mocked(useCreateQuizMutation).mockReturnValue({
+      mutateAsync: vi.fn(async () => ({ id: 999 }))
     } as any)
 
     vi.mocked(useUpdateQuizMutation).mockReturnValue({ mutateAsync: vi.fn() } as any)
@@ -270,4 +275,22 @@ describe("ManageTab undo accessibility", () => {
       vi.useRealTimers()
     }
   }, 20000)
+
+  it("renders loading skeleton placeholders while quiz list is loading", () => {
+    vi.mocked(useQuizzesQuery).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      refetch: vi.fn()
+    } as any)
+
+    render(
+      <ManageTab
+        onNavigateToCreate={() => {}}
+        onNavigateToGenerate={() => {}}
+        onStartQuiz={() => {}}
+      />
+    )
+
+    expect(screen.getByTestId("manage-loading-skeleton")).toBeInTheDocument()
+  })
 })

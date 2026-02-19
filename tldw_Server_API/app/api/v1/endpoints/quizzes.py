@@ -16,6 +16,10 @@ from tldw_Server_API.app.api.v1.schemas.quizzes import (
     QuizCreate,
     QuizGenerateRequest,
     QuizGenerateResponse,
+    QuizImportError,
+    QuizImportItemResult,
+    QuizImportRequest,
+    QuizImportResponse,
     QuizListResponse,
     QuizResponse,
     QuizUpdate,
@@ -29,6 +33,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.quiz_generator import generate_quiz_from_media
 
 router = APIRouter(prefix="/quizzes", tags=["quizzes"])
+QUIZ_EXPORT_FORMAT = "tldw.quiz.export.v1"
 
 
 @router.get("", response_model=QuizListResponse)
@@ -60,6 +65,81 @@ def create_quiz(payload: QuizCreate, db: CharactersRAGDB = Depends(get_chacha_db
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create quiz: {e}")
         raise HTTPException(status_code=500, detail="Failed to create quiz") from e
+
+
+@router.post("/import/json", response_model=QuizImportResponse)
+def import_quizzes_json(
+    payload: QuizImportRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+):
+    """Import quizzes from the JSON export format."""
+    if payload.export_format and payload.export_format != QUIZ_EXPORT_FORMAT:
+        raise HTTPException(status_code=400, detail="Unsupported quiz export format")
+
+    imported_quizzes = 0
+    failed_quizzes = 0
+    imported_questions = 0
+    failed_questions = 0
+    items: list[QuizImportItemResult] = []
+    errors: list[QuizImportError] = []
+
+    for source_index, entry in enumerate(payload.quizzes):
+        quiz_name = entry.quiz.name
+        try:
+            quiz_id = db.create_quiz(**entry.quiz.model_dump())
+            imported_quizzes += 1
+        except CharactersRAGDBError as exc:
+            failed_quizzes += 1
+            errors.append(
+                QuizImportError(
+                    source_index=source_index,
+                    quiz_name=quiz_name,
+                    error=f"Failed to create quiz: {exc}",
+                )
+            )
+            continue
+
+        entry_imported_questions = 0
+        entry_failed_questions = 0
+        sorted_questions = sorted(entry.questions, key=lambda question: question.order_index)
+
+        for question_index, question in enumerate(sorted_questions):
+            try:
+                db.create_question(
+                    quiz_id=quiz_id,
+                    **question.model_dump(),
+                )
+                imported_questions += 1
+                entry_imported_questions += 1
+            except CharactersRAGDBError as exc:
+                failed_questions += 1
+                entry_failed_questions += 1
+                errors.append(
+                    QuizImportError(
+                        source_index=source_index,
+                        quiz_name=quiz_name,
+                        question_index=question_index,
+                        error=f"Failed to create question: {exc}",
+                    )
+                )
+
+        items.append(
+            QuizImportItemResult(
+                source_index=source_index,
+                quiz_id=quiz_id,
+                imported_questions=entry_imported_questions,
+                failed_questions=entry_failed_questions,
+            )
+        )
+
+    return QuizImportResponse(
+        imported_quizzes=imported_quizzes,
+        failed_quizzes=failed_quizzes,
+        imported_questions=imported_questions,
+        failed_questions=failed_questions,
+        items=items,
+        errors=errors,
+    )
 
 
 @router.get("/{quiz_id}", response_model=QuizResponse)

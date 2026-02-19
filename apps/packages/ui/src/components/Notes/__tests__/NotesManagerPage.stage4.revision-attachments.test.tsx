@@ -83,7 +83,7 @@ vi.mock('@/hooks/useAntdMessage', () => ({
 }))
 
 vi.mock('@/services/note-keywords', () => ({
-  getAllNoteKeywords: vi.fn(async () => []),
+  getAllNoteKeywordStats: vi.fn(async () => []),
   searchNoteKeywords: vi.fn(async () => [])
 }))
 
@@ -192,6 +192,17 @@ describe('NotesManagerPage stage 4 revision and attachments groundwork', () => {
         }
       }
 
+      if (path === '/api/v1/notes/22/attachments' && method === 'POST') {
+        return {
+          file_name: 'diagram.png',
+          original_file_name: 'diagram.png',
+          content_type: 'image/png',
+          size_bytes: 11,
+          uploaded_at: '2026-02-18T10:06:00.000Z',
+          url: '/api/v1/notes/22/attachments/diagram.png'
+        }
+      }
+
       return {}
     })
   })
@@ -214,7 +225,7 @@ describe('NotesManagerPage stage 4 revision and attachments groundwork', () => {
     expect(screen.getByTestId('notes-editor-revision-meta')).toHaveTextContent('Last saved')
   })
 
-  it('inserts staged markdown attachment links for selected notes', async () => {
+  it('uploads attachments and inserts markdown links for selected notes', async () => {
     renderPage()
 
     fireEvent.change(screen.getByPlaceholderText('Title'), {
@@ -243,9 +254,19 @@ describe('NotesManagerPage stage 4 revision and attachments groundwork', () => {
         '![diagram.png](/api/v1/notes/22/attachments/diagram.png)'
       )
     })
-    expect(mockMessageInfo).toHaveBeenCalledWith(
+    expect(mockMessageSuccess).toHaveBeenCalledWith(
+      expect.stringContaining('Uploaded')
+    )
+    expect(mockMessageInfo).not.toHaveBeenCalledWith(
       expect.stringContaining('POST /api/v1/notes/{id}/attachments')
     )
+    const uploadCalls = mockBgRequest.mock.calls.filter(([request]) => {
+      const path = String(request?.path || '')
+      const method = String(request?.method || 'GET').toUpperCase()
+      return path === '/api/v1/notes/22/attachments' && method === 'POST'
+    })
+    expect(uploadCalls.length).toBeGreaterThan(0)
+    expect(uploadCalls[0][0]?.body).toBeInstanceOf(FormData)
   })
 
   it('does not intercept native undo shortcuts', () => {

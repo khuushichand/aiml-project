@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ByokDashboardPage from '../page';
 import { api } from '@/lib/api-client';
 
@@ -37,6 +37,14 @@ vi.mock('@/components/ui/toast', () => ({
 }));
 
 vi.mock('@/lib/api-client', () => ({
+  ApiError: class MockApiError extends Error {
+    status: number;
+
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
+  },
   api: {
     getMetricsText: vi.fn(),
     getAuditLogs: vi.fn(),
@@ -47,6 +55,11 @@ vi.mock('@/lib/api-client', () => ({
     createSharedProviderKey: vi.fn(),
     deleteSharedProviderKey: vi.fn(),
     testSharedProviderKey: vi.fn(),
+    getOpenAIOAuthStatus: vi.fn(),
+    startOpenAIOAuth: vi.fn(),
+    refreshOpenAIOAuth: vi.fn(),
+    disconnectOpenAIOAuth: vi.fn(),
+    switchOpenAICredentialSource: vi.fn(),
   },
 }));
 
@@ -60,6 +73,11 @@ type ApiMock = {
   createSharedProviderKey: ReturnType<typeof vi.fn>;
   deleteSharedProviderKey: ReturnType<typeof vi.fn>;
   testSharedProviderKey: ReturnType<typeof vi.fn>;
+  getOpenAIOAuthStatus: ReturnType<typeof vi.fn>;
+  startOpenAIOAuth: ReturnType<typeof vi.fn>;
+  refreshOpenAIOAuth: ReturnType<typeof vi.fn>;
+  disconnectOpenAIOAuth: ReturnType<typeof vi.fn>;
+  switchOpenAICredentialSource: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -71,6 +89,28 @@ beforeEach(() => {
   apiMock.getMetricsText.mockResolvedValue('');
   apiMock.getAuditLogs.mockResolvedValue({ entries: [], total: 0, limit: 200, offset: 0 });
   apiMock.getSharedProviderKeys.mockResolvedValue({ items: [] });
+  apiMock.getOpenAIOAuthStatus.mockResolvedValue({
+    provider: 'openai',
+    connected: false,
+    auth_source: 'none',
+  });
+  apiMock.startOpenAIOAuth.mockResolvedValue({
+    provider: 'openai',
+    auth_url: 'https://oauth.example.com/authorize',
+    auth_session_id: 'session-123',
+    expires_at: new Date().toISOString(),
+  });
+  apiMock.refreshOpenAIOAuth.mockResolvedValue({
+    provider: 'openai',
+    status: 'refreshed',
+    updated_at: new Date().toISOString(),
+  });
+  apiMock.disconnectOpenAIOAuth.mockResolvedValue({});
+  apiMock.switchOpenAICredentialSource.mockResolvedValue({
+    provider: 'openai',
+    auth_source: 'oauth',
+    updated_at: new Date().toISOString(),
+  });
 
   apiMock.getUsersPage.mockResolvedValue({
     items: [
@@ -142,5 +182,24 @@ describe('ByokDashboardPage', () => {
       screen.getByText('Validation sweep control is hidden until backend batch validation support is available.')
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /validation sweep/i })).not.toBeInTheDocument();
+  });
+
+  it('starts OpenAI OAuth connect flow from the BYOK card', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as Window);
+
+    render(<ByokDashboardPage />);
+
+    const connectButton = await screen.findByRole('button', { name: 'Connect OpenAI' });
+    fireEvent.click(connectButton);
+
+    await waitFor(() => {
+      expect(apiMock.startOpenAIOAuth).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://oauth.example.com/authorize',
+        '_blank',
+        'noopener,noreferrer'
+      );
+    });
+    openSpy.mockRestore();
   });
 });

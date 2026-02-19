@@ -19,6 +19,19 @@ describe("Knowledge QA error message mapping", () => {
       "Chatbook export failed. Thread was not found."
     )
     expect(
+      mapKnowledgeQaExportErrorMessage(new Error("HTTP 401 unauthorized"))
+    ).toBe("Chatbook export failed. You are not authorized to export this thread.")
+    expect(
+      mapKnowledgeQaExportErrorMessage(new Error("HTTP 403 forbidden"))
+    ).toBe("Chatbook export failed. You do not have permission to export this thread.")
+    expect(
+      mapKnowledgeQaExportErrorMessage(
+        new Error("HTTP 422: validation failed: content_selections is required")
+      )
+    ).toBe(
+      "Chatbook export failed. Export request is invalid. Check the selected thread and try again."
+    )
+    expect(
       mapKnowledgeQaExportErrorMessage(new Error("Failed to fetch"))
     ).toBe("Chatbook export failed. Cannot reach server.")
     expect(

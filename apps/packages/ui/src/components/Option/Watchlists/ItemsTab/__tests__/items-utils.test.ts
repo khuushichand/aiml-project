@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 import {
   extractImageUrl,
   filterSourcesForReader,
+  ITEM_PAGE_SIZE,
+  ITEMS_PAGE_SIZE_STORAGE_KEY,
+  ITEMS_VIEW_PRESETS_STORAGE_KEY,
+  loadPersistedItemsViewPresets,
+  loadPersistedItemPageSize,
+  normalizeItemPageSize,
+  persistItemsViewPresets,
+  persistItemPageSize,
   resolveSelectedItemId,
   stripHtmlToText
 } from "../items-utils"
@@ -95,5 +103,148 @@ describe("extractImageUrl", () => {
 
   it("returns null when no image exists", () => {
     expect(extractImageUrl("no image here")).toBeNull()
+  })
+})
+
+describe("item page-size persistence helpers", () => {
+  it("normalizes supported and unsupported page-size values", () => {
+    expect(normalizeItemPageSize(50)).toBe(50)
+    expect(normalizeItemPageSize("100")).toBe(100)
+    expect(normalizeItemPageSize("12")).toBe(ITEM_PAGE_SIZE)
+    expect(normalizeItemPageSize(null)).toBe(ITEM_PAGE_SIZE)
+  })
+
+  it("loads persisted page-size from storage when valid", () => {
+    const storage = {
+      getItem: (key: string) => (key === ITEMS_PAGE_SIZE_STORAGE_KEY ? "50" : null)
+    }
+    expect(loadPersistedItemPageSize(storage)).toBe(50)
+  })
+
+  it("falls back to default when persisted value is invalid or storage throws", () => {
+    const invalidStorage = {
+      getItem: () => "17"
+    }
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error("unavailable")
+      }
+    }
+    expect(loadPersistedItemPageSize(invalidStorage)).toBe(ITEM_PAGE_SIZE)
+    expect(loadPersistedItemPageSize(throwingStorage)).toBe(ITEM_PAGE_SIZE)
+  })
+
+  it("persists normalized page-size safely", () => {
+    const setItem = vi.fn()
+    persistItemPageSize({ setItem }, 50)
+    expect(setItem).toHaveBeenCalledWith(ITEMS_PAGE_SIZE_STORAGE_KEY, "50")
+
+    persistItemPageSize({ setItem }, 19)
+    expect(setItem).toHaveBeenLastCalledWith(
+      ITEMS_PAGE_SIZE_STORAGE_KEY,
+      String(ITEM_PAGE_SIZE)
+    )
+  })
+})
+
+describe("items view preset persistence helpers", () => {
+  it("loads valid saved presets from storage", () => {
+    const storage = {
+      getItem: (key: string) =>
+        key === ITEMS_VIEW_PRESETS_STORAGE_KEY
+          ? JSON.stringify([
+              {
+                id: "preset-1",
+                name: "Unread tech",
+                sourceId: 4,
+                smartFilter: "unread",
+                statusFilter: "ingested",
+                searchQuery: "ai"
+              }
+            ])
+          : null
+    }
+    expect(loadPersistedItemsViewPresets(storage)).toEqual([
+      {
+        id: "preset-1",
+        name: "Unread tech",
+        sourceId: 4,
+        smartFilter: "unread",
+        statusFilter: "ingested",
+        searchQuery: "ai"
+      }
+    ])
+  })
+
+  it("drops invalid entries and handles parse/storage errors", () => {
+    const mixedStorage = {
+      getItem: () =>
+        JSON.stringify([
+          {
+            id: "good-1",
+            name: "Good",
+            sourceId: null,
+            smartFilter: "all",
+            statusFilter: "all",
+            searchQuery: ""
+          },
+          {
+            id: "",
+            name: "Bad",
+            sourceId: 1,
+            smartFilter: "all",
+            statusFilter: "all",
+            searchQuery: ""
+          }
+        ])
+    }
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error("blocked")
+      }
+    }
+
+    expect(loadPersistedItemsViewPresets(mixedStorage)).toHaveLength(1)
+    expect(loadPersistedItemsViewPresets(throwingStorage)).toEqual([])
+  })
+
+  it("persists only valid presets", () => {
+    const setItem = vi.fn()
+    persistItemsViewPresets(
+      { setItem },
+      [
+        {
+          id: "preset-1",
+          name: "Unread",
+          sourceId: 1,
+          smartFilter: "unread",
+          statusFilter: "ingested",
+          searchQuery: "alpha"
+        },
+        {
+          id: "",
+          name: "Invalid",
+          sourceId: 2,
+          smartFilter: "all",
+          statusFilter: "all",
+          searchQuery: ""
+        }
+      ] as any
+    )
+
+    expect(setItem).toHaveBeenCalledTimes(1)
+    const payload = setItem.mock.calls[0]?.[1]
+    expect(typeof payload).toBe("string")
+    const parsed = JSON.parse(String(payload))
+    expect(parsed).toEqual([
+      {
+        id: "preset-1",
+        name: "Unread",
+        sourceId: 1,
+        smartFilter: "unread",
+        statusFilter: "ingested",
+        searchQuery: "alpha"
+      }
+    ])
   })
 })

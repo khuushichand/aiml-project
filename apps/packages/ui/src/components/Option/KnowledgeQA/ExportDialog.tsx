@@ -36,9 +36,9 @@ const DEFAULT_OPTIONS: ExportOptions = {
 
 const CITATION_APPROXIMATION_NOTE =
   "Citation formatting is approximate and may omit author, year, or publisher fields when metadata is unavailable."
-const SHARE_THREAD_LINKS_ENABLED = false
-const SHARE_THREAD_LINKS_GUARDRAIL_NOTE =
-  "Thread links are staged behind server access controls and will be enabled once sharing permissions are available."
+const SHARE_THREAD_LINKS_ENABLED = true
+const SHARE_THREAD_LINKS_HELP_TEXT =
+  "Share links use a dedicated token with read-only access and an expiry window, independent from normal thread permissions. Extension shared-link routing is currently TBD."
 
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   const focusableSelectors = [
@@ -63,6 +63,13 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
   const [exportError, setExportError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [shareLinkCopied, setShareLinkCopied] = useState(false)
+  const [isPreparingShareLink, setIsPreparingShareLink] = useState(false)
+  const [isRevokingShareLink, setIsRevokingShareLink] = useState(false)
+  const [activeShareLink, setActiveShareLink] = useState<{
+    id: string
+    sharePath: string
+    expiresAt: string
+  } | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const previousActiveElement = useRef<HTMLElement | null>(null)
   const hasExportableContent =
@@ -104,36 +111,42 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           window.print()
         }, 500)
       } else if (options.format === "chatbook") {
-        // Call the chatbook export API
-        if (!currentThreadId) {
-          throw new Error("No active thread selected for export.")
+        if (!currentThreadId || currentThreadId.startsWith("local-")) {
+          throw new Error("No server-backed thread selected for export.")
         }
 
-        const response = await fetch("/api/v1/chatbooks/export", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            conversation_ids: [currentThreadId],
-            include_attachments: true,
-          }),
+        const trimmedQuery = query.trim()
+        const normalizedQuery =
+          trimmedQuery.length > 96 ? `${trimmedQuery.slice(0, 93)}...` : trimmedQuery
+        const exportResult = await tldwClient.exportChatbook({
+          name: normalizedQuery
+            ? `Knowledge QA: ${normalizedQuery}`
+            : `Knowledge QA Export ${new Date().toLocaleDateString()}`,
+          description: normalizedQuery
+            ? `Knowledge QA export for query: ${normalizedQuery}`
+            : "Knowledge QA chatbook export",
+          content_selections: {
+            conversation: [currentThreadId],
+          },
+          include_media: true,
+          include_embeddings: false,
+          include_generated_content: true,
+          async_mode: false,
         })
 
-        if (response.ok) {
-          const blob = await response.blob()
-          downloadBlob(blob, `knowledge_qa_${Date.now()}.zip`)
-          onClose()
-          return
+        if (exportResult?.success === false) {
+          throw new Error(String(exportResult?.message || "Export failed"))
         }
 
-        let details = ""
-        try {
-          details = await response.text()
-        } catch {
-          details = ""
+        const jobId = resolveChatbookJobId(exportResult)
+        if (!jobId) {
+          throw new Error("Chatbook export completed but no download job was returned.")
         }
-        throw new Error(
-          `HTTP ${response.status}: ${details || response.statusText || "Export failed"}`
-        )
+
+        const { blob, filename } = await tldwClient.downloadChatbookExport(jobId)
+        downloadBlob(blob, filename || `knowledge_qa_${Date.now()}.zip`)
+        onClose()
+        return
       }
     } catch (error) {
       const mappedError =
@@ -250,25 +263,63 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
   const handleCopyThreadLink = useCallback(async () => {
     if (!canCopyThreadLink || !currentThreadId) return
 
-    const shareUrl = `${window.location.origin}/knowledge/thread/${encodeURIComponent(currentThreadId)}`
+    setIsPreparingShareLink(true)
     try {
+      const shareLink = await tldwClient.createConversationShareLink(currentThreadId, {
+        permission: "view",
+      })
+      const sharePath =
+        typeof shareLink?.share_path === "string" && shareLink.share_path.trim().length > 0
+          ? shareLink.share_path.trim()
+          : `/knowledge/shared/${encodeURIComponent(String(shareLink?.token || ""))}`
+      const shareUrl = `${window.location.origin}${sharePath}`
       await navigator.clipboard.writeText(shareUrl)
+      setActiveShareLink({
+        id: String(shareLink.share_id),
+        sharePath,
+        expiresAt: String(shareLink.expires_at),
+      })
       setShareLinkCopied(true)
       message.open({
         type: "success",
-        content: "Thread link copied.",
+        content: "Share link copied.",
         duration: 3,
       })
       setTimeout(() => setShareLinkCopied(false), 2000)
     } catch (error) {
       message.open({
         type: "error",
-        content: "Unable to copy thread link.",
+        content: "Unable to generate a share link.",
         duration: 4,
       })
       console.error("Share link copy failed:", error)
+    } finally {
+      setIsPreparingShareLink(false)
     }
   }, [canCopyThreadLink, currentThreadId, message])
+
+  const handleRevokeShareLink = useCallback(async () => {
+    if (!canCopyThreadLink || !currentThreadId || !activeShareLink?.id) return
+    setIsRevokingShareLink(true)
+    try {
+      await tldwClient.revokeConversationShareLink(currentThreadId, activeShareLink.id)
+      setActiveShareLink(null)
+      message.open({
+        type: "success",
+        content: "Share link revoked.",
+        duration: 3,
+      })
+    } catch (error) {
+      message.open({
+        type: "error",
+        content: "Unable to revoke share link.",
+        duration: 4,
+      })
+      console.error("Share link revoke failed:", error)
+    } finally {
+      setIsRevokingShareLink(false)
+    }
+  }, [activeShareLink?.id, canCopyThreadLink, currentThreadId, message])
 
   useEffect(() => {
     if (open) {
@@ -504,20 +555,40 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
               <button
                 type="button"
                 onClick={handleCopyThreadLink}
-                disabled={!canCopyThreadLink}
-                title={SHARE_THREAD_LINKS_GUARDRAIL_NOTE}
+                disabled={!canCopyThreadLink || isPreparingShareLink}
+                title={SHARE_THREAD_LINKS_HELP_TEXT}
                 className="px-3 py-1.5 text-xs font-medium rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {SHARE_THREAD_LINKS_ENABLED
-                  ? shareLinkCopied
+                {isPreparingShareLink
+                  ? "Generating link..."
+                  : shareLinkCopied
                     ? "Link copied"
-                    : "Copy thread link"
-                  : "Copy thread link (coming soon)"}
+                    : "Create share link"}
+              </button>
+              <button
+                type="button"
+                onClick={handleRevokeShareLink}
+                disabled={!activeShareLink || isRevokingShareLink}
+                className="px-3 py-1.5 text-xs font-medium rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isRevokingShareLink ? "Revoking..." : "Revoke link"}
               </button>
             </div>
             <p className="text-xs text-text-muted">
-              {SHARE_THREAD_LINKS_GUARDRAIL_NOTE}
+              {SHARE_THREAD_LINKS_HELP_TEXT}
             </p>
+            {activeShareLink ? (
+              <p className="text-xs text-text-muted">
+                Active link expires{" "}
+                {new Date(activeShareLink.expiresAt).toLocaleString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                })}
+                .
+              </p>
+            ) : null}
           </div>
 
           {/* Preview / Result */}
@@ -606,6 +677,31 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
       </div>
     </>
   )
+}
+
+function resolveChatbookJobId(payload: any): string | null {
+  const directJobId =
+    typeof payload?.job_id === "string" && payload.job_id.trim().length > 0
+      ? payload.job_id.trim()
+      : null
+  if (directJobId) return directJobId
+
+  const downloadUrl =
+    typeof payload?.download_url === "string" && payload.download_url.trim().length > 0
+      ? payload.download_url.trim()
+      : null
+  if (!downloadUrl) return null
+
+  const normalizedPath = downloadUrl.split("?")[0].replace(/\/+$/, "")
+  const segments = normalizedPath.split("/").filter(Boolean)
+  if (segments.length === 0) return null
+
+  const rawJobId = segments[segments.length - 1] || ""
+  try {
+    return decodeURIComponent(rawJobId)
+  } catch {
+    return rawJobId
+  }
 }
 
 // Helper function to download a blob

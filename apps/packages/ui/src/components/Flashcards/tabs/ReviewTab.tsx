@@ -1,11 +1,28 @@
 import React from "react"
-import { Button, Card, Empty, Input, Segmented, Select, Space, Switch, Tag, Tooltip, Typography } from "antd"
+import {
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Input,
+  Segmented,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography
+} from "antd"
 import { X, Minus, Check, Star, Calendar, Undo2 } from "lucide-react"
 import dayjs from "dayjs"
 import relativeTime from "dayjs/plugin/relativeTime"
 import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import type { Flashcard, FlashcardUpdate } from "@/services/flashcards"
+import { getSetting, setSetting } from "@/services/settings/registry"
+import { FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING } from "@/services/settings/ui-settings"
+import { trackFlashcardsShortcutHintTelemetry } from "@/utils/flashcards-shortcut-hint-telemetry"
+import { FLASHCARDS_HELP_LINKS } from "../constants"
 import {
   useDecksQuery,
   useCramQueueQuery,
@@ -26,6 +43,12 @@ import { calculateIntervals } from "../utils/calculateIntervals"
 import { formatCardType } from "../utils/model-type-labels"
 import { buildReviewUndoState } from "../utils/review-undo"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
+import {
+  formatFlashcardsUiErrorMessage,
+  mapFlashcardsUiError,
+  type FlashcardsUiErrorCode
+} from "../utils/error-taxonomy"
+import { trackFlashcardsErrorRecoveryTelemetry } from "@/utils/flashcards-error-recovery-telemetry"
 import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
 
 dayjs.extend(relativeTime)
@@ -42,6 +65,17 @@ interface ReviewTabProps {
   isActive: boolean
 }
 
+interface ReviewFailureState {
+  code: FlashcardsUiErrorCode
+  message: string
+  retry: {
+    cardUuid: string
+    rating: number
+    answerTimeMs?: number
+  }
+  canReload: boolean
+}
+
 /**
  * Review tab for studying flashcards with spaced repetition.
  */
@@ -56,6 +90,31 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 }) => {
   const { t } = useTranslation(["option", "common"])
   const message = useAntdMessage()
+  const reportUiError = React.useCallback(
+    (error: unknown, operation: string, fallback: string) => {
+      const mapped = mapFlashcardsUiError(error, {
+        operation,
+        fallback
+      })
+      console.warn("[flashcards:error]", {
+        code: mapped.code,
+        status: mapped.status,
+        operation,
+        raw: mapped.rawMessage
+      })
+      void trackFlashcardsErrorRecoveryTelemetry({
+        type: "flashcards_mutation_failed",
+        surface: "review",
+        operation,
+        error_code: mapped.code,
+        status: mapped.status ?? null,
+        retriable: mapped.code !== "FLASHCARDS_VALIDATION"
+      })
+      message.error(formatFlashcardsUiErrorMessage(mapped))
+      return mapped
+    },
+    [message]
+  )
 
   // State
   const [showAnswer, setShowAnswer] = React.useState(false)
@@ -67,6 +126,11 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const [cramTag, setCramTag] = React.useState("")
   const [cramUpdatesSchedule, setCramUpdatesSchedule] = React.useState(false)
   const [cramQueueIndex, setCramQueueIndex] = React.useState(0)
+  const [reviewFailure, setReviewFailure] = React.useState<ReviewFailureState | null>(
+    null
+  )
+  const [isReloadingFailedCard, setIsReloadingFailedCard] = React.useState(false)
+  const [isReviewOnboardingDismissed, setIsReviewOnboardingDismissed] = React.useState(false)
   const [shortcutHintDensity, setShortcutHintDensity] = useFlashcardsShortcutHintDensity()
 
   // Undo state - stores the last reviewed card for potential re-rating
@@ -111,15 +175,56 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   const reviewProgressTotal =
     reviewMode === "cram" ? cramQueue.length : dueCountsQuery.data?.total ?? 0
   const isCramMode = reviewMode === "cram"
+  const showTopBarCreateCta = !activeCard
   const activeCardSource = React.useMemo(
     () => (activeCard ? getFlashcardSourceMeta(activeCard) : null),
     [activeCard]
   )
+  React.useEffect(() => {
+    if (!isActive || !activeCard || shortcutHintDensity === "hidden") return
+    void trackFlashcardsShortcutHintTelemetry({
+      type: "flashcards_shortcut_hints_exposed",
+      surface: "review",
+      density: shortcutHintDensity
+    })
+  }, [isActive, activeCard?.uuid, shortcutHintDensity])
+  React.useEffect(() => {
+    let active = true
+    void getSetting(FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING).then((stored) => {
+      if (!active) return
+      setIsReviewOnboardingDismissed(stored)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+  const setReviewOnboardingDismissed = React.useCallback((dismissed: boolean) => {
+    setIsReviewOnboardingDismissed(dismissed)
+    void setSetting(FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING, dismissed)
+  }, [])
+  const showReviewOnboardingGuide = hasCardsQuery.data === false && !isReviewOnboardingDismissed
   const cycleShortcutHintDensity = React.useCallback(() => {
     void setShortcutHintDensity((prev) => {
-      if (prev === "expanded") return "compact"
-      if (prev === "compact") return "hidden"
-      return "expanded"
+      const next =
+        prev === "expanded"
+          ? "compact"
+          : prev === "compact"
+            ? "hidden"
+            : "expanded"
+      void trackFlashcardsShortcutHintTelemetry({
+        type: "flashcards_shortcut_hint_density_changed",
+        surface: "review",
+        from_density: prev,
+        to_density: next
+      })
+      if (next === "hidden" && prev !== "hidden") {
+        void trackFlashcardsShortcutHintTelemetry({
+          type: "flashcards_shortcut_hints_dismissed",
+          surface: "review",
+          from_density: prev
+        })
+      }
+      return next
     })
   }, [setShortcutHintDensity])
   const shortcutHintToggleLabel =
@@ -204,14 +309,38 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
   )
 
   const onSubmitReview = React.useCallback(
-    async (rating: number) => {
+    async (
+      rating: number,
+      retryOptions?: {
+        cardUuid?: string
+        answerTimeMs?: number
+      }
+    ): Promise<boolean> => {
+      let attemptedAnswerTimeMs: number | undefined = retryOptions?.answerTimeMs
       try {
         const card = activeCard
-        if (!card) return
+        if (!card) return false
+        if (retryOptions?.cardUuid && retryOptions.cardUuid !== card.uuid) {
+          setReviewFailure((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  message: t("option:flashcards.retryCardChanged", {
+                    defaultValue:
+                      "The review queue changed before retry. Reload and submit again."
+                  })
+                }
+              : prev
+          )
+          return false
+        }
+
         // Auto-calculate answer time from when the answer was shown
-        let answerTimeMs: number | undefined
-        if (answerStartTimeRef.current) {
-          answerTimeMs = Date.now() - answerStartTimeRef.current
+        if (
+          typeof attemptedAnswerTimeMs !== "number" &&
+          answerStartTimeRef.current
+        ) {
+          attemptedAnswerTimeMs = Date.now() - answerStartTimeRef.current
         }
 
         // Store the card for potential undo before submitting
@@ -252,14 +381,16 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
               defaultValue: "Practice saved. Scheduling unchanged."
             })
           )
-          return
+          setReviewFailure(null)
+          return true
         }
 
         const reviewResult = await reviewMutation.mutateAsync({
           cardUuid: card.uuid,
           rating,
-          answerTimeMs
+          answerTimeMs: attemptedAnswerTimeMs
         })
+        setReviewFailure(null)
         setShowAnswer(false)
         answerStartTimeRef.current = null
         setReviewedCount((c) => c + 1)
@@ -323,10 +454,30 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             interval: intervalLabel
           })
         )
+        return true
       } catch (e: unknown) {
-        const errorMessage =
-          e instanceof Error ? e.message : "Failed to submit review"
-        message.error(errorMessage)
+        const mapped = reportUiError(
+          e,
+          "submitting your review",
+          t("option:flashcards.reviewSubmitFailed", {
+            defaultValue: "Failed to submit review."
+          })
+        )
+        if (activeCard) {
+          setReviewFailure({
+            code: mapped.code,
+            message: formatFlashcardsUiErrorMessage(mapped),
+            retry: {
+              cardUuid: activeCard.uuid,
+              rating,
+              answerTimeMs: attemptedAnswerTimeMs
+            },
+            canReload:
+              mapped.code === "FLASHCARDS_VERSION_CONFLICT" ||
+              mapped.code === "FLASHCARDS_NOT_FOUND"
+          })
+        }
+        return false
       }
     },
     [
@@ -336,12 +487,76 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
       localOverrideCard,
       message,
       onClearOverride,
+      reportUiError,
       reviewMode,
       reviewMutation,
       reviewOverrideCard,
       t
     ]
   )
+
+  const handleRetryFailedReview = React.useCallback(async () => {
+    if (!reviewFailure || reviewMutation.isPending) return
+    void trackFlashcardsErrorRecoveryTelemetry({
+      type: "flashcards_retry_requested",
+      surface: "review",
+      operation: "submitting your review",
+      error_code: reviewFailure.code
+    })
+    const succeeded = await onSubmitReview(reviewFailure.retry.rating, {
+      cardUuid: reviewFailure.retry.cardUuid,
+      answerTimeMs: reviewFailure.retry.answerTimeMs
+    })
+    if (succeeded) {
+      void trackFlashcardsErrorRecoveryTelemetry({
+        type: "flashcards_retry_succeeded",
+        surface: "review",
+        operation: "submitting your review",
+        error_code: reviewFailure.code
+      })
+    }
+  }, [onSubmitReview, reviewFailure, reviewMutation.isPending])
+
+  const handleReloadFailedReviewCard = React.useCallback(async () => {
+    if (!reviewFailure?.retry.cardUuid) return
+    setIsReloadingFailedCard(true)
+    try {
+      await Promise.all([reviewQuery.refetch(), dueCountsQuery.refetch()])
+      setReviewFailure((prev) =>
+        prev
+          ? {
+              ...prev,
+              canReload: false,
+              message: t("option:flashcards.retryReloadReady", {
+                defaultValue:
+                  "Latest card data loaded. Retry the review to submit your rating."
+              })
+            }
+          : prev
+      )
+      message.info(
+        t("option:flashcards.cardReloaded", {
+          defaultValue: "Card reloaded."
+        })
+      )
+      void trackFlashcardsErrorRecoveryTelemetry({
+        type: "flashcards_recovered_by_reload",
+        surface: "review",
+        operation: "submitting your review",
+        error_code: reviewFailure.code
+      })
+    } catch (error: unknown) {
+      reportUiError(
+        error,
+        "reloading the latest card state",
+        t("option:flashcards.cardReloadFailed", {
+          defaultValue: "Failed to reload card."
+        })
+      )
+    } finally {
+      setIsReloadingFailedCard(false)
+    }
+  }, [dueCountsQuery, message, reportUiError, reviewFailure, reviewQuery, t])
 
   // Handle undo - re-present the last reviewed card
   const handleUndoReview = React.useCallback(() => {
@@ -426,16 +641,16 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         )
         setEditDrawerOpen(false)
       } catch (error: unknown) {
-        message.error(
-          error instanceof Error
-            ? error.message
-            : t("option:flashcards.cardUpdateFailed", {
-                defaultValue: "Failed to update card."
-              })
+        reportUiError(
+          error,
+          "saving card edits",
+          t("option:flashcards.cardUpdateFailed", {
+            defaultValue: "Failed to update card."
+          })
         )
       }
     },
-    [activeCard, updateMutation, message, t]
+    [activeCard, updateMutation, message, reportUiError, t]
   )
 
   const handleDeleteFromReview = React.useCallback(async () => {
@@ -461,18 +676,19 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
         setLocalOverrideCard(null)
       }
     } catch (error: unknown) {
-      message.error(
-        error instanceof Error
-          ? error.message
-          : t("option:flashcards.cardDeleteFailed", {
-              defaultValue: "Failed to delete card."
-            })
+      reportUiError(
+        error,
+        "deleting this card",
+        t("option:flashcards.cardDeleteFailed", {
+          defaultValue: "Failed to delete card."
+        })
       )
     }
   }, [
     activeCard,
     deleteMutation,
     message,
+    reportUiError,
     t,
     reviewOverrideCard,
     onClearOverride,
@@ -493,15 +709,15 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
       )
       setEditDrawerOpen(false)
     } catch (error: unknown) {
-      message.error(
-        error instanceof Error
-          ? error.message
-          : t("option:flashcards.schedulingResetFailed", {
-              defaultValue: "Failed to reset scheduling."
-            })
+      reportUiError(
+        error,
+        "resetting scheduling",
+        t("option:flashcards.schedulingResetFailed", {
+          defaultValue: "Failed to reset scheduling."
+        })
       )
     }
-  }, [activeCard, resetSchedulingMutation, message, t])
+  }, [activeCard, resetSchedulingMutation, message, reportUiError, t])
 
   React.useEffect(() => {
     if (reviewMode !== "cram") return
@@ -537,7 +753,12 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div
+        className={`mb-3 flex flex-wrap items-center gap-2 ${
+          activeCard ? "rounded border border-border/70 bg-surface2/60 p-2" : ""
+        }`}
+        data-testid="flashcards-review-topbar"
+      >
         <Select
           placeholder={t("option:flashcards.selectDeck", {
             defaultValue: "Select deck (optional)"
@@ -612,14 +833,16 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             </Space>
           </>
         )}
-        <Button
-          type="primary"
-          className="min-h-11"
-          onClick={onNavigateToCreate}
-          data-testid="flashcards-review-create-cta"
-        >
-          {t("option:flashcards.noDueCreateCta", { defaultValue: "Create card" })}
-        </Button>
+        {showTopBarCreateCta && (
+          <Button
+            type="primary"
+            className="min-h-11"
+            onClick={onNavigateToCreate}
+            data-testid="flashcards-review-create-cta"
+          >
+            {t("option:flashcards.noDueCreateCta", { defaultValue: "Create card" })}
+          </Button>
+        )}
       </div>
 
       <ReviewAnalyticsSummary
@@ -637,7 +860,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
       )}
 
       {activeCard ? (
-        <Card>
+        <Card data-testid="flashcards-review-active-card">
           <div className="flex flex-col gap-3">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -820,6 +1043,48 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                         )
                       })}
                     </div>
+                    {reviewFailure && (
+                      <Alert
+                        showIcon
+                        type={
+                          reviewFailure.code === "FLASHCARDS_VERSION_CONFLICT"
+                            ? "warning"
+                            : "error"
+                        }
+                        title={t("option:flashcards.reviewRetryTitle", {
+                          defaultValue: "Review not saved"
+                        })}
+                        description={reviewFailure.message}
+                        data-testid="flashcards-review-retry-alert"
+                        action={
+                          <Space orientation="vertical" size={8}>
+                            <Button
+                              size="small"
+                              type="primary"
+                              loading={reviewMutation.isPending}
+                              onClick={handleRetryFailedReview}
+                              data-testid="flashcards-review-retry-button"
+                            >
+                              {t("option:flashcards.retryAction", {
+                                defaultValue: "Retry"
+                              })}
+                            </Button>
+                            {reviewFailure.canReload && (
+                              <Button
+                                size="small"
+                                onClick={handleReloadFailedReviewCard}
+                                loading={isReloadingFailedCard}
+                                data-testid="flashcards-review-reload-button"
+                              >
+                                {t("option:flashcards.reloadCardAction", {
+                                  defaultValue: "Reload card"
+                                })}
+                              </Button>
+                            )}
+                          </Space>
+                        }
+                      />
+                    )}
                     <Text type="secondary" className="text-xs text-center">
                       {t("option:flashcards.ratingIntervalsMeaning", {
                         defaultValue:
@@ -944,7 +1209,7 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
           </div>
         </Card>
       ) : (
-        <Card>
+        <Card data-testid="flashcards-review-empty-card">
           <Empty
             description={
               hasCardsQuery.data === false
@@ -967,6 +1232,81 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             <Space orientation="vertical" align="center">
               {hasCardsQuery.data === false ? (
                 <>
+                  {showReviewOnboardingGuide ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      className="w-full max-w-2xl text-left"
+                      data-testid="flashcards-review-onboarding-guide"
+                      title={t("option:flashcards.onboardingTitle", {
+                        defaultValue: "How flashcard study works"
+                      })}
+                      description={
+                        <div className="space-y-2">
+                          <Text type="secondary" className="block">
+                            {t("option:flashcards.onboardingDescription", {
+                              defaultValue:
+                                "Spaced repetition focuses on cards right before you forget them, so short daily sessions are enough."
+                            })}
+                          </Text>
+                          <ol className="mb-0 list-decimal pl-5 text-xs text-text-muted">
+                            <li>
+                              {t("option:flashcards.onboardingStepCreate", {
+                                defaultValue:
+                                  "Add cards manually, import a deck, or generate cards from text."
+                              })}
+                            </li>
+                            <li>
+                              {t("option:flashcards.onboardingStepReview", {
+                                defaultValue:
+                                  "Review due cards each day and reveal answers with Space."
+                              })}
+                            </li>
+                            <li>
+                              {t("option:flashcards.onboardingStepRate", {
+                                defaultValue:
+                                  "Rate recall with Again/Hard/Good/Easy so the next review is scheduled automatically."
+                              })}
+                            </li>
+                          </ol>
+                          <a
+                            href={FLASHCARDS_HELP_LINKS.ratings}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary hover:underline"
+                            data-testid="flashcards-review-onboarding-doc-link"
+                          >
+                            {t("option:flashcards.onboardingDocLink", {
+                              defaultValue: "Open the full Flashcards study guide"
+                            })}
+                          </a>
+                        </div>
+                      }
+                      action={
+                        <Button
+                          size="small"
+                          onClick={() => setReviewOnboardingDismissed(true)}
+                          data-testid="flashcards-review-onboarding-dismiss"
+                        >
+                          {t("option:flashcards.onboardingDismiss", {
+                            defaultValue: "Hide guide"
+                          })}
+                        </Button>
+                      }
+                    />
+                  ) : (
+                    <Button
+                      type="link"
+                      size="small"
+                      className="!px-0"
+                      onClick={() => setReviewOnboardingDismissed(false)}
+                      data-testid="flashcards-review-onboarding-reopen"
+                    >
+                      {t("option:flashcards.onboardingReopen", {
+                        defaultValue: "Show study guide"
+                      })}
+                    </Button>
+                  )}
                   <Text type="secondary">
                     {t("option:flashcards.noCardsDescription", {
                       defaultValue:
@@ -974,14 +1314,29 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                     })}
                   </Text>
                   <Space>
-                    <Button type="primary" onClick={onNavigateToCreate}>
+                    <Button
+                      type="primary"
+                      onClick={onNavigateToCreate}
+                      data-testid="flashcards-review-empty-create-cta"
+                    >
                       {t("option:flashcards.createFirstCard", {
                         defaultValue: "Create card"
                       })}
                     </Button>
-                    <Button onClick={onNavigateToImport}>
+                    <Button
+                      onClick={onNavigateToImport}
+                      data-testid="flashcards-review-empty-import-cta"
+                    >
                       {t("option:flashcards.noDueImportCta", {
                         defaultValue: "Import a deck"
+                      })}
+                    </Button>
+                    <Button
+                      onClick={onNavigateToImport}
+                      data-testid="flashcards-review-empty-generate-cta"
+                    >
+                      {t("option:flashcards.generateFromTextCta", {
+                        defaultValue: "Generate from text"
                       })}
                     </Button>
                   </Space>

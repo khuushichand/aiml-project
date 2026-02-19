@@ -819,6 +819,7 @@ async def bulk_update_prompt_keywords(
 @router.post(
     "/create",
     summary="Create a prompt (legacy payload)",
+    status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_prompts_user)]
 )
 async def legacy_create_prompt(
@@ -923,6 +924,111 @@ async def create_prompt(
         logger.error(f"Unexpected error creating prompt: {e}", exc_info=True)
         # Avoid leaking the raw 'msg' variable if it was a NameError
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
+
+
+# === Collection Endpoints ===
+
+# NOTE:
+# Keep these static `/collections*` routes above the dynamic `/{prompt_identifier}`
+# route declarations below. FastAPI matches in declaration order; moving the dynamic
+# route above these will cause `/collections` to be interpreted as a prompt identifier.
+
+@router.post(
+    "/collections/create",
+    response_model=schemas.PromptCollectionCreateResponse,
+    summary="Create a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def create_collection(
+    payload: schemas.PromptCollectionCreateRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        created = db.create_prompt_collection(
+            name=payload.name,
+            description=payload.description,
+            prompt_ids=payload.prompt_ids or [],
+        )
+        return schemas.PromptCollectionCreateResponse(collection_id=created["collection_id"])
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error creating prompt collection '{payload.name}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
+@router.get(
+    "/collections",
+    response_model=schemas.PromptCollectionListResponse,
+    summary="List prompt collections",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def list_collections(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        items = db.list_prompt_collections(limit=limit, offset=offset)
+        return schemas.PromptCollectionListResponse(
+            collections=[schemas.PromptCollectionResponse(**item) for item in items]
+        )
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error("Database error listing prompt collections: {}", e, exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
+@router.put(
+    "/collections/{collection_id}",
+    response_model=schemas.PromptCollectionResponse,
+    summary="Update a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def update_collection(
+    collection_id: int,
+    payload: schemas.PromptCollectionUpdateRequest = Body(...),
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        item = db.update_prompt_collection(
+            collection_id,
+            name=payload.name,
+            description=payload.description,
+            prompt_ids=payload.prompt_ids,
+        )
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return schemas.PromptCollectionResponse(**item)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error updating prompt collection '{collection_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
+
+@router.get(
+    "/collections/{collection_id}",
+    response_model=schemas.PromptCollectionResponse,
+    summary="Get a prompt collection",
+    dependencies=[Depends(verify_prompts_user)],
+)
+async def get_collection(
+    collection_id: int,
+    db: PromptsDatabase = Depends(get_prompts_db_for_user),
+):
+    try:
+        item = db.get_prompt_collection_by_id(collection_id)
+        if not item:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        return schemas.PromptCollectionResponse(**item)
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except DatabaseError as e:
+        logger.error(f"Database error fetching prompt collection '{collection_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
+
 
 @router.get(
     "/",
@@ -1192,107 +1298,6 @@ async def restore_prompt_version(
     except DatabaseError as e:
         logger.error(f"Database error restoring prompt '{prompt_identifier}' version {version}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
-
-
-# === Collection Endpoints ===
-
-
-@router.post(
-    "/collections/create",
-    response_model=schemas.PromptCollectionCreateResponse,
-    summary="Create a prompt collection",
-    dependencies=[Depends(verify_prompts_user)],
-)
-async def create_collection(
-    payload: schemas.PromptCollectionCreateRequest = Body(...),
-    db: PromptsDatabase = Depends(get_prompts_db_for_user),
-):
-    try:
-        created = db.create_prompt_collection(
-            name=payload.name,
-            description=payload.description,
-            prompt_ids=payload.prompt_ids or [],
-        )
-        return schemas.PromptCollectionCreateResponse(collection_id=created["collection_id"])
-    except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    except DatabaseError as e:
-        logger.error(f"Database error creating prompt collection '{payload.name}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
-
-
-@router.get(
-    "/collections",
-    response_model=schemas.PromptCollectionListResponse,
-    summary="List prompt collections",
-    dependencies=[Depends(verify_prompts_user)],
-)
-async def list_collections(
-    limit: int = Query(200, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-    db: PromptsDatabase = Depends(get_prompts_db_for_user),
-):
-    try:
-        items = db.list_prompt_collections(limit=limit, offset=offset)
-        return schemas.PromptCollectionListResponse(
-            collections=[schemas.PromptCollectionResponse(**item) for item in items]
-        )
-    except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    except DatabaseError as e:
-        logger.error("Database error listing prompt collections: {}", e, exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
-
-
-@router.put(
-    "/collections/{collection_id}",
-    response_model=schemas.PromptCollectionResponse,
-    summary="Update a prompt collection",
-    dependencies=[Depends(verify_prompts_user)],
-)
-async def update_collection(
-    collection_id: int,
-    payload: schemas.PromptCollectionUpdateRequest = Body(...),
-    db: PromptsDatabase = Depends(get_prompts_db_for_user),
-):
-    try:
-        item = db.update_prompt_collection(
-            collection_id,
-            name=payload.name,
-            description=payload.description,
-            prompt_ids=payload.prompt_ids,
-        )
-        if not item:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
-        return schemas.PromptCollectionResponse(**item)
-    except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    except DatabaseError as e:
-        logger.error(f"Database error updating prompt collection '{collection_id}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
-
-
-@router.get(
-    "/collections/{collection_id}",
-    response_model=schemas.PromptCollectionResponse,
-    summary="Get a prompt collection",
-    dependencies=[Depends(verify_prompts_user)],
-)
-async def get_collection(
-    collection_id: int,
-    db: PromptsDatabase = Depends(get_prompts_db_for_user),
-):
-    try:
-        item = db.get_prompt_collection_by_id(collection_id)
-        if not item:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
-        return schemas.PromptCollectionResponse(**item)
-    except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    except DatabaseError as e:
-        logger.error(f"Database error fetching prompt collection '{collection_id}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
-
 
 #
 # End of prompts.py

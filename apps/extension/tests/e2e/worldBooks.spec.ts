@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
 test.describe('World Books page', () => {
   test('renders World Books manager and actions', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Navigate to World Books
     await page.goto(page.url() + '#/settings/world-books')

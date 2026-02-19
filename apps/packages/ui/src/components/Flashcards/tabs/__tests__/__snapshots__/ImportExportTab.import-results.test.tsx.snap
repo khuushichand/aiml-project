@@ -1,0 +1,125 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ImportExportTab import result details > matches baseline snapshot for import result state 1`] = `
+<div
+  class="ant-alert ant-alert-warning ant-alert-with-description css-var-root css-dev-only-do-not-override-3uaqrl"
+  data-show="true"
+  data-testid="flashcards-import-last-result"
+  role="alert"
+>
+  <span
+    class="ant-alert-icon"
+  >
+    <span
+      aria-label="exclamation-circle"
+      class="anticon anticon-exclamation-circle"
+      role="img"
+    >
+      <svg
+        aria-hidden="true"
+        data-icon="exclamation-circle"
+        fill="currentColor"
+        focusable="false"
+        height="1em"
+        viewBox="64 64 896 896"
+        width="1em"
+      >
+        <path
+          d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm-32 232c0-4.4 3.6-8 8-8h48c4.4 0 8 3.6 8 8v272c0 4.4-3.6 8-8 8h-48c-4.4 0-8-3.6-8-8V296zm32 440a48.01 48.01 0 010-96 48.01 48.01 0 010 96z"
+        />
+      </svg>
+    </span>
+  </span>
+  <div
+    class="ant-alert-section"
+  >
+    <div
+      class="ant-alert-title"
+    >
+      Last import: 2 imported, 1 skipped
+    </div>
+    <div
+      class="ant-alert-description"
+    >
+      <div
+        class="mt-1 space-y-1 text-xs"
+      >
+        <div
+          class="space-y-1"
+        >
+          <div>
+            <span
+              class="ant-typography css-dev-only-do-not-override-3uaqrl css-var-root"
+            >
+              <code>
+                Line 9
+              </code>
+            </span>
+            <span
+              class="ant-typography ml-2 css-dev-only-do-not-override-3uaqrl css-var-root"
+            >
+              Missing required field: Front
+            </span>
+          </div>
+          <div
+            class="flex flex-wrap items-center gap-2 pl-1"
+          >
+            <span
+              class="ant-typography ant-typography-secondary block css-dev-only-do-not-override-3uaqrl css-var-root"
+            >
+              Add a non-empty Front value on that row, or map your header to the Front column.
+            </span>
+            <button
+              class="ant-btn css-dev-only-do-not-override-3uaqrl css-var-root ant-btn-link ant-btn-color-link ant-btn-variant-link ant-btn-sm !h-auto !p-0 text-xs"
+              data-testid="flashcards-import-error-help-0"
+              type="button"
+            >
+              <span>
+                View format help
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`ImportExportTab import result details > matches baseline snapshot for import result state 2`] = `
+<div
+  data-testid="flashcards-transfer-summary-formats"
+>
+  <span
+    class="ant-typography block css-dev-only-do-not-override-3uaqrl css-var-root"
+  >
+    <strong>
+      Supported formats
+    </strong>
+  </span>
+  <span
+    class="ant-typography ant-typography-secondary css-dev-only-do-not-override-3uaqrl css-var-root"
+  >
+    Import: CSV, TSV, JSON, JSONL, APKG · Export: TSV, CSV, APKG
+  </span>
+</div>
+`;
+
+exports[`ImportExportTab import result details > matches baseline snapshot for import result state 3`] = `
+<div
+  data-testid="flashcards-transfer-summary-limits"
+>
+  <span
+    class="ant-typography block css-dev-only-do-not-override-3uaqrl css-var-root"
+  >
+    <strong>
+      Current import limits
+    </strong>
+  </span>
+  <span
+    class="ant-typography ant-typography-secondary css-dev-only-do-not-override-3uaqrl css-var-root"
+  >
+    Limits unavailable
+  </span>
+</div>
+`;

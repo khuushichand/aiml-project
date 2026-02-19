@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+
+pytestmark = pytest.mark.unit
+
+
+def _build_app(db: CharactersRAGDB, user_id: int = 1) -> TestClient:
+    app = FastAPI()
+    app.include_router(chat_router.router, prefix="/api/v1/chat")
+    app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=user_id)
+    return TestClient(app)
+
+
+def _seed_conversation_with_messages(db: CharactersRAGDB, client_id: str = "1") -> str:
+    char_id = db.add_character_card(
+        {
+            "name": "Knowledge QA Share Test",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": client_id,
+        }
+    )
+    conversation_id = db.add_conversation(
+        {
+            "character_id": char_id,
+            "title": "Shareable conversation",
+            "client_id": client_id,
+        }
+    )
+    user_message_id = db.add_message(
+        {
+            "conversation_id": conversation_id,
+            "sender": "user",
+            "content": "What is the summary?",
+            "client_id": client_id,
+        }
+    )
+    assistant_message_id = db.add_message(
+        {
+            "conversation_id": conversation_id,
+            "sender": "assistant",
+            "content": "The summary is positive. [1]",
+            "parent_message_id": user_message_id,
+            "client_id": client_id,
+        }
+    )
+    assert assistant_message_id is not None
+    assert db.set_message_rag_context(
+        assistant_message_id,
+        {
+            "search_query": "What is the summary?",
+            "generated_answer": "The summary is positive. [1]",
+            "retrieved_documents": [
+                {
+                    "id": "doc-1",
+                    "title": "Report",
+                    "excerpt": "Positive findings.",
+                }
+            ],
+        },
+    )
+    return conversation_id
+
+
+def test_share_link_create_list_revoke_and_public_resolve(tmp_path, monkeypatch):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="1")
+    client = _build_app(db, user_id=1)
+    conversation_id = _seed_conversation_with_messages(db, client_id="1")
+
+    async def _fake_get_db_for_user_id(user_id: int, _auth_user_id: str):
+        assert int(user_id) == 1
+        return db
+
+    monkeypatch.setattr(chat_router, "get_chacha_db_for_user_id", _fake_get_db_for_user_id)
+
+    create_response = client.post(
+        f"/api/v1/chat/conversations/{conversation_id}/share-links",
+        json={"permission": "view"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    created = create_response.json()
+    assert created["permission"] == "view"
+    assert created["share_id"]
+    assert created["token"]
+    assert created["share_path"].startswith("/knowledge/shared/")
+
+    list_response = client.get(f"/api/v1/chat/conversations/{conversation_id}/share-links")
+    assert list_response.status_code == 200, list_response.text
+    listed = list_response.json()
+    assert listed["conversation_id"] == conversation_id
+    assert len(listed["links"]) == 1
+    assert listed["links"][0]["id"] == created["share_id"]
+
+    resolve_response = client.get(f"/api/v1/chat/shared/conversations/{created['token']}")
+    assert resolve_response.status_code == 200, resolve_response.text
+    resolved = resolve_response.json()
+    assert resolved["conversation_id"] == conversation_id
+    assert resolved["permission"] == "view"
+    assert resolved["shared_by_user_id"] == "1"
+    assert len(resolved["messages"]) >= 2
+    assert any(message.get("rag_context") for message in resolved["messages"])
+
+    revoke_response = client.delete(
+        f"/api/v1/chat/conversations/{conversation_id}/share-links/{created['share_id']}"
+    )
+    assert revoke_response.status_code == 200, revoke_response.text
+    revoked = revoke_response.json()
+    assert revoked["success"] is True
+    assert revoked["share_id"] == created["share_id"]
+
+    revoked_resolve_response = client.get(
+        f"/api/v1/chat/shared/conversations/{created['token']}"
+    )
+    assert revoked_resolve_response.status_code == 403
+    assert revoked_resolve_response.json()["detail"] == "Share link revoked"
+
+
+def test_share_link_resolve_rejects_malformed_token(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="1")
+    client = _build_app(db, user_id=1)
+
+    response = client.get("/api/v1/chat/shared/conversations/not-a-valid-token")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Malformed share token"

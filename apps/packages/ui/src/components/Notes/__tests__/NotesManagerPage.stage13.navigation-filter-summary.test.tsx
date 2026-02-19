@@ -89,7 +89,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 }))
 
 vi.mock("@/services/note-keywords", () => ({
-  getAllNoteKeywords: mockGetAllNoteKeywords,
+  getAllNoteKeywordStats: mockGetAllNoteKeywords,
   searchNoteKeywords: mockSearchNoteKeywords
 }))
 
@@ -209,7 +209,11 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
     mockGetSetting.mockResolvedValue(null)
     mockSetSetting.mockResolvedValue(undefined)
     mockClearSetting.mockResolvedValue(undefined)
-    mockGetAllNoteKeywords.mockResolvedValue(["research", "ml", "planning"])
+    mockGetAllNoteKeywords.mockResolvedValue([
+      { keyword: "research", noteCount: 4 },
+      { keyword: "ml", noteCount: 2 },
+      { keyword: "planning", noteCount: 0 }
+    ])
     mockSearchNoteKeywords.mockResolvedValue(["research", "ml", "planning"])
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
       const path = String(request.path || "")
@@ -261,7 +265,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
     renderPage()
     fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
     await screen.findByText("Apply filters")
-    fireEvent.click(screen.getByText("research"))
+    fireEvent.click(screen.getByText(/^research\b/i))
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
 
     await waitFor(() => {
@@ -287,7 +291,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
     await screen.findByText("Apply filters")
-    fireEvent.click(screen.getByText("research"))
+    fireEvent.click(screen.getByText(/^research\b/i))
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
 
     await waitFor(() => {
@@ -299,5 +303,5 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
       'Query: "ML" + Keywords: research'
     )
     expect(screen.getByLabelText("Clear active note filters")).toBeInTheDocument()
-  })
+  }, 12000)
 })

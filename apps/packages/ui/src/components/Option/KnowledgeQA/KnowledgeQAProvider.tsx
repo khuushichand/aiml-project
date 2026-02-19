@@ -42,6 +42,10 @@ import { truncateAnswerPreview } from "./historyUtils"
 
 const LOCAL_THREAD_PREFIX = "local-"
 const DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
+type CreateThreadOptions = {
+  parentConversationId?: string
+  forkedFromMessageId?: string
+}
 const KNOWLEDGE_QA_SETTINGS_OVERRIDES: Partial<RagSettings> = {
   enable_web_fallback: true,
   parent_context_size: 100,
@@ -78,6 +82,27 @@ const initialState: KnowledgeQAState = {
 
 const isLocalThreadId = (id: string | null | undefined) =>
   Boolean(id && id.startsWith(LOCAL_THREAD_PREFIX))
+
+function sliceMessagesForBranch(
+  messages: KnowledgeQAMessage[],
+  fromUserMessageId: string
+): KnowledgeQAMessage[] {
+  if (!fromUserMessageId) return []
+  const userIndex = messages.findIndex(
+    (message) => message.id === fromUserMessageId && message.role === "user"
+  )
+  if (userIndex < 0) return []
+
+  let branchEndExclusive = messages.length
+  for (let index = userIndex + 1; index < messages.length; index += 1) {
+    if (messages[index].role === "user") {
+      branchEndExclusive = index
+      break
+    }
+  }
+
+  return messages.slice(0, branchEndExclusive)
+}
 
 // Action types
 type Action =
@@ -771,74 +796,85 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_QUERY", payload: query })
   }, [])
 
-  const createNewThread = useCallback(async (title?: string): Promise<string> => {
-    try {
-      const characterId = await resolveDefaultCharacterId()
-      if (!characterId) {
-        throw new Error("Default character unavailable")
-      }
-
-      const resolvedTitle = title?.trim()
-        ? title.trim()
-        : `Knowledge QA - ${new Date().toLocaleDateString()}`
-
-      // Create a new conversation via API
-      const response = await tldwClient.createChat({
-        character_id: characterId,
-        title: resolvedTitle,
-        state: "in-progress",
-        source: "knowledge_qa",
-      })
-
-      const threadId = response?.id
-      if (!threadId) {
-        throw new Error("Chat creation returned no ID")
-      }
-
-      const version =
-        typeof response?.version === "number" ? response.version : null
-      if (version != null) {
-        await tagConversationKeyword(String(threadId), version)
-      } else {
-        try {
-          const current = await tldwClient.getChat(String(threadId))
-          const currentVersion =
-            typeof current?.version === "number" ? current.version : null
-          if (currentVersion != null) {
-            await tagConversationKeyword(String(threadId), currentVersion)
-          }
-        } catch (error) {
-          console.warn("Failed to fetch conversation version for tagging:", error)
+  const createNewThread = useCallback(
+    async (title?: string, options?: CreateThreadOptions): Promise<string> => {
+      try {
+        const characterId = await resolveDefaultCharacterId()
+        if (!characterId) {
+          throw new Error("Default character unavailable")
         }
-      }
-      const normalizedState: "in-progress" | "resolved" =
-        response?.state === "resolved" ? "resolved" : "in-progress"
-      const newThread: KnowledgeQAThread = {
-        id: threadId,
-        title: response?.title || resolvedTitle || "New Knowledge QA Thread",
-        createdAt: new Date().toISOString(),
-        lastModifiedAt: new Date().toISOString(),
-        state: normalizedState,
-        messageCount: 0,
-        source: "knowledge_qa",
-      }
 
-      dispatch({ type: "ADD_THREAD", payload: newThread })
-      dispatch({ type: "SET_THREAD_ID", payload: threadId })
-      dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
-      dispatch({ type: "SET_MESSAGES", payload: [] })
+        const resolvedTitle = title?.trim()
+          ? title.trim()
+          : `Knowledge QA - ${new Date().toLocaleDateString()}`
 
-      return threadId
-    } catch (error) {
-      console.error("Failed to create thread:", error)
-      // Return a local ID as fallback
-      const localId = `${LOCAL_THREAD_PREFIX}${crypto.randomUUID()}`
-      dispatch({ type: "SET_THREAD_ID", payload: localId })
-      dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: true })
-      dispatch({ type: "SET_MESSAGES", payload: [] })
-      return localId
-    }
-  }, [resolveDefaultCharacterId, tagConversationKeyword])
+        // Create a new conversation via API
+        const response = await tldwClient.createChat({
+          character_id: characterId,
+          title: resolvedTitle,
+          state: "in-progress",
+          source: "knowledge_qa",
+          ...(typeof options?.parentConversationId === "string" &&
+          options.parentConversationId.trim().length > 0
+            ? { parent_conversation_id: options.parentConversationId.trim() }
+            : {}),
+          ...(typeof options?.forkedFromMessageId === "string" &&
+          options.forkedFromMessageId.trim().length > 0
+            ? { forked_from_message_id: options.forkedFromMessageId.trim() }
+            : {}),
+        })
+
+        const threadId = response?.id
+        if (!threadId) {
+          throw new Error("Chat creation returned no ID")
+        }
+
+        const version =
+          typeof response?.version === "number" ? response.version : null
+        if (version != null) {
+          await tagConversationKeyword(String(threadId), version)
+        } else {
+          try {
+            const current = await tldwClient.getChat(String(threadId))
+            const currentVersion =
+              typeof current?.version === "number" ? current.version : null
+            if (currentVersion != null) {
+              await tagConversationKeyword(String(threadId), currentVersion)
+            }
+          } catch (error) {
+            console.warn("Failed to fetch conversation version for tagging:", error)
+          }
+        }
+        const normalizedState: "in-progress" | "resolved" =
+          response?.state === "resolved" ? "resolved" : "in-progress"
+        const newThread: KnowledgeQAThread = {
+          id: threadId,
+          title: response?.title || resolvedTitle || "New Knowledge QA Thread",
+          createdAt: new Date().toISOString(),
+          lastModifiedAt: new Date().toISOString(),
+          state: normalizedState,
+          messageCount: 0,
+          source: "knowledge_qa",
+        }
+
+        dispatch({ type: "ADD_THREAD", payload: newThread })
+        dispatch({ type: "SET_THREAD_ID", payload: threadId })
+        dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
+        dispatch({ type: "SET_MESSAGES", payload: [] })
+
+        return threadId
+      } catch (error) {
+        console.error("Failed to create thread:", error)
+        // Return a local ID as fallback
+        const localId = `${LOCAL_THREAD_PREFIX}${crypto.randomUUID()}`
+        dispatch({ type: "SET_THREAD_ID", payload: localId })
+        dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: true })
+        dispatch({ type: "SET_MESSAGES", payload: [] })
+        return localId
+      }
+    },
+    [resolveDefaultCharacterId, tagConversationKeyword]
+  )
 
   const notifyPersistenceFailure = useCallback(() => {
     if (persistenceWarningShownRef.current) {
@@ -1353,6 +1389,156 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     }
   }, [state.searchHistory])
 
+  const selectSharedThread = useCallback(
+    async (shareToken: string) => {
+      const trimmedToken = shareToken.trim()
+      if (!trimmedToken) {
+        dispatch({ type: "SET_ERROR", payload: "Shared link is invalid." })
+        return
+      }
+
+      try {
+        const payload = await tldwClient.resolveConversationShareLink(trimmedToken)
+        const conversationId =
+          typeof payload?.conversation_id === "string" &&
+          payload.conversation_id.trim().length > 0
+            ? payload.conversation_id.trim()
+            : `shared-${crypto.randomUUID()}`
+        const rawMessages = Array.isArray(payload?.messages) ? payload.messages : []
+        const messages = normalizeMessagesWithContext(rawMessages, conversationId)
+
+        dispatch({ type: "SET_THREAD_ID", payload: null })
+        dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
+        dispatch({ type: "SET_MESSAGES", payload: messages })
+        dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+
+        const hydration = deriveThreadHydrationState(messages)
+        if (hydration?.query) {
+          dispatch({ type: "SET_QUERY", payload: hydration.query })
+        }
+        if (hydration && (hydration.results.length > 0 || hydration.answer)) {
+          dispatch({
+            type: "SET_RESULTS",
+            payload: {
+              results: hydration.results,
+              answer: hydration.answer,
+              citations: hydration.citations,
+            },
+          })
+        } else {
+          dispatch({ type: "CLEAR_RESULTS" })
+        }
+      } catch (error) {
+        console.error("Failed to load shared thread:", error)
+        dispatch({ type: "SET_THREAD_ID", payload: null })
+        dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
+        dispatch({ type: "SET_MESSAGES", payload: [] })
+        dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+        dispatch({ type: "CLEAR_RESULTS" })
+        dispatch({
+          type: "SET_ERROR",
+          payload: "Unable to open this shared conversation link.",
+        })
+      }
+    },
+    []
+  )
+
+  const branchFromTurn = useCallback(
+    async (messageId: string) => {
+      const branchSeedMessages = sliceMessagesForBranch(state.messages, messageId)
+      if (branchSeedMessages.length === 0) {
+        message.open({
+          type: "warning",
+          content: "Unable to branch from that turn.",
+          duration: 3,
+        })
+        return
+      }
+
+      const branchSourceQuestion =
+        branchSeedMessages.find((entry) => entry.id === messageId)?.content?.trim() || ""
+      const branchTitle =
+        branchSourceQuestion.length > 0
+          ? `Branch: ${branchSourceQuestion.slice(0, 64)}`
+          : "Knowledge QA Branch"
+      const parentConversationId =
+        state.currentThreadId && !isLocalThreadId(state.currentThreadId)
+          ? state.currentThreadId
+          : undefined
+      const branchThreadId = await createNewThread(branchTitle, {
+        parentConversationId,
+        forkedFromMessageId: messageId,
+      })
+
+      const branchedMessages: KnowledgeQAMessage[] = []
+      let parentMessageId: string | null = null
+
+      for (const sourceMessage of branchSeedMessages) {
+        const persisted = await persistChatMessage(
+          branchThreadId,
+          sourceMessage.role,
+          sourceMessage.content,
+          parentMessageId
+        )
+        const nextMessageId = persisted?.id || crypto.randomUUID()
+        parentMessageId = persisted?.id || null
+
+        const branchMessage: KnowledgeQAMessage = {
+          ...sourceMessage,
+          id: nextMessageId,
+          conversationId: branchThreadId,
+          timestamp: persisted?.timestamp || sourceMessage.timestamp,
+        }
+        branchedMessages.push(branchMessage)
+
+        if (
+          sourceMessage.role === "assistant" &&
+          sourceMessage.ragContext &&
+          persisted?.id
+        ) {
+          await persistRagContext(persisted.id, sourceMessage.ragContext)
+        }
+      }
+
+      dispatch({ type: "SET_THREAD_ID", payload: branchThreadId })
+      dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: isLocalThreadId(branchThreadId) })
+      dispatch({ type: "SET_MESSAGES", payload: branchedMessages })
+      dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+
+      const hydration = deriveThreadHydrationState(branchedMessages)
+      if (hydration?.query) {
+        dispatch({ type: "SET_QUERY", payload: hydration.query })
+      }
+      if (hydration && (hydration.results.length > 0 || hydration.answer)) {
+        dispatch({
+          type: "SET_RESULTS",
+          payload: {
+            results: hydration.results,
+            answer: hydration.answer,
+            citations: hydration.citations,
+          },
+        })
+      } else {
+        dispatch({ type: "CLEAR_RESULTS" })
+      }
+
+      message.open({
+        type: "success",
+        content: "Branch created from selected turn.",
+        duration: 3,
+      })
+    },
+    [
+      createNewThread,
+      message,
+      persistChatMessage,
+      persistRagContext,
+      state.currentThreadId,
+      state.messages,
+    ]
+  )
+
   const askFollowUp = useCallback(
     async (question: string) => {
       await runKnowledgeQuery(question, false)
@@ -1646,7 +1832,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       rerunWithTokenLimit,
       createNewThread,
       selectThread,
+      selectSharedThread,
       askFollowUp,
+      branchFromTurn,
       setPreset,
       updateSetting,
       resetSettings,
@@ -1670,7 +1858,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       rerunWithTokenLimit,
       createNewThread,
       selectThread,
+      selectSharedThread,
       askFollowUp,
+      branchFromTurn,
       setPreset,
       updateSetting,
       resetSettings,

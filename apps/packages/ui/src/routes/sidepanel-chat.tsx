@@ -57,6 +57,7 @@ import { useArtifactsStore } from "@/store/artifacts"
 import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
+import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
 import type { ServerChatHistoryItem } from "@/hooks/useServerChatHistory"
 import {
   OPEN_HISTORY_EVENT,
@@ -566,6 +567,64 @@ const SidepanelChat = () => {
     setNoteSaving(false)
     setNoteError(null)
   }, [])
+
+  const openOptionsHashRoute = React.useCallback((route: string) => {
+    const normalizedRoute = route.startsWith("/") ? route : `/${route}`
+    const path = `/options.html#${normalizedRoute}` as const
+
+    try {
+      if (browser?.runtime?.getURL) {
+        const url = browser.runtime.getURL(path)
+        if (browser.tabs?.create) {
+          void browser.tabs.create({ url })
+        } else {
+          window.open(url, "_blank")
+        }
+        return
+      }
+    } catch (error) {
+      console.debug("[sidepanel] openOptionsHashRoute browser API unavailable:", error)
+    }
+
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+        const url = chrome.runtime.getURL(path)
+        window.open(url, "_blank")
+        return
+      }
+    } catch (error) {
+      console.debug("[sidepanel] openOptionsHashRoute chrome API unavailable:", error)
+    }
+
+    window.open(path, "_blank")
+  }, [])
+
+  const handleGenerateFlashcardsFromSelection = React.useCallback(() => {
+    const content = noteDraftContent.trim()
+    if (!content) {
+      setNoteError(t("sidepanel:notes.emptyContent", "Nothing to save"))
+      return
+    }
+
+    const route = buildFlashcardsGenerateRoute({
+      text: content,
+      sourceType: "message",
+      sourceId: activeTabId || undefined,
+      sourceTitle: (noteDraftTitle || noteSuggestedTitle).trim() || undefined,
+      conversationId: serverChatId || undefined
+    })
+    openOptionsHashRoute(route)
+    resetNoteModal()
+  }, [
+    activeTabId,
+    noteDraftContent,
+    noteDraftTitle,
+    noteSuggestedTitle,
+    openOptionsHashRoute,
+    resetNoteModal,
+    serverChatId,
+    t
+  ])
 
   const handleNoteSave = React.useCallback(async () => {
     const content = noteDraftContent.trim()
@@ -2382,9 +2441,14 @@ const SidepanelChat = () => {
         onContentChange={handleNoteContentChange}
         onCancel={resetNoteModal}
         onSave={handleNoteSave}
+        onGenerateFlashcards={handleGenerateFlashcardsFromSelection}
         modalTitle={t("sidepanel:notes.saveToNotesTitle", "Save to Notes")}
         saveText={t("common:save", "Save")}
         cancelText={t("common:cancel", "Cancel")}
+        generateFlashcardsText={t(
+          "sidepanel:notes.generateFlashcards",
+          "Generate flashcards"
+        )}
         titleLabel={t("sidepanel:notes.titleLabel", "Title")}
         contentLabel={t("sidepanel:notes.contentLabel", "Content")}
         titleRequiredText={t("sidepanel:notes.titleRequired", "Title is required to create a note.")}

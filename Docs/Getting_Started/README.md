@@ -15,7 +15,7 @@ Choose your path based on what you want to accomplish:
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
-# make quickstart-install PYTHON=python3.12
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 # Verify: curl http://localhost:8000/health
 ```
 
@@ -34,6 +34,19 @@ Python support:
 | Bun | Optional (WebUI local dev) | Not needed |
 | Docker | Not needed | Required |
 | Domain name | Not needed | Production only |
+
+Quick setup reminders:
+- Choose a supported Python interpreter (3.10+; recommended 3.12), then create a venv:
+  - macOS/Linux: `python3.12 -m venv .venv` (or `python3.13` / `python3.11` / `python3.10`), then `source .venv/bin/activate`
+  - Windows PowerShell: `py -3.12 -m venv .venv` (or `-3.13` / `-3.11` / `-3.10`), then `.venv\\Scripts\\Activate.ps1`
+- PyAudio notes:
+  - Linux: install `portaudio19-dev` + `python3-pyaudio` (Debian/Ubuntu) or `portaudio-devel` + `python3-pyaudio` (Fedora/RHEL)
+  - macOS: `brew install portaudio && pip install pyaudio`
+  - Windows: `pip install pyaudio` (if build fails, install Microsoft C++ Build Tools)
+- WebUI local dev needs Bun. Install with:
+  - macOS/Linux: `curl -fsSL https://bun.sh/install | bash`
+  - Windows PowerShell: `powershell -c "irm bun.sh/install.ps1 | iex"`
+  - Verify with `bun --version`
 
 ## Common Issues
 

@@ -35,6 +35,7 @@ import type { WatchlistJob, WatchlistOutput, WatchlistTemplate } from "@/types/w
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { OutputPreviewDrawer } from "./OutputPreviewDrawer"
 import {
+  buildDeliveryDisclosureSummary,
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
   getDeliveryStatusLabel,
@@ -42,6 +43,29 @@ import {
   getOutputTemplateName,
   getOutputTemplateVersion
 } from "./outputMetadata"
+
+const OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:outputs:advanced-filters:v1"
+
+const readStoredDisclosureState = (key: string): boolean | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw === "1") return true
+    if (raw === "0") return false
+  } catch {
+    // Ignore storage errors and use default fallback.
+  }
+  return null
+}
+
+const persistDisclosureState = (key: string, value: boolean): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0")
+  } catch {
+    // Ignore storage errors and keep UI functional.
+  }
+}
 
 export const OutputsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -74,6 +98,11 @@ export const OutputsTab: React.FC = () => {
   const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | null>(null)
   const [customTitle, setCustomTitle] = useState("")
   const [regenLoading, setRegenLoading] = useState(false)
+  const hasActiveOutputFilters = Boolean(outputsJobFilter)
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
+    const stored = readStoredDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY)
+    return stored ?? hasActiveOutputFilters
+  })
 
   const selectedTemplateVersionOptions = useMemo(() => {
     if (!selectedTemplate) return []
@@ -138,11 +167,21 @@ export const OutputsTab: React.FC = () => {
     }
   }, [regenOpen, loadTemplates])
 
+  useEffect(() => {
+    if (hasActiveOutputFilters && !showAdvancedFilters) {
+      setShowAdvancedFilters(true)
+    }
+  }, [hasActiveOutputFilters, showAdvancedFilters])
+
+  useEffect(() => {
+    persistDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
+  }, [showAdvancedFilters])
+
   // Get job name by ID
   const getJobName = useCallback(
     (jobId: number) => {
       const job = jobs.find((j) => j.id === jobId)
-      return job?.name || `Job #${jobId}`
+      return job?.name || `Monitor #${jobId}`
     },
     [jobs]
   )
@@ -220,7 +259,7 @@ export const OutputsTab: React.FC = () => {
     : null
 
   // Table columns
-  const columns: ColumnsType<WatchlistOutput> = [
+  const allColumns: ColumnsType<WatchlistOutput> = [
     {
       title: t("watchlists:outputs.columns.title", "Title"),
       dataIndex: "title",
@@ -233,7 +272,7 @@ export const OutputsTab: React.FC = () => {
       )
     },
     {
-      title: t("watchlists:outputs.columns.job", "Job"),
+      title: t("watchlists:outputs.columns.job", "Monitor"),
       key: "job",
       width: 180,
       ellipsis: true,
@@ -283,9 +322,12 @@ export const OutputsTab: React.FC = () => {
         if (deliveries.length === 0) {
           return <span className="text-text-subtle">-</span>
         }
+        const disclosure = buildDeliveryDisclosureSummary(deliveries, {
+          maxVisible: showAdvancedFilters ? deliveries.length : 1
+        })
         return (
           <Space size={[4, 4]} wrap>
-            {deliveries.map((delivery, index) => (
+            {disclosure.visible.map((delivery, index) => (
               <Tooltip key={`${delivery.channel}-${delivery.status}-${index}`} title={delivery.detail}>
                 <Tag color={getDeliveryStatusColor(delivery.status)}>
                   <span className="inline-flex items-center gap-1">
@@ -297,6 +339,37 @@ export const OutputsTab: React.FC = () => {
                 </Tag>
               </Tooltip>
             ))}
+            {disclosure.hidden.length > 0 && (
+              <Tooltip
+                title={(
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium">
+                      {t("watchlists:outputs.deliveryOverflowTitle", "Additional delivery statuses")}
+                    </div>
+                    {disclosure.hidden.map((delivery, index) => (
+                      <div
+                        key={`${delivery.channel}-${delivery.status}-hidden-${index}`}
+                        className="text-xs"
+                      >
+                        {delivery.channel} {getDeliveryStatusLabel(delivery.status)}
+                        {delivery.detail ? `: ${delivery.detail}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  className="px-0"
+                  aria-label={t("watchlists:outputs.deliveryOverflowAria", "Show additional delivery statuses")}
+                >
+                  {t("watchlists:outputs.deliveryOverflowCount", "+{{count}} more", {
+                    count: disclosure.hidden.length
+                  })}
+                </Button>
+              </Tooltip>
+            )}
           </Space>
         )
       }
@@ -331,6 +404,7 @@ export const OutputsTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:outputs.preview", "Preview")}
               icon={<Eye className="h-4 w-4" />}
               onClick={() => openOutputPreview(record.id)}
             />
@@ -339,6 +413,7 @@ export const OutputsTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:outputs.download", "Download")}
               icon={<Download className="h-4 w-4" />}
               onClick={() => handleDownload(record)}
             />
@@ -347,6 +422,7 @@ export const OutputsTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:outputs.regenerate", "Regenerate")}
               icon={<RotateCcw className="h-4 w-4" />}
               onClick={() => openRegenerate(record)}
             />
@@ -355,23 +431,59 @@ export const OutputsTab: React.FC = () => {
       )
     }
   ]
+  const defaultColumnKeys = new Set(["title", "job", "created_at", "delivery", "actions"])
+  const columns = showAdvancedFilters
+    ? allColumns
+    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
 
   return (
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Select
-            placeholder={t("watchlists:outputs.filterByJob", "Filter by job")}
-            value={outputsJobFilter}
-            onChange={setOutputsJobFilter}
-            allowClear
-            className="w-48"
-            options={jobs.map((j) => ({
-              label: j.name,
-              value: j.id
-            }))}
-          />
+          <Button
+            type={showAdvancedFilters ? "default" : "dashed"}
+            size="small"
+            data-testid="watchlists-outputs-advanced-toggle"
+            onClick={() => setShowAdvancedFilters((prev) => !prev)}
+          >
+            {showAdvancedFilters
+              ? t("watchlists:outputs.hideAdvancedFilters", "Hide advanced filters")
+              : t("watchlists:outputs.showAdvancedFilters", "Show advanced filters")}
+          </Button>
+          {!showAdvancedFilters && hasActiveOutputFilters && (
+            <>
+              <span className="text-sm text-text-muted" data-testid="watchlists-outputs-active-filters-summary">
+                {t("watchlists:outputs.activeFilters", "Active filters")}: {getJobName(Number(outputsJobFilter))}
+              </span>
+              <Button
+                size="small"
+                type="text"
+                onClick={() => setOutputsJobFilter(null)}
+              >
+                {t("common:clear", "Clear")}
+              </Button>
+            </>
+          )}
+          {showAdvancedFilters && (
+            <Select
+              data-testid="watchlists-outputs-job-filter"
+              placeholder={t("watchlists:outputs.filterByJob", "Filter by monitor")}
+              value={outputsJobFilter}
+              onChange={setOutputsJobFilter}
+              allowClear
+              className="w-48"
+              options={jobs.map((j) => ({
+                label: j.name,
+                value: j.id
+              }))}
+            />
+          )}
+          {!showAdvancedFilters && (
+            <span className="text-xs text-text-subtle">
+              {t("watchlists:outputs.metricsHint", "Showing core columns. Use advanced mode for format/run details.")}
+            </span>
+          )}
         </div>
         <Button
           icon={<RefreshCw className="h-4 w-4" />}
@@ -384,7 +496,7 @@ export const OutputsTab: React.FC = () => {
 
       {/* Description */}
       <div className="text-sm text-text-muted">
-        {t("watchlists:outputs.description", "Generated briefings and reports from your watchlist jobs.")}
+        {t("watchlists:outputs.description", "Generated briefings and reports from your watchlist monitors.")}
       </div>
 
       {/* Table */}

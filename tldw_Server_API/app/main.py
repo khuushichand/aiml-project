@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRoute
 from loguru import logger
+from starlette import status as _starlette_status
 from starlette.requests import ClientDisconnect
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
@@ -42,6 +43,15 @@ from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
 )
 
+# Backward-compat for Starlette variants that expose 413 as
+# HTTP_413_REQUEST_ENTITY_TOO_LARGE instead of HTTP_413_CONTENT_TOO_LARGE.
+if not hasattr(_starlette_status, "HTTP_413_CONTENT_TOO_LARGE"):
+    setattr(
+        _starlette_status,
+        "HTTP_413_CONTENT_TOO_LARGE",
+        getattr(_starlette_status, "HTTP_413_REQUEST_ENTITY_TOO_LARGE", 413),
+    )
+
 _LOGGING_SETUP_EXCEPTIONS = (
     AttributeError,
     OSError,
@@ -58,6 +68,7 @@ _TRACE_EXCEPTIONS = (
     ValueError,
 )
 _IMPORT_EXCEPTIONS = (
+    AssertionError,
     ImportError,
     ModuleNotFoundError,
     AttributeError,
@@ -838,24 +849,39 @@ if _ULTRA_MINIMAL_APP:
     # Keep ultra-minimal import surface tiny; health is provided by the
     # control-plane routes registered later in this module.
     _startup_trace("ULTRA_MINIMAL_APP enabled: skipping API router imports (control-plane health only).")
+elif _MINIMAL_TEST_APP:
+    # Defer to the dedicated minimal import block below.
+    # This avoids importing heavyweight optional modules (e.g., torch-backed
+    # audio dependencies) during pytest collection.
+    _startup_trace("MINIMAL_TEST_APP enabled: deferring heavyweight router imports.")
 else:
+    _in_pytest_cmd = _shared_is_explicit_pytest_runtime() or any("pytest" in str(arg or "") for arg in sys.argv)
+    _full_audio_import_enabled = True
+    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_AUDIO"):
+        _full_audio_import_enabled = False
+        logger.info("Skipping audio endpoint imports in pytest full startup (set MINIMAL_TEST_INCLUDE_AUDIO=1 to enable)")
+
     # Audio Endpoint (includes WebSocket streaming transcription)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
-        from tldw_Server_API.app.api.v1.endpoints.audio.audio import ws_router as audio_ws_router
+    if _full_audio_import_enabled:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
+            from tldw_Server_API.app.api.v1.endpoints.audio.audio import ws_router as audio_ws_router
 
-        _HAS_AUDIO = True
-    except _IMPORT_EXCEPTIONS as _audio_err:
-        # guard non-critical endpoints in tests
-        logger.warning(f"Audio endpoints unavailable; skipping import: {_audio_err}")
+            _HAS_AUDIO = True
+        except _IMPORT_EXCEPTIONS as _audio_err:
+            # guard non-critical endpoints in tests
+            logger.warning(f"Audio endpoints unavailable; skipping import: {_audio_err}")
+            _HAS_AUDIO = False
+        # Guard audio_jobs import to avoid unrelated test breakages
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import router as audio_jobs_router
+
+            _HAS_AUDIO_JOBS = True
+        except _IMPORT_EXCEPTIONS as _audio_jobs_err:
+            logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
+            _HAS_AUDIO_JOBS = False
+    else:
         _HAS_AUDIO = False
-    # Guard audio_jobs import to avoid unrelated test breakages
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import router as audio_jobs_router
-
-        _HAS_AUDIO_JOBS = True
-    except _IMPORT_EXCEPTIONS as _audio_jobs_err:
-        logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
@@ -954,15 +980,22 @@ else:
         logger.warning(f"Reading highlights endpoints unavailable; skipping import: {_rh_err}")
         _HAS_READING_HIGHLIGHTS = False
     # Media Endpoints
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
-        from tldw_Server_API.app.api.v1.endpoints.web_scraping import (
-            router as web_scraping_router,
-        )
+    _full_media_import_enabled = True
+    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_MEDIA"):
+        _full_media_import_enabled = False
+        logger.info("Skipping media endpoint imports in pytest full startup (set MINIMAL_TEST_INCLUDE_MEDIA=1 to enable)")
+    if _full_media_import_enabled:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+            from tldw_Server_API.app.api.v1.endpoints.web_scraping import (
+                router as web_scraping_router,
+            )
 
-        _HAS_MEDIA = True
-    except _IMPORT_EXCEPTIONS as _media_import_err:
-        logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
+            _HAS_MEDIA = True
+        except _IMPORT_EXCEPTIONS as _media_import_err:
+            logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
+            _HAS_MEDIA = False
+    else:
         _HAS_MEDIA = False
     from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
 
@@ -1050,7 +1083,11 @@ else:
 #
 # Research/Paper Search and heavy routers/imports
 # In minimal test-app mode, import only what is needed for lightweight tests.
-if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
+if _ULTRA_MINIMAL_APP:
+    # Keep ultra-minimal import surface tiny; this mode intentionally avoids
+    # endpoint imports beyond control-plane health handling.
+    pass
+elif _MINIMAL_TEST_APP:
     # Research Endpoint (lightweight subset for tests)
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
@@ -1164,13 +1201,21 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
     from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
     from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
-    from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+    except _IMPORT_EXCEPTIONS as _users_import_err:
+        logger.warning(f"Users endpoints unavailable at import time; deferring: {_users_import_err}")
+        users_router = None  # type: ignore[assignment]
 
     # Web Scraping Management Endpoints
     from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
 
     # Writing Playground Endpoint (ChaChaNotes)
-    from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
+    except _IMPORT_EXCEPTIONS as _writing_import_err:
+        logger.warning(f"Writing endpoints unavailable at import time; deferring: {_writing_import_err}")
+        writing_router = None  # type: ignore[assignment]
 
     # Sandbox Endpoint (scaffold)
     try:
@@ -2403,12 +2448,11 @@ async def lifespan(app: FastAPI):
     # Audio Jobs worker (MVP)
     try:
         import asyncio as _asyncio
-        import os as _os
-
-        from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
 
         _enabled = _should_start_worker("AUDIO_JOBS_WORKER_ENABLED", "audio-jobs")
         if _enabled:
+            from tldw_Server_API.app.services.audio_jobs_worker import run_audio_jobs_worker as _run_audio_jobs
+
             audio_jobs_stop_event = _asyncio.Event()
             audio_jobs_task = _asyncio.create_task(_run_audio_jobs(audio_jobs_stop_event))
             logger.info("Audio Jobs worker started with explicit stop_event signal")
@@ -2420,14 +2464,13 @@ async def lifespan(app: FastAPI):
     # Audiobook Jobs worker
     try:
         import asyncio as _asyncio
-        import os as _os
-
-        from tldw_Server_API.app.services.audiobook_jobs_worker import (
-            run_audiobook_jobs_worker as _run_audiobook_jobs,
-        )
 
         _enabled = _should_start_worker("AUDIOBOOK_JOBS_WORKER_ENABLED", "audiobooks")
         if _enabled:
+            from tldw_Server_API.app.services.audiobook_jobs_worker import (
+                run_audiobook_jobs_worker as _run_audiobook_jobs,
+            )
+
             audiobook_jobs_stop_event = _asyncio.Event()
             audiobook_jobs_task = _asyncio.create_task(_run_audiobook_jobs(audiobook_jobs_stop_event))
             logger.info("Audiobook Jobs worker started with explicit stop_event signal")
@@ -2439,17 +2482,13 @@ async def lifespan(app: FastAPI):
     # Media Ingest Jobs worker
     try:
         import asyncio as _asyncio
-        import os as _os
-
-        from tldw_Server_API.app.services.media_ingest_jobs_worker import (
-            run_media_ingest_heavy_jobs_worker as _run_media_heavy_jobs,
-        )
-        from tldw_Server_API.app.services.media_ingest_jobs_worker import (
-            run_media_ingest_jobs_worker as _run_media_jobs,
-        )
 
         _enabled = _should_start_worker("MEDIA_INGEST_JOBS_WORKER_ENABLED", "media")
         if _enabled:
+            from tldw_Server_API.app.services.media_ingest_jobs_worker import (
+                run_media_ingest_jobs_worker as _run_media_jobs,
+            )
+
             media_ingest_jobs_stop_event = _asyncio.Event()
             media_ingest_jobs_task = _asyncio.create_task(_run_media_jobs(media_ingest_jobs_stop_event))
             logger.info("Media Ingest Jobs worker started with explicit stop_event signal")
@@ -2462,6 +2501,10 @@ async def lifespan(app: FastAPI):
             default_enabled=False,
         )
         if _heavy_enabled:
+            from tldw_Server_API.app.services.media_ingest_jobs_worker import (
+                run_media_ingest_heavy_jobs_worker as _run_media_heavy_jobs,
+            )
+
             media_ingest_heavy_jobs_stop_event = _asyncio.Event()
             media_ingest_heavy_jobs_task = _asyncio.create_task(
                 _run_media_heavy_jobs(media_ingest_heavy_jobs_stop_event)
@@ -2477,14 +2520,13 @@ async def lifespan(app: FastAPI):
     # Reading Digest Jobs worker
     try:
         import asyncio as _asyncio
-        import os as _os
-
-        from tldw_Server_API.app.core.Collections.reading_digest_jobs_worker import (
-            run_reading_digest_jobs_worker as _run_reading_digest_jobs,
-        )
 
         _enabled = _should_start_worker("READING_DIGEST_JOBS_WORKER_ENABLED", "reading")
         if _enabled:
+            from tldw_Server_API.app.core.Collections.reading_digest_jobs_worker import (
+                run_reading_digest_jobs_worker as _run_reading_digest_jobs,
+            )
+
             reading_digest_jobs_stop_event = _asyncio.Event()
             reading_digest_jobs_task = _asyncio.create_task(
                 _run_reading_digest_jobs(reading_digest_jobs_stop_event)
@@ -2982,17 +3024,20 @@ async def lifespan(app: FastAPI):
     # Start Reading digest scheduler (cron-based submission into Jobs)
     reading_digest_sched_task = None
     try:
-        from tldw_Server_API.app.services.reading_digest_scheduler import start_reading_digest_scheduler
-
         try:
             _rd_sched_enabled = _env_flag("READING_DIGEST_SCHEDULER_ENABLED", True)
             if globals().get("_TEST_MODE") and _os.getenv("READING_DIGEST_SCHEDULER_ENABLED") is None:
                 _rd_sched_enabled = False
         except _STARTUP_GUARD_EXCEPTIONS:
             _rd_sched_enabled = _shared_is_truthy(_os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "true"))
-        reading_digest_sched_task = await start_reading_digest_scheduler(enabled=_rd_sched_enabled)
-        if reading_digest_sched_task:
-            logger.info("Reading digest scheduler started")
+        if _rd_sched_enabled:
+            from tldw_Server_API.app.services.reading_digest_scheduler import start_reading_digest_scheduler
+
+            reading_digest_sched_task = await start_reading_digest_scheduler(enabled=True)
+            if reading_digest_sched_task:
+                logger.info("Reading digest scheduler started")
+            else:
+                logger.info("Reading digest scheduler disabled (READING_DIGEST_SCHEDULER_ENABLED != true)")
         else:
             logger.info("Reading digest scheduler disabled (READING_DIGEST_SCHEDULER_ENABLED != true)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
@@ -4920,16 +4965,28 @@ elif _MINIMAL_TEST_APP:
         character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-    # Include audio endpoints (REST + WebSocket) for e2e middleware/header tests
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
-        from tldw_Server_API.app.api.v1.endpoints.audio.audio import ws_router as audio_ws_router
+    # Include audio endpoints (REST + WebSocket) only when enabled by route policy.
+    # In pytest + MINIMAL_TEST_APP, default to skipping audio router imports unless
+    # explicitly requested. This avoids importing heavy optional transcriber deps
+    # that may hard-abort in constrained local test environments.
+    _minimal_audio_enabled = route_enabled("audio") or route_enabled("audio-websocket")
+    _in_pytest_cmd = _shared_is_explicit_pytest_runtime() or any("pytest" in str(arg or "") for arg in sys.argv)
+    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_AUDIO"):
+        _minimal_audio_enabled = False
+        logger.info("Skipping audio routers in minimal test app (set MINIMAL_TEST_INCLUDE_AUDIO=1 to enable)")
 
-        # Mount under /api/v1/audio to match test expectations and non-minimal routing
-        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
-        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-ws"])
-    except _IMPORT_EXCEPTIONS as _audio_min_err:
-        logger.debug(f"Skipping audio routers in minimal test app: {_audio_min_err}")
+    if _minimal_audio_enabled:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
+            from tldw_Server_API.app.api.v1.endpoints.audio.audio import ws_router as audio_ws_router
+
+            # Mount under /api/v1/audio to match test expectations and non-minimal routing
+            app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+            app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-ws"])
+        except _IMPORT_EXCEPTIONS as _audio_min_err:
+            logger.debug(f"Skipping audio routers in minimal test app: {_audio_min_err}")
+    else:
+        logger.info("Route disabled by policy: audio/audio-websocket (minimal test app)")
     # Health endpoints (required by AuthNZ integration tests)
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
@@ -4940,12 +4997,20 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _health_min_err:
         logger.debug(f"Skipping health router in minimal test app: {_health_min_err}")
     # Media endpoints (permission enforcement tests call /api/v1/media/add)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+    _minimal_media_enabled = route_enabled("media")
+    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_MEDIA"):
+        _minimal_media_enabled = False
+        logger.info("Skipping media router in minimal test app (set MINIMAL_TEST_INCLUDE_MEDIA=1 to enable)")
 
-        app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
-    except _IMPORT_EXCEPTIONS as _media_min_err:
-        logger.debug(f"Skipping media router in minimal test app: {_media_min_err}")
+    if _minimal_media_enabled:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+
+            app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+        except _IMPORT_EXCEPTIONS as _media_min_err:
+            logger.debug(f"Skipping media router in minimal test app: {_media_min_err}")
+    else:
+        logger.info("Route disabled by policy: media (minimal test app)")
     # Email search endpoint (normalized email tables)
     try:
         from tldw_Server_API.app.api.v1.endpoints.email import router as email_router
@@ -5017,6 +5082,8 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
     # Explicit feedback endpoints (shared chat/RAG)
     try:
+        from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
+
         app.include_router(feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     except _IMPORT_EXCEPTIONS as _feedback_min_err:
         logger.debug(f"Skipping feedback router in minimal test app: {_feedback_min_err}")
@@ -5204,13 +5271,19 @@ elif _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
 
         app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    except _IMPORT_EXCEPTIONS as _users_min_err:
+        logger.debug(f"Skipping users router in minimal test app: {_users_min_err}")
+
+    # Include BYOK and shared-key routes independently so optional users.py deps
+    # do not suppress keys endpoints in minimal test mode.
+    try:
         from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
         from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
 
         app.include_router(user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
         app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
-    except _IMPORT_EXCEPTIONS as _users_min_err:
-        logger.debug(f"Skipping users router in minimal test app: {_users_min_err}")
+    except _IMPORT_EXCEPTIONS as _keys_min_err:
+        logger.debug(f"Skipping BYOK/shared keys routers in minimal test app: {_keys_min_err}")
     # Include Jobs admin endpoints for tests that exercise jobs stats/counters
     try:
         from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
@@ -5218,13 +5291,23 @@ elif _MINIMAL_TEST_APP:
         app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.debug(f"Skipping jobs_admin router in minimal test app: {_e}")
-    # Include Audio Jobs (admin + listing) for tests under minimal mode
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import router as audio_jobs_router
+    # Include Audio Jobs (admin + listing) for tests under minimal mode when enabled.
+    _minimal_audio_jobs_enabled = route_enabled("audio-jobs")
+    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_AUDIO_JOBS"):
+        _minimal_audio_jobs_enabled = False
+        logger.info(
+            "Skipping audio-jobs router in minimal test app (set MINIMAL_TEST_INCLUDE_AUDIO_JOBS=1 to enable)"
+        )
 
-        app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
-    except _IMPORT_EXCEPTIONS as _audio_jobs_min_err:
-        logger.debug(f"Skipping audio_jobs router in minimal test app: {_audio_jobs_min_err}")
+    if _minimal_audio_jobs_enabled:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.audio.audio_jobs import router as audio_jobs_router
+
+            app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
+        except _IMPORT_EXCEPTIONS as _audio_jobs_min_err:
+            logger.debug(f"Skipping audio_jobs router in minimal test app: {_audio_jobs_min_err}")
+    else:
+        logger.info("Route disabled by policy: audio-jobs (minimal test app)")
     # Include Audit endpoints in minimal test app so tests relying on /api/v1/audit/* don't 404
     try:
         from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
@@ -5332,6 +5415,16 @@ elif _MINIMAL_TEST_APP:
         app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     except _IMPORT_EXCEPTIONS as _adm_inc_err:
         logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
+        # Keep BYOK admin controls available even when broader admin router
+        # dependencies are unavailable (e.g., optional MFA deps in tests).
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.admin.admin_byok import (
+                router as admin_byok_router,
+            )
+
+            app.include_router(admin_byok_router, prefix=f"{API_V1_PREFIX}/admin", tags=["admin"])
+        except _IMPORT_EXCEPTIONS as _adm_byok_min_err:
+            logger.debug(f"Skipping admin BYOK router in minimal test app: {_adm_byok_min_err}")
     # Organization endpoints used by AuthNZ integration tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
@@ -5440,7 +5533,8 @@ else:
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
     logger.info("Auth router consolidated: endpoints/auth.py")
-    _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    if "users_router" in locals() and users_router is not None:
+        _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
     _include_if_enabled("users", user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
 
     # Include AuthNZ debug endpoints once via the gated path.
@@ -5458,10 +5552,15 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.debug(f"Skipping authnz_debug router: {_e}")
     _include_if_enabled("privileges", privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
-    from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+    except _IMPORT_EXCEPTIONS as _admin_import_err:
+        logger.warning(f"Admin endpoints unavailable at import time; deferring: {_admin_import_err}")
+        admin_router = None  # type: ignore[assignment]
     from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
 
-    _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    if admin_router is not None:
+        _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
     # Self-service organization management endpoints
     try:
@@ -5635,12 +5734,17 @@ else:
         _include_if_enabled("items", _items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Items endpoint not available: {_e}")
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.reading import router as _reading_router
+    _reading_import_enabled = True
+    if _EXPLICIT_PYTEST_RUNTIME and not _test_env_flag_enabled("MINIMAL_TEST_INCLUDE_READING"):
+        _reading_import_enabled = False
+        logger.info("Skipping reading endpoint imports in pytest startup (set MINIMAL_TEST_INCLUDE_READING=1 to enable)")
+    if _reading_import_enabled:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.reading import router as _reading_router
 
-        _include_if_enabled("reading", _reading_router, prefix=f"{API_V1_PREFIX}", tags=["reading"])
-    except _IMPORT_EXCEPTIONS as _e:
-        logger.warning(f"Reading endpoint not available: {_e}")
+            _include_if_enabled("reading", _reading_router, prefix=f"{API_V1_PREFIX}", tags=["reading"])
+        except _IMPORT_EXCEPTIONS as _e:
+            logger.warning(f"Reading endpoint not available: {_e}")
     # Watchlists endpoints (sources/groups/tags/jobs/runs)
     try:
         from tldw_Server_API.app.api.v1.endpoints.watchlists import router as _watchlists_router
@@ -5826,9 +5930,10 @@ else:
     _include_if_enabled(
         "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
     )
-    _include_if_enabled(
-        "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
-    )
+    if "writing_router" in locals() and writing_router is not None:
+        _include_if_enabled(
+            "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
+        )
     from tldw_Server_API.app.api.v1.endpoints.persona import (
         router as persona_router,
     )

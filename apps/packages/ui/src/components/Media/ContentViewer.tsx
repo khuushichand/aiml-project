@@ -721,6 +721,11 @@ interface ContentViewerProps {
   totalResults?: number
   onChatWithMedia?: () => void
   onChatAboutMedia?: () => void
+  onGenerateFlashcardsFromContent?: (payload: {
+    text: string
+    sourceId?: string
+    sourceTitle?: string
+  }) => void
   onRefreshMedia?: () => void
   onKeywordsUpdated?: (mediaId: string | number, keywords: string[]) => void
   onCreateNoteWithContent?: (content: string, title: string) => void
@@ -753,6 +758,7 @@ export function ContentViewer({
   totalResults = 0,
   onChatWithMedia,
   onChatAboutMedia,
+  onGenerateFlashcardsFromContent,
   onRefreshMedia,
   onKeywordsUpdated,
   onCreateNoteWithContent,
@@ -2324,41 +2330,79 @@ export function ContentViewer({
       ]
     }] : []),
     // Create group: Note actions
-    ...(!isNote && onCreateNoteWithContent ? [
+    ...(!isNote && (onCreateNoteWithContent || onGenerateFlashcardsFromContent)
+      ? [
       { type: 'divider' as const },
       {
         key: 'group-create',
         type: 'group' as const,
         label: t('review:mediaPage.menuGroupCreate', { defaultValue: 'Create' }),
         children: [
-          {
-            key: 'create-note-content',
-            label: t('review:mediaPage.createNoteWithContent', {
-              defaultValue: 'Create note with content'
-            }),
-            icon: <StickyNote className="w-4 h-4" />,
-            onClick: () => {
-              const title = selectedMedia?.title || t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
-              onCreateNoteWithContent(content, title)
-            }
-          },
-          ...(selectedAnalysis ? [{
-            key: 'create-note-content-analysis',
-            label: t('review:mediaPage.createNoteWithContentAnalysis', {
-              defaultValue: 'Create note with content + analysis'
-            }),
-            icon: <StickyNote className="w-4 h-4" />,
-            onClick: () => {
-              const title = selectedMedia?.title || t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
-              const noteContent = `${content}\n\n---\n\n## Analysis\n\n${selectedAnalysis.text}`
-              onCreateNoteWithContent(noteContent, title)
-            }
-          }] : [])
+          ...(onCreateNoteWithContent
+            ? [
+                {
+                  key: 'create-note-content',
+                  label: t('review:mediaPage.createNoteWithContent', {
+                    defaultValue: 'Create note with content'
+                  }),
+                  icon: <StickyNote className="w-4 h-4" />,
+                  onClick: () => {
+                    const title =
+                      selectedMedia?.title ||
+                      t('review:mediaPage.untitled', { defaultValue: 'Untitled' })
+                    onCreateNoteWithContent(content, title)
+                  }
+                },
+                ...(selectedAnalysis
+                  ? [
+                      {
+                        key: 'create-note-content-analysis',
+                        label: t('review:mediaPage.createNoteWithContentAnalysis', {
+                          defaultValue: 'Create note with content + analysis'
+                        }),
+                        icon: <StickyNote className="w-4 h-4" />,
+                        onClick: () => {
+                          const title =
+                            selectedMedia?.title ||
+                            t('review:mediaPage.untitled', {
+                              defaultValue: 'Untitled'
+                            })
+                          const noteContent = `${content}\n\n---\n\n## Analysis\n\n${selectedAnalysis.text}`
+                          onCreateNoteWithContent(noteContent, title)
+                        }
+                      }
+                    ]
+                  : [])
+              ]
+            : []),
+          ...(onGenerateFlashcardsFromContent && content.trim().length > 0
+            ? [
+                {
+                  key: 'generate-flashcards-content',
+                  label: t('review:mediaPage.generateFlashcardsFromContent', {
+                    defaultValue: 'Generate flashcards from content'
+                  }),
+                  icon: <Sparkles className="w-4 h-4" />,
+                  onClick: () =>
+                    onGenerateFlashcardsFromContent({
+                      text: content,
+                      sourceId:
+                        selectedMedia?.id != null ? String(selectedMedia.id) : undefined,
+                      sourceTitle: selectedMedia?.title
+                    })
+                }
+              ]
+            : [])
         ]
       }
-    ] : []),
+    ]
+      : []),
     // Copy group
-    ...(!isNote && (onChatWithMedia || onChatAboutMedia || onCreateNoteWithContent)
+    ...(!isNote &&
+    (onChatWithMedia ||
+      onChatAboutMedia ||
+      onCreateNoteWithContent ||
+      onGenerateFlashcardsFromContent)
       ? [{ type: 'divider' as const }]
       : []),
     {

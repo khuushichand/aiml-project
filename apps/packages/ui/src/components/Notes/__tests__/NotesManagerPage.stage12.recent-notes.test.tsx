@@ -85,7 +85,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 }))
 
 vi.mock("@/services/note-keywords", () => ({
-  getAllNoteKeywords: vi.fn(async () => []),
+  getAllNoteKeywordStats: vi.fn(async () => []),
   searchNoteKeywords: vi.fn(async () => [])
 }))
 

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import { launchWithExtension } from "./utils/extension"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
 
@@ -43,7 +44,7 @@ const ensureComposer = async (page: any) => {
 
 test.describe("Playground collapsed paste", () => {
   test("keeps caret after label when typing", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension("", {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, "", {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true
@@ -93,7 +94,7 @@ test.describe("Playground collapsed paste", () => {
   })
 
   test("backspace deletes the collapsed block", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension("", {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, "", {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true

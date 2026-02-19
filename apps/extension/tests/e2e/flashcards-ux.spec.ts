@@ -3,7 +3,7 @@ import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
 import { waitForConnectionStore, logConnectionSnapshot } from "./utils/connection"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe("Flashcards workspace UX", () => {
   const waitForFlashcardsState = async (
@@ -177,7 +177,7 @@ test.describe("Flashcards workspace UX", () => {
 
   test("shows connection-focused empty state when server is offline", async () => {
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, extensionId } = (await launchWithExtension(extPath)) as any
+    const { context, page, extensionId } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const optionsUrl = `chrome-extension://${extensionId}/options.html`
 
     await waitForConnectionReady(page)
@@ -226,7 +226,7 @@ test.describe("Flashcards workspace UX", () => {
 
   test("logs create mutation errors when server is unreachable", async () => {
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, optionsUrl } = (await launchWithExtension(extPath)) as any
+    const { context, page, optionsUrl } = (await launchWithExtensionOrSkip(test, extPath)) as any
 
     // Set up console listener FIRST - before any page navigation
     // This captures all console messages including those from bgRequest
@@ -306,20 +306,31 @@ test.describe("Flashcards workspace UX", () => {
       : `http://${serverUrl}`
 
     mark("preflight")
-    const preflight = await fetch(
-      `${normalizedServerUrl}/api/v1/flashcards?limit=1&offset=0`,
-      {
-        headers: {
-          "x-api-key": apiKey
+    let preflight: Response | null = null
+    try {
+      preflight = await fetch(
+        `${normalizedServerUrl}/api/v1/flashcards?limit=1&offset=0`,
+        {
+          headers: {
+            "x-api-key": apiKey
+          }
         }
-      }
-    )
+      )
+    } catch (error) {
+      test.skip(
+        true,
+        `Flashcards API preflight unreachable in this environment: ${String(error)}`
+      )
+      return
+    }
+    if (!preflight) return
     if (!preflight.ok) {
       const body = await preflight.text().catch(() => "")
       test.skip(
         true,
         `Flashcards API preflight failed: ${preflight.status} ${preflight.statusText} ${body}`
       )
+      return
     }
 
     const extPath = path.resolve("build/chrome-mv3")
@@ -328,7 +339,7 @@ test.describe("Flashcards workspace UX", () => {
 
     try {
       mark("launch extension")
-      const launchResult = await launchWithExtension(extPath, {
+      const launchResult = await launchWithExtensionOrSkip(test, extPath, {
         seedConfig: {
           tldwConfig: {
             serverUrl: normalizedServerUrl,

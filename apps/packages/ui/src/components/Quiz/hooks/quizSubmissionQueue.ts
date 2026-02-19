@@ -1,4 +1,4 @@
-import type { QuizAnswer } from "@/services/quizzes"
+import type { AnswerValue, QuizAnswerInput } from "@/services/quizzes"
 
 const QUEUED_SUBMISSION_PREFIX = "quiz-attempt-submit-queue-v1:"
 const SUBMISSION_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000 // 24 hours
@@ -6,7 +6,7 @@ const SUBMISSION_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000 // 24 hours
 export type QueuedQuizSubmission = {
   attemptId: number
   quizId: number
-  answers: Omit<QuizAnswer, "is_correct">[]
+  answers: QuizAnswerInput[]
   allowPartial: boolean
   queuedAt: number
   retryCount: number
@@ -19,11 +19,28 @@ const keyForAttempt = (attemptId: number) => `${QUEUED_SUBMISSION_PREFIX}${attem
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value != null
 
-const isValidAnswerEntry = (value: unknown): value is Omit<QuizAnswer, "is_correct"> => {
+const isValidAnswerValue = (value: unknown): value is AnswerValue => {
+  if (typeof value === "string") return true
+  if (typeof value === "number" && Number.isFinite(value)) return true
+  if (Array.isArray(value)) {
+    return value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  }
+  if (!isPlainObject(value)) return false
+  return Object.entries(value).every(
+    ([key, entry]) => key.trim().length > 0 && typeof entry === "string"
+  )
+}
+
+const isValidAnswerEntry = (value: unknown): value is QuizAnswerInput => {
   if (!isPlainObject(value)) return false
   if (typeof value.question_id !== "number") return false
-  const answerValue = value.user_answer
-  return typeof answerValue === "string" || typeof answerValue === "number"
+  if (!isValidAnswerValue(value.user_answer)) return false
+  if (value.hint_used != null && typeof value.hint_used !== "boolean") return false
+  if (value.time_spent_ms != null) {
+    if (typeof value.time_spent_ms !== "number" || !Number.isFinite(value.time_spent_ms)) return false
+    if (value.time_spent_ms < 0) return false
+  }
+  return true
 }
 
 export const isQueuedQuizSubmission = (

@@ -4,6 +4,7 @@
 # Imports
 import base64
 import json
+import os
 import pathlib
 import struct
 import zlib
@@ -200,6 +201,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     ConflictError,
     InputError,
+    RestoreWindowExpiredError,
 )
 
 _CHARACTERS_NONCRITICAL_EXCEPTIONS = (
@@ -231,6 +233,8 @@ _EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP = 200
 _EXEMPLAR_SEARCH_HYBRID_MIN_POOL = 40
 _EXEMPLAR_SEARCH_HYBRID_VECTOR_WEIGHT = 0.55
 _EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT = 0.45
+_CHARACTERS_RESTORE_RETENTION_ENV_KEY = "CHARACTERS_RESTORE_RETENTION_DAYS"
+_CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS = 30
 _CHARACTER_REVERT_FIELDS = (
     "name",
     "description",
@@ -247,6 +251,35 @@ _CHARACTER_REVERT_FIELDS = (
     "character_version",
     "extensions",
 )
+
+
+def _get_characters_restore_retention_days() -> int:
+    """Read and validate restore retention policy from environment."""
+    raw = os.getenv(
+        _CHARACTERS_RESTORE_RETENTION_ENV_KEY,
+        str(_CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS),
+    )
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid {} value {!r}; using default {} days.",
+            _CHARACTERS_RESTORE_RETENTION_ENV_KEY,
+            raw,
+            _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS,
+        )
+        return _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS
+
+    if parsed < 1:
+        logger.warning(
+            "Non-positive {} value {}; using default {} days.",
+            _CHARACTERS_RESTORE_RETENTION_ENV_KEY,
+            parsed,
+            _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS,
+        )
+        return _CHARACTERS_RESTORE_RETENTION_DEFAULT_DAYS
+
+    return parsed
 
 
 def _build_character_revert_payload(
@@ -449,6 +482,22 @@ def _flatten_character_exemplar_payload(payload: dict[str, Any]) -> dict[str, An
             flat['rights_notes'] = rights.get('notes')
 
     return flat
+
+
+def _is_permission_denied_db_error(error: Exception) -> bool:
+    """Best-effort matcher for DB/auth scope violations surfaced as DB errors."""
+    message = str(error).strip().lower()
+    if not message:
+        return False
+    permission_markers = (
+        "permission denied",
+        "forbidden",
+        "not authorized",
+        "not authorised",
+        "insufficient privilege",
+        "insufficient permissions",
+    )
+    return any(marker in message for marker in permission_markers)
 
 
 def _convert_db_exemplar_to_response_model(exemplar_dict_from_db: dict[str, Any]) -> CharacterExemplarResponse:
@@ -1088,7 +1137,7 @@ async def manage_character_tags_endpoint(
 
 
 @router.post(
-    "/{character_id}/exemplars",
+    "/{character_id:int}/exemplars",
     response_model=CharacterExemplarResponse | list[CharacterExemplarResponse],
     status_code=status.HTTP_201_CREATED,
     summary="Create character exemplar(s)",
@@ -1152,7 +1201,7 @@ async def create_character_exemplars_endpoint(
 
 
 @router.get(
-    "/{character_id}/exemplars/{exemplar_id}",
+    "/{character_id:int}/exemplars/{exemplar_id:int}",
     response_model=CharacterExemplarResponse,
     summary="Get character exemplar by ID",
     tags=["characters"],
@@ -1188,7 +1237,7 @@ async def get_character_exemplar_endpoint(
 
 
 @router.put(
-    "/{character_id}/exemplars/{exemplar_id}",
+    "/{character_id:int}/exemplars/{exemplar_id:int}",
     response_model=CharacterExemplarResponse,
     summary="Update character exemplar",
     tags=["characters"],
@@ -1238,7 +1287,7 @@ async def update_character_exemplar_endpoint(
 
 
 @router.delete(
-    "/{character_id}/exemplars/{exemplar_id}",
+    "/{character_id:int}/exemplars/{exemplar_id:int}",
     response_model=CharacterExemplarDeletionResponse,
     summary="Delete character exemplar",
     tags=["characters"],
@@ -1291,7 +1340,7 @@ async def delete_character_exemplar_endpoint(
 
 
 @router.post(
-    "/{character_id}/exemplars/search",
+    "/{character_id:int}/exemplars/search",
     response_model=CharacterExemplarSearchResponse,
     summary="Search character exemplars",
     tags=["characters"],
@@ -1334,7 +1383,7 @@ async def search_character_exemplars_endpoint(
 
 
 @router.post(
-    "/{character_id}/exemplars/select/debug",
+    "/{character_id:int}/exemplars/select/debug",
     response_model=CharacterExemplarSelectionDebug,
     summary="Debug exemplar selection",
     tags=["characters"],
@@ -1467,7 +1516,7 @@ async def get_world_book_runtime_config():
     return WorldBookRuntimeConfig(max_recursive_depth=MAX_RECURSIVE_DEPTH)
 
 
-@router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
+@router.get("/{character_id:int}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
         character_id: int = FastAPIPath(..., description="ID of the character.", gt=0),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -1489,7 +1538,7 @@ async def get_character_by_id_endpoint(  # Renamed from get_character
 
 
 @router.get(
-    "/{character_id}/versions/diff",
+    "/{character_id:int}/versions/diff",
     response_model=CharacterVersionDiffResponse,
     summary="Diff two character versions",
     tags=["characters"],
@@ -1575,7 +1624,7 @@ async def get_character_versions_diff_endpoint(
 
 
 @router.get(
-    "/{character_id}/versions",
+    "/{character_id:int}/versions",
     response_model=CharacterVersionListResponse,
     summary="Get character version history",
     tags=["characters"],
@@ -1607,7 +1656,7 @@ async def get_character_versions_endpoint(
 
 
 @router.post(
-    "/{character_id}/revert",
+    "/{character_id:int}/revert",
     response_model=CharacterResponse,
     summary="Revert character to a previous version snapshot",
     tags=["characters"],
@@ -1691,7 +1740,7 @@ async def revert_character_to_version_endpoint(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.put("/{character_id}", response_model=CharacterResponse, summary="Update character", tags=["characters"])
+@router.put("/{character_id:int}", response_model=CharacterResponse, summary="Update character", tags=["characters"])
 async def update_character_endpoint(  # Renamed from update_character
         update_data: CharacterUpdate,
         character_id: int = FastAPIPath(..., description="ID of the character to update.", gt=0),
@@ -1739,7 +1788,7 @@ async def update_character_endpoint(  # Renamed from update_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.delete("/{character_id}", response_model=DeletionResponse, summary="Delete character", tags=["characters"])
+@router.delete("/{character_id:int}", response_model=DeletionResponse, summary="Delete character", tags=["characters"])
 async def delete_character_endpoint(  # Renamed from delete_character
         character_id: int = FastAPIPath(..., description="ID of the character to delete.", gt=0),
         expected_version: int = Query(...,
@@ -1782,7 +1831,7 @@ async def delete_character_endpoint(  # Renamed from delete_character
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.post("/{character_id}/restore", response_model=CharacterResponse, summary="Restore deleted character", tags=["characters"])
+@router.post("/{character_id:int}/restore", response_model=CharacterResponse, summary="Restore deleted character", tags=["characters"])
 async def restore_character_endpoint(
         character_id: int = FastAPIPath(..., description="ID of the character to restore.", gt=0),
         expected_version: int = Query(...,
@@ -1794,9 +1843,16 @@ async def restore_character_endpoint(
 
     This endpoint undoes a soft delete, making the character visible and usable again.
     The expected_version must match the current version of the soft-deleted character.
+    Restore eligibility is enforced by `CHARACTERS_RESTORE_RETENTION_DAYS` (default: 30).
     """
     try:
-        success = restore_character_from_db(db, character_id, expected_version)
+        retention_days = _get_characters_restore_retention_days()
+        success = restore_character_from_db(
+            db,
+            character_id,
+            expected_version,
+            retention_days=retention_days,
+        )
 
         if not success:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1812,6 +1868,23 @@ async def restore_character_endpoint(
 
         return _convert_db_char_to_response_model(restored_char)
 
+    except RestoreWindowExpiredError as e:
+        logger.info(
+            "Restore denied for character {} with reason=restore_window_expired "
+            "(deleted_at={}, restore_expires_at={}, retention_days={}).",
+            character_id,
+            e.deleted_at_iso,
+            e.restore_expires_at_iso,
+            e.retention_days,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Restore window expired for character ID {character_id}. "
+                f"This character was deleted at {e.deleted_at_iso} and could only be restored until "
+                f"{e.restore_expires_at_iso} UTC."
+            ),
+        ) from e
     except ConflictError as e:
         logger.warning(f"Conflict error restoring character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
@@ -2385,6 +2458,11 @@ async def attach_world_book_to_character(
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
+        if _is_permission_denied_db_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to modify character world-book attachments",
+            ) from e
         logger.error(f"DB error attaching world book {attachment.world_book_id} to character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
@@ -2419,6 +2497,11 @@ async def detach_world_book_from_character(
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
+        if _is_permission_denied_db_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to modify character world-book attachments",
+            ) from e
         logger.error(f"DB error detaching world book {world_book_id} from character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
@@ -2461,6 +2544,11 @@ async def get_character_world_books(
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
+        if _is_permission_denied_db_error(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to access character world-book attachments",
+            ) from e
         logger.error(f"DB error getting world books for character {character_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
@@ -2826,7 +2914,7 @@ def _encode_png_with_chara_metadata(
     return png_header + ihdr + text_chunk + idat + iend
 
 
-@router.get("/{character_id}/export", response_model=None,
+@router.get("/{character_id:int}/export", response_model=None,
             summary="Export character in various formats", tags=["characters"])
 async def export_character(
     character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),

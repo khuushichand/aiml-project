@@ -129,6 +129,7 @@ export function FilterPanel({
   const [expandedSections, setExpandedSections] = useState({
     mediaTypes: false,
     advanced: false,
+    keywords: false,
   })
   const [mediaTypesSectionTouched, setMediaTypesSectionTouched] = useState(false)
   const normalizedSearchFields = useMemo(
@@ -690,69 +691,83 @@ export function FilterPanel({
 
       {/* Keywords */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-text">
-            {t('review:reviewPage.keywords', { defaultValue: 'Keywords' })}
-          </div>
-          {selectedKeywords.length > 0 && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primaryStrong font-medium">
-              {t('review:mediaPage.keywordsSelected', '{{count}} selected', { count: selectedKeywords.length })}
-            </span>
-          )}
-        </div>
-        <Select
-          mode="tags"
-          allowClear
-          aria-label={t('review:mediaPage.filterByKeyword', {
-            defaultValue: 'Filter by keyword'
-          })}
-          aria-describedby="media-keyword-helper media-keyword-status media-keyword-source-mode"
-          placeholder={t('review:mediaPage.filterByKeyword', {
-            defaultValue: 'Filter by keyword'
-          })}
-          className="w-full"
-          value={selectedKeywords}
-          onSearch={(txt) => {
-            setKeywordSearchText(txt)
-            if (onKeywordSearch) onKeywordSearch(txt)
-          }}
-          onChange={(vals) => {
-            onKeywordsChange(vals as string[])
-          }}
-          options={keywordOptions.map((k) => ({ label: k, value: k }))}
-        />
-        <div
-          id="media-keyword-helper"
-          className="text-xs text-text-muted"
+        <button
+          type="button"
+          onClick={() => toggleSection('keywords')}
+          className="flex items-center justify-between w-full text-sm text-text hover:text-text"
+          aria-expanded={expandedSections.keywords}
+          aria-controls="media-keywords-panel"
         >
-          {t('review:mediaPage.keywordHelper', {
-            defaultValue:
-              'Add keywords to narrow down results. Keywords are assigned when reviewing media.'
-          })}
-        </div>
-        <div
-          id="media-keyword-status"
-          className="sr-only"
-          aria-live="polite"
-          aria-atomic="true"
-          data-testid="keyword-suggestions-status"
-        >
-          {`${keywordSuggestionCount} ${t('review:mediaPage.keywordSuggestionsAvailable', {
-            defaultValue: 'keyword suggestions available'
-          })}`}
-        </div>
-        {keywordSourceMode === 'results' && (
-          <div id="media-keyword-source-mode" className="text-xs text-text-subtle">
-            {t('review:mediaPage.keywordSourceResultsScoped', {
-              defaultValue: 'Suggestions shown here are from current results.'
-            })}
-          </div>
-        )}
-        {keywordSourceMode !== 'results' && (
-          <div id="media-keyword-source-mode" className="sr-only">
-            {t('review:mediaPage.keywordSourceEndpoint', {
-              defaultValue: 'Suggestions shown here are from your full keyword list.'
-            })}
+          <span className="inline-flex items-center gap-2">
+            <span>{t('review:reviewPage.keywords', { defaultValue: 'Keywords' })}</span>
+            {selectedKeywords.length > 0 && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primaryStrong font-medium">
+                {t('review:mediaPage.keywordsSelected', '{{count}} selected', { count: selectedKeywords.length })}
+              </span>
+            )}
+          </span>
+          <ChevronDown
+            className={`w-4 h-4 transition-transform ${expandedSections.keywords ? 'rotate-180' : ''}`}
+            aria-hidden="true"
+          />
+        </button>
+        {expandedSections.keywords && (
+          <div id="media-keywords-panel" className="space-y-2">
+            <Select
+              mode="tags"
+              allowClear
+              aria-label={t('review:mediaPage.filterByKeyword', {
+                defaultValue: 'Filter by keyword'
+              })}
+              aria-describedby="media-keyword-helper media-keyword-status media-keyword-source-mode"
+              placeholder={t('review:mediaPage.filterByKeyword', {
+                defaultValue: 'Filter by keyword'
+              })}
+              className="w-full"
+              value={selectedKeywords}
+              onSearch={(txt) => {
+                setKeywordSearchText(txt)
+                if (onKeywordSearch) onKeywordSearch(txt)
+              }}
+              onChange={(vals) => {
+                onKeywordsChange(vals as string[])
+              }}
+              options={keywordOptions.map((k) => ({ label: k, value: k }))}
+            />
+            <div
+              id="media-keyword-helper"
+              className="text-xs text-text-muted"
+            >
+              {t('review:mediaPage.keywordHelper', {
+                defaultValue:
+                  'Add keywords to narrow down results. Keywords are assigned when reviewing media.'
+              })}
+            </div>
+            <div
+              id="media-keyword-status"
+              className="sr-only"
+              aria-live="polite"
+              aria-atomic="true"
+              data-testid="keyword-suggestions-status"
+            >
+              {`${keywordSuggestionCount} ${t('review:mediaPage.keywordSuggestionsAvailable', {
+                defaultValue: 'keyword suggestions available'
+              })}`}
+            </div>
+            {keywordSourceMode === 'results' && (
+              <div id="media-keyword-source-mode" className="text-xs text-text-subtle">
+                {t('review:mediaPage.keywordSourceResultsScoped', {
+                  defaultValue: 'Suggestions shown here are from current results.'
+                })}
+              </div>
+            )}
+            {keywordSourceMode !== 'results' && (
+              <div id="media-keyword-source-mode" className="sr-only">
+                {t('review:mediaPage.keywordSourceEndpoint', {
+                  defaultValue: 'Suggestions shown here are from your full keyword list.'
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

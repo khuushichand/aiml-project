@@ -7,6 +7,7 @@
  */
 
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
@@ -36,7 +37,7 @@ const TARGETS = {
 test.describe("List Virtualization Performance", () => {
   test.skip(!API_KEY, "TLDW_E2E_API_KEY must be set for performance-virtualization e2e tests")
   test("cold start time to interactive", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -103,7 +104,7 @@ test.describe("List Virtualization Performance", () => {
   })
 
   test("scroll performance with synthetic messages", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -203,7 +204,7 @@ test.describe("List Virtualization Performance", () => {
   })
 
   test("DOM node count stays bounded with virtualization", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -304,7 +305,7 @@ test.describe("List Virtualization Performance", () => {
   })
 
   test("sidepanel cold start time", async () => {
-    const { context, openSidepanel } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",
@@ -367,7 +368,7 @@ test.describe("List Virtualization Performance", () => {
 test.describe("Memory Performance", () => {
   test.skip(!API_KEY, "TLDW_E2E_API_KEY must be set for performance-virtualization e2e tests")
   test("memory baseline measurement", async () => {
-    const { context, page, optionsUrl } = await launchWithExtension(TEST_EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, TEST_EXT_PATH, {
       seedConfig: {
         serverUrl: SERVER_URL,
         authMode: "single-user",

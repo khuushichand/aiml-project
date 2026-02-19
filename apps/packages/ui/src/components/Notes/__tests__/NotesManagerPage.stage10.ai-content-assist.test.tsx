@@ -1,6 +1,6 @@
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import NotesManagerPage from "../NotesManagerPage"
 
@@ -85,7 +85,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 }))
 
 vi.mock("@/services/note-keywords", () => ({
-  getAllNoteKeywords: vi.fn(async () => []),
+  getAllNoteKeywordStats: vi.fn(async () => []),
   searchNoteKeywords: vi.fn(async () => [])
 }))
 
@@ -224,7 +224,7 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
     expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Edit source: Manual")
   })
 
-  it("suggests keywords with explicit confirmation and marks generated provenance", async () => {
+  it("suggests keywords with explicit selection and marks generated provenance after apply", async () => {
     renderPage()
     fireEvent.change(screen.getByPlaceholderText("Write your note here... (Markdown supported)"), {
       target: {
@@ -236,12 +236,42 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
     fireEvent.click(screen.getByTestId("notes-assist-suggest-keywords"))
 
     await waitFor(() => {
-      expect(mockConfirmDanger).toHaveBeenCalled()
+      expect(screen.getByTestId("notes-assist-keyword-suggestions-modal")).toBeInTheDocument()
     })
-    const confirmPayload = mockConfirmDanger.mock.calls[mockConfirmDanger.mock.calls.length - 1]?.[0]
-    expect(String(confirmPayload?.content || "")).toContain("quantum")
+
+    expect(mockConfirmDanger).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId("notes-assist-keyword-option-checks"))
+    fireEvent.click(screen.getByRole("button", { name: "Apply selected" }))
+
+    await waitFor(() => {
+      expect(mockMessageSuccess).toHaveBeenCalledWith("Applied suggested keywords.")
+    })
     expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent(
       "Edit source: Generated (Suggest keywords"
     )
+    const editorKeywordsControl = screen.getByTestId("notes-keywords-editor")
+    expect(within(editorKeywordsControl).getByText("quantum")).toBeInTheDocument()
+    expect(within(editorKeywordsControl).queryByText("checks")).not.toBeInTheDocument()
+  })
+
+  it("does not attach suggested keywords when the review modal is canceled", async () => {
+    renderPage()
+    fireEvent.change(screen.getByPlaceholderText("Write your note here... (Markdown supported)"), {
+      target: {
+        value:
+          "Quantum models track entanglement and decoherence. Quantum experiments repeat entanglement checks."
+      }
+    })
+
+    fireEvent.click(screen.getByTestId("notes-assist-suggest-keywords"))
+    const modal = await screen.findByTestId("notes-assist-keyword-suggestions-modal")
+    expect(modal).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Edit source: Manual")
+    })
+    const editorKeywordsControl = screen.getByTestId("notes-keywords-editor")
+    expect(within(editorKeywordsControl).queryByText("quantum")).not.toBeInTheDocument()
   })
 })

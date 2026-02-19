@@ -69,17 +69,23 @@ Finding IDs: `H6-1` through `H6-2`
 - Preference persistence tests for hint toggle state.
 - Visual regression tests for dense vs minimal hint modes.
 - Analytics instrumentation test for hint exposure and dismissal events.
-**Status**: In Progress
+**Status**: Complete
 
 **Implementation Notes (2026-02-18)**:
 - Added persisted hint-density preference (`expanded` -> `compact` -> `hidden`) using `FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING`.
 - Implemented shared preference behavior across Review and Cards surfaces via `useFlashcardsShortcutHintDensity`.
 - Added in-context hint-density toggles so users can reduce or restore hint verbosity without leaving task flow.
 - Added race-safe preference hydration logic so first-load setting sync cannot overwrite immediate user changes.
+- Added local-only hint telemetry (`flashcards-shortcut-hint-telemetry`) for:
+  - hint exposure events (by surface + density)
+  - hint density transitions
+  - hint dismissal events
+  - capped recent-event history and summary counters.
 
 **Validation Completed**:
 - `ManageTab.scheduling-metadata.test.tsx` (hint-density cycling + persistence verification)
 - `ReviewTab.edit-in-review.test.tsx` (review hint-density transition behavior)
+- `flashcards-shortcut-hint-telemetry.test.ts` (instrumentation coverage for exposure + dismissal + transition events)
 - `src/components/Flashcards/**/__tests__/*.test.tsx` (full Flashcards regression run)
 
 ## Dependencies

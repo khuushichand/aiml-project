@@ -143,7 +143,7 @@ Models are surfaced from your tldw_server configuration (OpenAI‑compatible pro
   - CI: GitHub Actions runs the typecheck on each push/PR (`.github/workflows/typecheck.yml`).
   - Use the typed helpers `bgRequest`, `bgStream`, and `bgUpload` for all server calls. Direct `browser.runtime.sendMessage({ type: 'tldw:request' ... })` calls should pass a path typed as `AllowedPath` to participate in checks.
 
-See `Testing-Guide.md` for how to run the Playwright E2E suite and manual smoke tests.
+See `docs/Testing-Guide.md` for Playwright E2E/manual smoke guidance, including the strict Watchlists no-skip gate command.
 
 ## Contributing
 

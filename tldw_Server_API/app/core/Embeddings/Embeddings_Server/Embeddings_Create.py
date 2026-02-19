@@ -40,7 +40,7 @@ def _import_torch():
     try:
         import torch  # type: ignore
         return torch
-    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
+    except Exception as e:
         # Defer error to call site with a clearer message
         raise ImportError("'torch' is required for this embeddings provider. Install torch to proceed.") from e
 
@@ -53,6 +53,24 @@ def _import_transformers():
     except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
         raise ImportError(
             "'transformers' is required for this embeddings provider. Install transformers to proceed."
+        ) from e
+
+
+_OPTIMUM_IMPORT_ERROR: Exception | None = None
+
+
+def _import_optimum_ort_model():
+    """Lazily import optimum ORT model class only when conversion is needed."""
+    global _OPTIMUM_IMPORT_ERROR
+    try:
+        from optimum.onnxruntime import ORTModelForFeatureExtraction as _ORTModelForFeatureExtraction  # type: ignore
+
+        _OPTIMUM_IMPORT_ERROR = None
+        return _ORTModelForFeatureExtraction
+    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
+        _OPTIMUM_IMPORT_ERROR = e
+        raise ImportError(
+            "'optimum[onnxruntime]' is required for ONNX conversion. Install optimum with onnxruntime support."
         ) from e
 
 
@@ -116,15 +134,8 @@ _EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
 ########################################################################################################################
 #
 # Stuff:
-try:
-    from optimum.onnxruntime import ORTModelForFeatureExtraction
-    OPTIMUM_AVAILABLE = True
-except _EMBEDDINGS_IMPORT_EXCEPTIONS:
-    # Catch broad exceptions to avoid import-time crashes in environments
-    # where optional deps pull in heavy libs (e.g., transformers/torch) that
-    # tests may stub out.
-    ORTModelForFeatureExtraction = None
-    OPTIMUM_AVAILABLE = False
+# NOTE: Do not import `optimum` at module import time.
+# Some environments crash when optional torch-backed deps initialize eagerly.
 
 COMMIT_HASHES: dict[str, str] = {
     "jinaai/jina-embeddings-v3": "4be32c2f5d65b95e4bcce473545b7883ec8d2edd",
@@ -1491,10 +1502,12 @@ class ONNXEmbedder:
             logger.debug(f"ONNX model file already exists at {self.onnx_model_file_path} for {self.model_identifier}")
             return
 
-        if not OPTIMUM_AVAILABLE or ORTModelForFeatureExtraction is None:
+        try:
+            ORTModelForFeatureExtraction = _import_optimum_ort_model()
+        except ImportError as exc:
             msg = "`optimum` library is not available. Cannot convert model to ONNX on-the-fly."
-            logger.error(msg)
-            raise RuntimeError(msg)
+            logger.error("{} Error: {}", msg, exc)
+            raise RuntimeError(msg) from exc
 
         logger.warning(
             f"ONNX model file not found at {self.onnx_model_file_path} for {self.model_identifier}. "

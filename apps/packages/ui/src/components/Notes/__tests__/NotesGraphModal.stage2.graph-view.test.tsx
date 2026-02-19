@@ -209,6 +209,21 @@ describe('NotesGraphModal stage 2 graph view', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('closes on Escape key', async () => {
+    const { onClose } = renderModal()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('notes-graph-canvas')).toBeInTheDocument()
+    })
+
+    const dialog = screen.getByRole('dialog')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalled()
+    })
+  })
+
   it('renders error state when graph request fails', async () => {
     mockBgRequest.mockRejectedValueOnce(new Error('graph unavailable'))
 

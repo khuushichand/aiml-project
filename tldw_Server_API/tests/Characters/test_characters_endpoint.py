@@ -2,6 +2,7 @@
 import base64
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Generator
 from io import BytesIO
 
@@ -17,10 +18,13 @@ import os
 from unittest.mock import patch, MagicMock  # For unit tests
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterUpdate
+from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterUpdate, MAX_NAME_LENGTH
+from tldw_Server_API.tests.Characters._ml_import_stubs import stub_heavy_ml_imports
 
 #
 # Local Imports
+stub_heavy_ml_imports()
+
 from tldw_Server_API.app.main import app as fastapi_app  # Your FastAPI app instance
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -449,6 +453,58 @@ def test_unit_create_character_success(mock_get_details: MagicMock, mock_create:
     mock_get_details.assert_called_once_with(mock_create.call_args[0][0], 1)
 
 
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.WorldBookService")
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
+def test_unit_attach_world_book_permission_denied(
+    mock_get_details: MagicMock,
+    mock_world_book_service: MagicMock,
+    client: TestClient,
+):
+    mock_get_details.return_value = {"id": 1, "name": "Permission Char"}
+    service = mock_world_book_service.return_value
+    service.get_world_book.return_value = {"id": 9, "name": "Restricted Book"}
+    service.attach_to_character.side_effect = CharactersRAGDBError("permission denied")
+
+    response = client.post(
+        f"{CHARACTERS_ENDPOINT_PREFIX}/1/world-books",
+        json={"world_book_id": 9, "enabled": True, "priority": 0},
+    )
+
+    assert response.status_code == 403, response.text
+    assert "Insufficient permissions" in response.json()["detail"]
+
+
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.WorldBookService")
+def test_unit_detach_world_book_permission_denied(
+    mock_world_book_service: MagicMock,
+    client: TestClient,
+):
+    service = mock_world_book_service.return_value
+    service.detach_from_character.side_effect = CharactersRAGDBError("forbidden")
+
+    response = client.delete(f"{CHARACTERS_ENDPOINT_PREFIX}/1/world-books/9")
+
+    assert response.status_code == 403, response.text
+    assert "Insufficient permissions" in response.json()["detail"]
+
+
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.WorldBookService")
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
+def test_unit_list_character_world_books_permission_denied(
+    mock_get_details: MagicMock,
+    mock_world_book_service: MagicMock,
+    client: TestClient,
+):
+    mock_get_details.return_value = {"id": 1, "name": "Permission Char"}
+    service = mock_world_book_service.return_value
+    service.get_character_world_books.side_effect = CharactersRAGDBError("insufficient privilege")
+
+    response = client.get(f"{CHARACTERS_ENDPOINT_PREFIX}/1/world-books")
+
+    assert response.status_code == 403, response.text
+    assert "Insufficient permissions" in response.json()["detail"]
+
+
 # ============================= INTEGRATION TESTS ==============================
 
 
@@ -476,6 +532,35 @@ class TestCharacterAPIIntegration:
         response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=payload)
         assert response.status_code == 409, response.text
         assert "already exists" in response.json()["detail"]
+
+    def test_create_character_accepts_name_at_max_length_integration(self, client: TestClient):
+        unique_prefix = f"MaxLen_{uuid.uuid4().hex}_"
+        max_length_name = (unique_prefix + ("N" * MAX_NAME_LENGTH))[:MAX_NAME_LENGTH]
+        payload = create_sample_character_payload(name=max_length_name)
+
+        response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=payload)
+
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["name"] == max_length_name
+        assert len(data["name"]) == MAX_NAME_LENGTH
+
+    def test_create_character_rejects_name_over_max_length_integration(self, client: TestClient):
+        unique_prefix = f"TooLong_{uuid.uuid4().hex}_"
+        over_limit_name = (unique_prefix + ("N" * (MAX_NAME_LENGTH + 1)))[: MAX_NAME_LENGTH + 1]
+        payload = create_sample_character_payload(name=over_limit_name)
+
+        response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=payload)
+
+        assert response.status_code == 422, response.text
+        detail = response.json().get("detail", [])
+        assert isinstance(detail, list)
+        assert any("name" in [str(part) for part in (item.get("loc") or [])] for item in detail)
+        assert any(
+            "at most" in str(item.get("msg", "")).lower()
+            and str(MAX_NAME_LENGTH) in str(item.get("msg", ""))
+            for item in detail
+        )
 
     def test_create_character_bad_image_data_integration(self, client: TestClient):
         payload = create_sample_character_payload("BadImage", image_base64="not_a_valid_base64_string")
@@ -628,6 +713,45 @@ class TestCharacterAPIIntegration:
         assert char_deleted_id in deleted_only_ids
         assert char_with_conversation not in deleted_only_ids
 
+    def test_query_characters_image_payload_controls(self, client: TestClient):
+        creator = f"CreatorImagePayload_{uuid.uuid4().hex[:6]}"
+        created = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"ImagePayload_{uuid.uuid4().hex[:6]}",
+                creator=creator,
+            ),
+        )
+        assert created.status_code == 201, created.text
+        created_id = int(created.json()["id"])
+
+        default_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&creator={creator}"
+        )
+        assert default_response.status_code == 200, default_response.text
+        default_items = default_response.json()["items"]
+        default_item = next(
+            (item for item in default_items if int(item.get("id", -1)) == created_id),
+            None,
+        )
+        assert default_item is not None
+        assert default_item.get("image_base64") is None
+        assert default_item.get("image_present") is True
+
+        include_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/query?page=1&page_size=20&creator={creator}&include_image_base64=true"
+        )
+        assert include_response.status_code == 200, include_response.text
+        include_items = include_response.json()["items"]
+        include_item = next(
+            (item for item in include_items if int(item.get("id", -1)) == created_id),
+            None,
+        )
+        assert include_item is not None
+        assert isinstance(include_item.get("image_base64"), str)
+        assert len(include_item["image_base64"]) > 0
+        assert include_item.get("image_present") is True
+
     def test_manage_character_tags_operations_integration(self, client: TestClient, test_db: CharactersRAGDB):
         char_a = client.post(
             f"{CHARACTERS_ENDPOINT_PREFIX}/",
@@ -729,6 +853,90 @@ class TestCharacterAPIIntegration:
             },
         )
         assert response.status_code == 422, response.text
+
+    def test_character_world_book_attachment_lifecycle_integration(
+        self, client: TestClient
+    ):
+        character_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=f"WBChar_{uuid.uuid4().hex[:6]}"),
+        )
+        assert character_response.status_code == 201, character_response.text
+        character_id = int(character_response.json()["id"])
+
+        world_book_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/world-books",
+            json={
+                "name": f"WB_{uuid.uuid4().hex[:6]}",
+                "description": "Attachment integration test",
+                "scan_depth": 3,
+                "token_budget": 500,
+                "recursive_scanning": False,
+                "enabled": True,
+            },
+        )
+        assert world_book_response.status_code == 201, world_book_response.text
+        world_book_id = int(world_book_response.json()["id"])
+
+        attach_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books",
+            json={"world_book_id": world_book_id, "enabled": True, "priority": 2},
+        )
+        assert attach_response.status_code == 200, attach_response.text
+        attach_data = attach_response.json()
+        assert int(attach_data["world_book_id"]) == world_book_id
+        assert attach_data["attachment_enabled"] is True
+        assert int(attach_data["attachment_priority"]) == 2
+
+        list_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books"
+        )
+        assert list_response.status_code == 200, list_response.text
+        attached_ids = {
+            int(item["world_book_id"]) for item in list_response.json() if "world_book_id" in item
+        }
+        assert world_book_id in attached_ids
+
+        detach_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books/{world_book_id}"
+        )
+        assert detach_response.status_code == 200, detach_response.text
+
+        detached_list_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books"
+        )
+        assert detached_list_response.status_code == 200, detached_list_response.text
+        detached_ids = {
+            int(item["world_book_id"])
+            for item in detached_list_response.json()
+            if "world_book_id" in item
+        }
+        assert world_book_id not in detached_ids
+
+    def test_character_world_book_attachment_missing_references_integration(
+        self, client: TestClient
+    ):
+        character_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=f"MissingWB_{uuid.uuid4().hex[:6]}"),
+        )
+        assert character_response.status_code == 201, character_response.text
+        character_id = int(character_response.json()["id"])
+
+        missing_world_book_id = 999_999_991
+        attach_missing_book_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books",
+            json={"world_book_id": missing_world_book_id, "enabled": True, "priority": 0},
+        )
+        assert attach_missing_book_response.status_code == 404
+        assert "World book with ID" in attach_missing_book_response.json().get("detail", "")
+
+        missing_character_id = 999_999_992
+        list_missing_character_response = client.get(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{missing_character_id}/world-books"
+        )
+        assert list_missing_character_response.status_code == 404
+        assert "Character with ID" in list_missing_character_response.json().get("detail", "")
 
     def test_update_character_integration(self, client: TestClient, test_db: CharactersRAGDB):
         create_payload = create_sample_character_payload("UpdateBase")
@@ -930,6 +1138,9 @@ class TestCharacterAPIIntegration:
         assert deleted_record is not None
         assert int(deleted_record["deleted"]) == 1
         deleted_version = int(deleted_record["version"])
+        # Close the test-thread SQLite connection before issuing the restore request.
+        # Requests run on a different thread with their own connection.
+        test_db.close_connection()
 
         restore_response = client.post(
             f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/restore?expected_version={deleted_version}"
@@ -965,6 +1176,8 @@ class TestCharacterAPIIntegration:
         ).fetchone()
         assert deleted_record is not None
         deleted_version = int(deleted_record["version"])
+        # Ensure test-thread connection is closed before restore request.
+        test_db.close_connection()
 
         response = client.post(
             f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/restore?expected_version={deleted_version + 1}"
@@ -976,6 +1189,48 @@ class TestCharacterAPIIntegration:
         response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/999999/restore?expected_version=1")
         assert response.status_code == 409, response.text
         assert "not found" in response.json()["detail"].lower()
+
+    def test_restore_character_outside_retention_window_integration(
+        self, client: TestClient, test_db: CharactersRAGDB, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("CHARACTERS_RESTORE_RETENTION_DAYS", "1")
+
+        create_payload = create_sample_character_payload("RestoreExpired")
+        create_response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=create_payload)
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        char_id = int(created["id"])
+
+        delete_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={created['version']}"
+        )
+        assert delete_response.status_code == 200, delete_response.text
+
+        conn = test_db.get_connection()
+        deleted_record = conn.execute(
+            "SELECT version FROM character_cards WHERE id = ?",
+            (char_id,),
+        ).fetchone()
+        assert deleted_record is not None
+        deleted_version = int(deleted_record["version"])
+
+        expired_deleted_at = (
+            datetime.now(timezone.utc) - timedelta(days=3)
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        conn.execute(
+            "UPDATE character_cards SET last_modified = ? WHERE id = ?",
+            (expired_deleted_at, char_id),
+        )
+        conn.commit()
+        test_db.close_connection()
+
+        response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}/restore?expected_version={deleted_version}"
+        )
+        assert response.status_code == 409, response.text
+        detail = response.json().get("detail", "")
+        assert "restore window expired" in detail.lower()
+        assert "could only be restored until" in detail.lower()
 
     def test_search_character_integration(self, client: TestClient, test_db: CharactersRAGDB):
         unique_name_search = f"SearchableNameAPI_{uuid.uuid4().hex[:6]}"
@@ -1369,7 +1624,13 @@ def test_pbt_update_character_api(
 
     # Verify each field in the response
     for resp_key, resp_value in updated_data_api.items():
-        if resp_key in ["id", "version", "image_base64"]:  # Already checked or handled by image_present
+        if resp_key in [
+            "id",
+            "version",
+            "image_base64",
+            "updated_at",
+            "last_modified",
+        ]:  # Server-managed metadata checked elsewhere or expected to change on update.
             continue
 
         if resp_key == "image_present":

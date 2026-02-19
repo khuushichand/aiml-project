@@ -282,11 +282,21 @@ def delete_character_from_db(db: CharactersRAGDB, character_id: int, expected_ve
         raise CharactersRAGDBError(f"Unexpected error deleting character: {exc}") from exc
 
 
-def restore_character_from_db(db: CharactersRAGDB, character_id: int, expected_version: int) -> bool:
+def restore_character_from_db(
+    db: CharactersRAGDB,
+    character_id: int,
+    expected_version: int,
+    *,
+    retention_days: int | None = None,
+) -> bool:
     """Restore a soft-deleted character from the database."""
 
     try:
-        success = db.restore_character_card(character_id, expected_version)
+        success = db.restore_character_card(
+            character_id,
+            expected_version,
+            retention_days=retention_days,
+        )
         if success:
             logger.info("Character ID {} restored successfully.", character_id)
         return bool(success)

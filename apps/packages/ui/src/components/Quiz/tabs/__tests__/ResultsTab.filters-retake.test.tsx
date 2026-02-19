@@ -3,6 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ResultsTab } from "../ResultsTab"
 import { useAllAttemptsQuery, useAttemptQuery, useQuizzesQuery } from "../../hooks"
+import {
+  useCreateDeckMutation,
+  useCreateFlashcardMutation,
+  useDecksQuery
+} from "@/components/Flashcards/hooks/useFlashcardQueries"
+
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
 
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
@@ -32,10 +41,20 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => navigationMocks.navigate
+}))
+
 vi.mock("../../hooks", () => ({
   useAllAttemptsQuery: vi.fn(),
   useQuizzesQuery: vi.fn(),
   useAttemptQuery: vi.fn()
+}))
+
+vi.mock("@/components/Flashcards/hooks/useFlashcardQueries", () => ({
+  useDecksQuery: vi.fn(),
+  useCreateDeckMutation: vi.fn(),
+  useCreateFlashcardMutation: vi.fn()
 }))
 
 if (!(globalThis as any).ResizeObserver) {
@@ -50,6 +69,7 @@ describe("ResultsTab filters and retake workflow", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
+    navigationMocks.navigate.mockReset()
 
     vi.mocked(useAllAttemptsQuery).mockReturnValue({
       data: {
@@ -96,6 +116,19 @@ describe("ResultsTab filters and retake workflow", () => {
       isLoading: false,
       isFetching: false
     } as any)
+
+    vi.mocked(useDecksQuery).mockReturnValue({
+      data: [],
+      isLoading: false
+    } as any)
+    vi.mocked(useCreateDeckMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useCreateFlashcardMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
   })
 
   it("applies persisted quiz filter to attempts query and supports retake action", () => {
@@ -111,6 +144,10 @@ describe("ResultsTab filters and retake workflow", () => {
     render(<ResultsTab onRetakeQuiz={onRetakeQuiz} />)
 
     expect(useAllAttemptsQuery).toHaveBeenCalledWith(expect.objectContaining({ quiz_id: 7 }))
+    expect(useQuizzesQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 20, offset: 0 }),
+      expect.objectContaining({ enabled: true })
+    )
 
     fireEvent.click(screen.getByRole("button", { name: /Retake/i }))
     expect(onRetakeQuiz).toHaveBeenCalledWith({
@@ -119,6 +156,18 @@ describe("ResultsTab filters and retake workflow", () => {
       sourceTab: "results",
       attemptId: 301
     })
+  })
+
+  it("routes row-level Study with Flashcards action with quiz and attempt context", () => {
+    render(<ResultsTab />)
+
+    fireEvent.click(screen.getAllByRole("button", { name: /Study with Flashcards/i })[0])
+
+    expect(navigationMocks.navigate).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/flashcards?tab=review&study_source=quiz&quiz_id=7&attempt_id=301"
+      )
+    )
   })
 
   it("shows no-match empty state when persisted pass filter excludes all attempts", () => {
@@ -218,5 +267,20 @@ describe("ResultsTab filters and retake workflow", () => {
     expect(screen.getByText("Score Trend")).toBeInTheDocument()
     const chart = screen.getByLabelText("Score percentage trend over recent attempts")
     expect(chart.querySelector("polyline")).not.toBeNull()
+  })
+
+  it("renders results skeleton placeholders while loading", () => {
+    vi.mocked(useAllAttemptsQuery).mockReturnValue({
+      data: undefined,
+      isLoading: true
+    } as any)
+    vi.mocked(useQuizzesQuery).mockReturnValue({
+      data: undefined,
+      isLoading: true
+    } as any)
+
+    render(<ResultsTab />)
+
+    expect(screen.getByTestId("results-loading-skeleton")).toBeInTheDocument()
   })
 })

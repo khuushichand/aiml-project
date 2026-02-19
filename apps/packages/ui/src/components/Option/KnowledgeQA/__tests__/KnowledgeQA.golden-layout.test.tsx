@@ -2,6 +2,7 @@ import React from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { KnowledgeQA } from "../index"
+import { MemoryRouter } from "react-router-dom"
 
 const state = {
   settingsPanelOpen: false,
@@ -11,6 +12,9 @@ const state = {
   hasSearched: false,
   isSearching: false,
   error: null as string | null,
+  currentThreadId: null as string | null,
+  selectThread: vi.fn(),
+  selectSharedThread: vi.fn(),
 }
 const connectivity = {
   online: true,
@@ -94,6 +98,13 @@ vi.mock("../ExportDialog", () => ({
 }))
 
 describe("KnowledgeQA golden layout guardrails", () => {
+  const renderKnowledgeQa = (initialEntries: string[] = ["/knowledge"]) =>
+    render(
+      <MemoryRouter initialEntries={initialEntries}>
+        <KnowledgeQA />
+      </MemoryRouter>
+    )
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useRealTimers()
@@ -103,6 +114,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
     state.hasSearched = false
     state.isSearching = false
     state.error = null
+    state.currentThreadId = null
     connectivity.online = true
     connectivity.isChecking = false
     connectivity.lastCheckedAt = Date.now()
@@ -115,7 +127,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
   })
 
   it("keeps hero + search-first layout when there are no results", () => {
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByText("Knowledge QA")).toBeInTheDocument()
@@ -129,7 +141,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
   it("switches to results layout while preserving history and search shell", () => {
     state.results = [{ id: "r1" }]
 
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     expect(screen.getByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
@@ -151,7 +163,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
     state.answer = null
     state.error = null
 
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     expect(screen.getByText("No results found")).toBeInTheDocument()
     expect(screen.getByText(/Confirm your sources were ingested and indexed/i)).toBeInTheDocument()
@@ -163,14 +175,14 @@ describe("KnowledgeQA golden layout guardrails", () => {
     state.answer = null
     state.error = null
 
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     expect(screen.getByTestId("knowledge-followup-input")).toBeInTheDocument()
     expect(screen.queryByText("Knowledge QA")).not.toBeInTheDocument()
   })
 
   it("exposes skip navigation and landmark regions", () => {
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     const skipLink = screen.getByRole("link", { name: "Skip to search" })
     expect(skipLink).toHaveAttribute("href", "#knowledge-search-input")
@@ -185,7 +197,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
     connectivity.online = false
     connectivity.lastCheckedAt = Date.now()
 
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     expect(screen.getByText("Server Offline")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Retry connection" })).toBeInTheDocument()
@@ -203,7 +215,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
   it("shows actionable RAG guidance with docs link and retry", () => {
     capabilitiesState.capabilities = { hasRag: false }
 
-    render(<KnowledgeQA />)
+    renderKnowledgeQa()
 
     expect(screen.getByText("RAG Not Available")).toBeInTheDocument()
     expect(
@@ -218,5 +230,17 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Retry capability check" }))
     expect(capabilitiesState.refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it("hydrates the selected thread from permalink routes", () => {
+    renderKnowledgeQa(["/knowledge/thread/thread-42"])
+
+    expect(state.selectThread).toHaveBeenCalledWith("thread-42")
+  })
+
+  it("hydrates shared conversations from tokenized permalink routes", () => {
+    renderKnowledgeQa(["/knowledge/shared/share-token-abc"])
+
+    expect(state.selectSharedThread).toHaveBeenCalledWith("share-token-abc")
   })
 })

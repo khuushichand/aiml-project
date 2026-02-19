@@ -150,6 +150,7 @@ async def _resolve_tts_byok(
     provider_hint: Optional[str],
     current_user: User,
     request: Any,
+    force_oauth_refresh: bool = False,
 ) -> tuple[Optional[int], Optional[dict[str, Any]], Optional[Any]]:
     user_id_int: Optional[int] = None
     try:
@@ -170,6 +171,7 @@ async def _resolve_tts_byok(
             user_id=user_id_int,
             request=request,
             fallback_resolver=_tts_fallback_resolver,
+            force_oauth_refresh=force_oauth_refresh,
         )
         if byok_tts_resolution.uses_byok:
             tts_overrides = {"api_key": byok_tts_resolution.api_key}

@@ -225,7 +225,7 @@ describe("TakeQuizTab navigation and submit guardrails", () => {
     await startQuizFlow()
 
     expect(
-      screen.getByText("Case-insensitive exact match. Extra spaces are ignored.")
+      screen.getByText(/Case-insensitive match\./)
     ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Go to question 3" }))
@@ -266,7 +266,7 @@ describe("TakeQuizTab navigation and submit guardrails", () => {
     })
 
     expect(screen.getByTestId("quiz-question-2")).toHaveAttribute("data-highlighted", "true")
-  }, 15000)
+  }, 30000)
 
   it("queues failed submissions and allows retry from inline status", async () => {
     const submitSpy = vi
@@ -359,10 +359,51 @@ describe("TakeQuizTab navigation and submit guardrails", () => {
         answers: [
           {
             question_id: 1,
-            user_answer: "true"
+            user_answer: "true",
+            hint_used: false
           }
         ]
       })
     )
+  }, 15000)
+
+  it("shows sticky mobile timer bar while taking a timed quiz", async () => {
+    vi.mocked(useQuizTimer).mockReturnValue({
+      totalSeconds: 599,
+      formattedTime: "09:59",
+      isDanger: false,
+      isWarning: true,
+      isExpired: false
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    await startQuizFlow()
+
+    const timerBar = screen.getByTestId("quiz-mobile-timer-bar")
+    expect(timerBar).toHaveTextContent("Time Remaining")
+    expect(timerBar).toHaveTextContent("09:59")
+    expect(timerBar.className).toContain("md:hidden")
+  }, 15000)
+
+  it("applies 44px touch-target sizing to key quiz actions", async () => {
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    expect(screen.getByRole("button", { name: /Start Quiz/i }).className).toContain("min-h-11")
+
+    await startQuizFlow()
+
+    expect(screen.getByRole("button", { name: "Back to list" }).className).toContain("min-h-11")
+    expect(screen.getByRole("button", { name: "Submit" }).className).toContain("min-h-11")
   }, 15000)
 })

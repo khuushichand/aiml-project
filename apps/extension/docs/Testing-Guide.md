@@ -69,6 +69,28 @@ bun run test:e2e:ui
 
 Artifacts (traces, screenshots, videos) are written under `test-results/`.
 
+### 3.1 Watchlists Real-Server Strict Gate (No Skips)
+
+Use this flow when validating the Watchlists UX gate locally so it matches CI behavior:
+
+```bash
+# from repo root
+cd apps/extension
+source ~/.nvm/nvm.sh
+nvm use --lts
+
+export TLDW_E2E_SERVER_URL=http://127.0.0.1:8000
+export TLDW_E2E_API_KEY=YOUR_SINGLE_USER_API_KEY
+
+bun run test:e2e:watchlists:strict
+```
+
+Important notes:
+- `TLDW_E2E_SERVER_URL` must include the scheme (`http://`), not just `127.0.0.1:8000`.
+- `test:e2e:watchlists:strict` writes `test-results/watchlists-e2e-report.json` and fails the run if any test is skipped.
+- Start the backend first (single-user mode) before running this command.
+- If Chromium extension launch is blocked by your execution environment (for example, restricted sandbox profile permissions), tests may be marked skipped by `launchWithExtensionOrSkip`; run outside the restricted environment for this gate.
+
 ---
 
 ## 4. E2E Test Suites (By Area)

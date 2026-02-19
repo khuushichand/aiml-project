@@ -48,6 +48,7 @@ Top navigation groups features into tabs. Notable areas include:
   - Go to Chat → Chat Completions.
   - Select a provider/model and send prompts; streaming supported for many providers.
   - Use Characters and Conversations for persona-based chats and history.
+  - In Characters → Recently deleted, restore availability follows the server restore window (`CHARACTERS_RESTORE_RETENTION_DAYS`, default `30` days).
   - Roleplay quickstart: `Docs/User_Guides/Character_Roleplay_Quickstart.md`.
   - Core roleplay guide: `Docs/User_Guides/Effective_Character_Roleplay_and_You.md`.
   - Advanced roleplay guide: `Docs/User_Guides/Advanced_Character_Roleplay_Guide.md`.
@@ -74,6 +75,7 @@ Top navigation groups features into tabs. Notable areas include:
 - Bring Your Own Keys (BYOK)
   - Multi-user only: store per-user provider keys and optional org/team shared keys.
   - See `Docs/User_Guides/BYOK_User_Guide.md` for setup, endpoints, and policies.
+  - OpenAI OAuth first-time setup: `Docs/User_Guides/OpenAI_OAuth_First_Time_Setup.md`.
 
 ## Tips
 

@@ -608,6 +608,8 @@ async def _resolve_embeddings_byok(
     provider: str,
     current_user: User | None,
     request: Request | None,
+    *,
+    force_oauth_refresh: bool = False,
 ) -> ResolvedByokCredentials:
     user_id_int = getattr(current_user, "id_int", None) if current_user else None
     if user_id_int is None and current_user is not None:
@@ -619,6 +621,7 @@ async def _resolve_embeddings_byok(
         provider,
         user_id=user_id_int,
         request=request,
+        force_oauth_refresh=force_oauth_refresh,
     )
 
 
@@ -629,6 +632,25 @@ def _raise_missing_embeddings_key(provider: str) -> None:
         detail={
             "error_code": "missing_provider_credentials",
             "message": f"Embeddings provider '{provider}' requires an API key.",
+        },
+    )
+
+
+def _is_http_401_error(exc: BaseException) -> bool:
+    try:
+        return int(getattr(exc, "status_code", 0) or 0) == status.HTTP_401_UNAUTHORIZED
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
+def _raise_oauth_reconnect_required(provider: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "error_code": "oauth_reconnect_required",
+            "provider": provider,
+            "reconnect_required": True,
+            "message": f"{provider} OAuth access is no longer valid. Reconnect and retry.",
         },
     )
 
@@ -2305,12 +2327,21 @@ async def create_embedding_endpoint(
 
         byok_cache: dict[str, ResolvedByokCredentials] = {}
 
-        async def _resolve_provider_credentials(name: str) -> ResolvedByokCredentials:
+        async def _resolve_provider_credentials(
+            name: str,
+            *,
+            force_oauth_refresh: bool = False,
+        ) -> ResolvedByokCredentials:
             key = (name or "").strip().lower()
             cached = byok_cache.get(key)
-            if cached:
+            if cached and not force_oauth_refresh:
                 return cached
-            resolved = await _resolve_embeddings_byok(key, current_user, request)
+            resolved = await _resolve_embeddings_byok(
+                key,
+                current_user,
+                request,
+                force_oauth_refresh=force_oauth_refresh,
+            )
             byok_cache[key] = resolved
             return resolved
 
@@ -2527,14 +2558,44 @@ async def create_embedding_endpoint(
                             _raise_missing_embeddings_key(p)
                         else:
                             continue
-                    embeddings = await create_embeddings_batch_async(
-                        texts=texts_to_embed,
-                        provider=p,
-                        model_id=target_model_id,
-                        dimensions=embedding_request.dimensions,
-                        api_key=credentials.api_key,
-                        metadata=user_metadata,
-                    )
+                    try:
+                        embeddings = await create_embeddings_batch_async(
+                            texts=texts_to_embed,
+                            provider=p,
+                            model_id=target_model_id,
+                            dimensions=embedding_request.dimensions,
+                            api_key=credentials.api_key,
+                            metadata=user_metadata,
+                        )
+                    except HTTPException as auth_exc:
+                        if not (
+                            p == "openai"
+                            and getattr(credentials, "auth_source", None) == "oauth"
+                            and _is_http_401_error(auth_exc)
+                        ):
+                            raise
+                        try:
+                            refreshed_credentials = await _resolve_provider_credentials(
+                                p,
+                                force_oauth_refresh=True,
+                            )
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                            _raise_oauth_reconnect_required(p)
+                        if not refreshed_credentials.api_key:
+                            _raise_oauth_reconnect_required(p)
+                        try:
+                            embeddings = await create_embeddings_batch_async(
+                                texts=texts_to_embed,
+                                provider=p,
+                                model_id=target_model_id,
+                                dimensions=embedding_request.dimensions,
+                                api_key=refreshed_credentials.api_key,
+                                metadata=user_metadata,
+                            )
+                        except HTTPException as retry_exc:
+                            if _is_http_401_error(retry_exc):
+                                _raise_oauth_reconnect_required(p)
+                            raise
                     provider = p
                     if target_model_id:
                         model = target_model_id
@@ -2552,6 +2613,12 @@ async def create_embedding_endpoint(
                         he.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
                         and isinstance(getattr(he, "detail", None), dict)
                         and he.detail.get("error_code") == "missing_provider_credentials"
+                    ):
+                        raise
+                    if (
+                        he.status_code == status.HTTP_401_UNAUTHORIZED
+                        and isinstance(getattr(he, "detail", None), dict)
+                        and he.detail.get("error_code") == "oauth_reconnect_required"
                     ):
                         raise
                     if he.status_code and 400 <= he.status_code < 500 and he.status_code != 429:
@@ -2804,16 +2871,48 @@ async def create_embeddings_batch_endpoint(
     if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
         if not _should_skip_missing_key(provider, credentials):
             _raise_missing_embeddings_key(provider)
-
-    embeddings = await create_embeddings_batch_async(
-        texts=texts,
-        provider=provider,
-        model_id=model,
-        dimensions=payload.dimensions,
-        api_key=credentials.api_key,
-        metadata=user_metadata,
-    )
-    await credentials.touch_last_used()
+    active_credentials = credentials
+    try:
+        embeddings = await create_embeddings_batch_async(
+            texts=texts,
+            provider=provider,
+            model_id=model,
+            dimensions=payload.dimensions,
+            api_key=active_credentials.api_key,
+            metadata=user_metadata,
+        )
+    except HTTPException as auth_exc:
+        if not (
+            provider == "openai"
+            and getattr(active_credentials, "auth_source", None) == "oauth"
+            and _is_http_401_error(auth_exc)
+        ):
+            raise
+        try:
+            active_credentials = await _resolve_embeddings_byok(
+                provider,
+                current_user,
+                request,
+                force_oauth_refresh=True,
+            )
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+            _raise_oauth_reconnect_required(provider)
+        if not active_credentials.api_key:
+            _raise_oauth_reconnect_required(provider)
+        try:
+            embeddings = await create_embeddings_batch_async(
+                texts=texts,
+                provider=provider,
+                model_id=model,
+                dimensions=payload.dimensions,
+                api_key=active_credentials.api_key,
+                metadata=user_metadata,
+            )
+        except HTTPException as retry_exc:
+            if _is_http_401_error(retry_exc):
+                _raise_oauth_reconnect_required(provider)
+            raise
+    await active_credentials.touch_last_used()
 
     if payload.dimensions is not None:
         embeddings = adjust_dimensions(embeddings, payload.dimensions, provider, model)
@@ -2895,14 +2994,46 @@ async def get_embedding_model_info(
         credentials = await _resolve_embeddings_byok(resolved_provider, current_user, request)
         if resolved_provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
             _raise_missing_embeddings_key(resolved_provider)
-        vectors = await create_embeddings_batch_async(
-            texts=["model probe"],
-            provider=resolved_provider,
-            model_id=model,
-            api_key=credentials.api_key,
-            metadata=user_metadata,
-        )
-        await credentials.touch_last_used()
+        active_credentials = credentials
+        try:
+            vectors = await create_embeddings_batch_async(
+                texts=["model probe"],
+                provider=resolved_provider,
+                model_id=model,
+                api_key=active_credentials.api_key,
+                metadata=user_metadata,
+            )
+        except HTTPException as auth_exc:
+            if not (
+                resolved_provider == "openai"
+                and getattr(active_credentials, "auth_source", None) == "oauth"
+                and _is_http_401_error(auth_exc)
+            ):
+                raise
+            try:
+                active_credentials = await _resolve_embeddings_byok(
+                    resolved_provider,
+                    current_user,
+                    request,
+                    force_oauth_refresh=True,
+                )
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                _raise_oauth_reconnect_required(resolved_provider)
+            if not active_credentials.api_key:
+                _raise_oauth_reconnect_required(resolved_provider)
+            try:
+                vectors = await create_embeddings_batch_async(
+                    texts=["model probe"],
+                    provider=resolved_provider,
+                    model_id=model,
+                    api_key=active_credentials.api_key,
+                    metadata=user_metadata,
+                )
+            except HTTPException as retry_exc:
+                if _is_http_401_error(retry_exc):
+                    _raise_oauth_reconnect_required(resolved_provider)
+                raise
+        await active_credentials.touch_last_used()
     except HTTPException:
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:

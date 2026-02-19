@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import http from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -67,7 +68,7 @@ test.describe('Media ingest context menu & Quick Ingest progress', () => {
 
   test('context menu calls /media/add and /media/process-* and Quick Ingest shows progress', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
 
     // Configure tldw server URL in settings (no auth required for this smoke server)
     await page.goto(optionsUrl + '#/settings/tldw', {
@@ -145,7 +146,7 @@ test.describe('tldw TTS provider', () => {
 
   test('clicking TTS icon with provider=tldw calls /api/v1/audio/speech', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
 
     // Configure tldw server and API key (MockTldwServer validates X-API-KEY)
     await page.goto(optionsUrl + '#/settings/tldw', {

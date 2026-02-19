@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import { grantHostPermission } from './utils/permissions'
-import { requireRealServerConfig } from './utils/real-server'
+import { requireRealServerConfig, launchWithExtensionOrSkip } from './utils/real-server'
 
 const fetchAudioProviders = async (serverUrl: string, apiKey: string) => {
   const res = await fetch(`${serverUrl}/api/v1/audio/providers`, {
@@ -19,7 +19,7 @@ const fetchAudioProviders = async (serverUrl: string, apiKey: string) => {
 
 const launchWithServer = async (serverUrl: string, apiKey: string) => {
   const extPath = path.resolve('build/chrome-mv3')
-  return await launchWithExtension(extPath, {
+  return await launchWithExtensionOrSkip(test, extPath, {
     seedConfig: {
       __tldw_first_run_complete: true,
       __tldw_allow_offline: true,
@@ -213,7 +213,7 @@ const selectTldwProvider = async (page: Page) => {
 test.describe('TTS Playground UX', () => {
   test('shows ElevenLabs timeout hint and recovers on retry', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,
@@ -405,7 +405,7 @@ test.describe('TTS Playground UX', () => {
 
   test('shows browser TTS segment controls', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,
@@ -449,7 +449,7 @@ test.describe('TTS Playground UX', () => {
 
   test('disables Play when ElevenLabs config is incomplete', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true,

@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 import type { AuditLog } from '@/types';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -62,6 +62,16 @@ type ResolutionSummary = {
   source: string;
   count: number;
   share: string;
+};
+
+type OpenAIOAuthStatus = {
+  provider: 'openai';
+  connected: boolean;
+  auth_source: 'api_key' | 'oauth' | 'none';
+  updated_at?: string | null;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  scope?: string | null;
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -172,6 +182,10 @@ export default function ByokDashboardPage() {
   const [byokUsageRows, setByokUsageRows] = useState<ByokUserUsageRow[]>([]);
   const [byokUsageLoading, setByokUsageLoading] = useState(false);
   const [byokUsageError, setByokUsageError] = useState<string | null>(null);
+  const [openAIOAuthStatus, setOpenAIOAuthStatus] = useState<OpenAIOAuthStatus | null>(null);
+  const [openAIOAuthLoading, setOpenAIOAuthLoading] = useState(false);
+  const [openAIOAuthError, setOpenAIOAuthError] = useState<string | null>(null);
+  const [openAIOAuthAction, setOpenAIOAuthAction] = useState<string | null>(null);
 
   // Shared Provider Keys
   const [sharedKeys, setSharedKeys] = useState<SharedProviderKey[]>([]);
@@ -418,6 +432,114 @@ export default function ByokDashboardPage() {
     }
   }, [selectedOrg?.id]);
 
+  const loadOpenAIOAuthStatus = useCallback(async () => {
+    setOpenAIOAuthLoading(true);
+    setOpenAIOAuthError(null);
+    try {
+      const status = await api.getOpenAIOAuthStatus() as OpenAIOAuthStatus;
+      setOpenAIOAuthStatus(status);
+    } catch (err) {
+      if (err instanceof ApiError && [403, 501].includes(err.status)) {
+        setOpenAIOAuthStatus(null);
+        setOpenAIOAuthError('OpenAI OAuth is not enabled in this deployment.');
+        return;
+      }
+      const message = err instanceof Error ? err.message : 'Failed to load OpenAI OAuth status.';
+      setOpenAIOAuthError(message);
+    } finally {
+      setOpenAIOAuthLoading(false);
+    }
+  }, []);
+
+  const handleConnectOpenAIOAuth = async () => {
+    try {
+      setOpenAIOAuthAction('connect');
+      const returnPath = typeof window !== 'undefined' && window.location.pathname
+        ? window.location.pathname
+        : '/byok';
+      const response = await api.startOpenAIOAuth({ return_path: returnPath }) as {
+        auth_url?: string;
+      };
+      const authUrl = typeof response?.auth_url === 'string' ? response.auth_url.trim() : '';
+      if (!authUrl) {
+        throw new Error('OAuth authorize response is missing auth_url.');
+      }
+      if (typeof window !== 'undefined') {
+        const popup = window.open(authUrl, '_blank', 'noopener,noreferrer');
+        if (!popup) {
+          window.location.assign(authUrl);
+          return;
+        }
+      }
+      toastSuccess(
+        'OAuth started',
+        'Finish authorization in the opened tab, then refresh status.'
+      );
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start OpenAI OAuth flow.';
+      showError('OAuth connect failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
+  const handleRefreshOpenAIOAuth = async () => {
+    try {
+      setOpenAIOAuthAction('refresh');
+      await api.refreshOpenAIOAuth();
+      toastSuccess('OAuth refreshed', 'OpenAI OAuth token was refreshed.');
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to refresh OpenAI OAuth token.';
+      showError('OAuth refresh failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
+  const handleSwitchOpenAICredentialSource = async (authSource: 'api_key' | 'oauth') => {
+    try {
+      setOpenAIOAuthAction(`switch-${authSource}`);
+      await api.switchOpenAICredentialSource(authSource);
+      toastSuccess(
+        'Credential source updated',
+        authSource === 'oauth'
+          ? 'OpenAI now uses OAuth credentials.'
+          : 'OpenAI now uses your API key.'
+      );
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to switch OpenAI credential source.';
+      showError('Switch failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
+  const handleDisconnectOpenAIOAuth = async () => {
+    const confirmed = await confirm({
+      title: 'Disconnect OpenAI OAuth',
+      message: 'Disconnect OAuth credentials for OpenAI?',
+      confirmText: 'Disconnect',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      setOpenAIOAuthAction('disconnect');
+      await api.disconnectOpenAIOAuth();
+      toastSuccess('OAuth disconnected', 'OpenAI OAuth credentials were removed.');
+      await loadOpenAIOAuthStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to disconnect OpenAI OAuth.';
+      showError('Disconnect failed', message);
+    } finally {
+      setOpenAIOAuthAction(null);
+    }
+  };
+
   const handleAddSharedKey = async () => {
     if (!newKeyValue.trim()) {
       showError('API key required', 'Please enter the API key value.');
@@ -497,7 +619,8 @@ export default function ByokDashboardPage() {
     loadAudit();
     loadSharedKeys();
     loadByokUsage();
-  }, [loadMetrics, loadAudit, loadSharedKeys, loadByokUsage]);
+    loadOpenAIOAuthStatus();
+  }, [loadMetrics, loadAudit, loadSharedKeys, loadByokUsage, loadOpenAIOAuthStatus]);
 
   const summaryCards = useMemo(() => {
     const byokTotal = sumValues(
@@ -545,6 +668,14 @@ export default function ByokDashboardPage() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
   }, [missingByOperation]);
+
+  const openAIOAuthStatusLabel = useMemo(() => {
+    if (!openAIOAuthStatus) return 'Not connected';
+    if (openAIOAuthStatus.auth_source === 'oauth') return 'Connected (OAuth)';
+    if (openAIOAuthStatus.auth_source === 'api_key') return 'API Key';
+    if (openAIOAuthStatus.connected) return 'Connected';
+    return 'Not connected';
+  }, [openAIOAuthStatus]);
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -711,6 +842,108 @@ export default function ByokDashboardPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">OpenAI OAuth (Personal)</CardTitle>
+                  <CardDescription>
+                    Connect your own OpenAI subscription for BYOK usage and switch between OAuth/API key sources.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={openAIOAuthStatus?.auth_source === 'oauth' ? 'default' : 'outline'}>
+                    {openAIOAuthStatusLabel}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadOpenAIOAuthStatus}
+                    disabled={openAIOAuthLoading || openAIOAuthAction !== null}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {openAIOAuthLoading ? 'Refreshing…' : 'Refresh status'}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {openAIOAuthError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{openAIOAuthError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="grid gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground sm:grid-cols-2">
+                <div>
+                  <div className="font-medium text-foreground">Source</div>
+                  <div>{openAIOAuthStatus?.auth_source || 'none'}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground">Expires</div>
+                  <div>{openAIOAuthStatus?.expires_at ? new Date(openAIOAuthStatus.expires_at).toLocaleString() : '—'}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground">Scope</div>
+                  <div>{openAIOAuthStatus?.scope || '—'}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground">Last used</div>
+                  <div>{openAIOAuthStatus?.last_used_at ? new Date(openAIOAuthStatus.last_used_at).toLocaleString() : '—'}</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={handleConnectOpenAIOAuth}
+                  disabled={openAIOAuthAction !== null || !!openAIOAuthError}
+                  loading={openAIOAuthAction === 'connect'}
+                  loadingText="Starting..."
+                >
+                  Connect OpenAI
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleRefreshOpenAIOAuth}
+                  disabled={openAIOAuthAction !== null || !openAIOAuthStatus?.connected}
+                >
+                  Refresh OAuth
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleSwitchOpenAICredentialSource('oauth')}
+                  disabled={
+                    openAIOAuthAction !== null
+                    || openAIOAuthStatus?.auth_source === 'oauth'
+                    || !openAIOAuthStatus?.connected
+                  }
+                >
+                  Use OAuth
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleSwitchOpenAICredentialSource('api_key')}
+                  disabled={
+                    openAIOAuthAction !== null
+                    || openAIOAuthStatus?.auth_source !== 'oauth'
+                  }
+                >
+                  Use API Key Instead
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleDisconnectOpenAIOAuth}
+                  disabled={openAIOAuthAction !== null || !openAIOAuthStatus?.connected}
+                >
+                  Disconnect
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                OAuth opens in a new tab. After completing the provider flow, refresh status here.
+              </p>
+            </CardContent>
+          </Card>
 
           {/* Shared Provider Keys (Organization-Level) */}
           <Card>

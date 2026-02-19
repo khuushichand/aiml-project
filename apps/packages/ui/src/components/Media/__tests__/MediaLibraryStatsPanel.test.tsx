@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MediaLibraryStatsPanel } from '../MediaLibraryStatsPanel'
 
@@ -60,6 +60,10 @@ describe('MediaLibraryStatsPanel', () => {
       />
     )
 
+    const toggle = screen.getByTestId('media-library-stats-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+
     expect(screen.getByTestId('media-library-stats-visible')).toHaveTextContent('3')
     expect(screen.getByTestId('media-library-stats-total')).toHaveTextContent('25')
     expect(screen.getByTestId('media-library-stats-words').textContent || '').toMatch(
@@ -91,6 +95,7 @@ describe('MediaLibraryStatsPanel', () => {
       />
     )
 
+    fireEvent.click(screen.getByTestId('media-library-stats-toggle'))
     expect(screen.getByTestId('media-library-stats-storage-loading')).toBeInTheDocument()
 
     rerender(
@@ -111,5 +116,42 @@ describe('MediaLibraryStatsPanel', () => {
     expect(screen.getByTestId('media-library-stats-storage-error')).toHaveTextContent(
       'Failed to load'
     )
+  })
+
+  it('collapses and expands stats content from the header toggle', () => {
+    render(
+      <MediaLibraryStatsPanel
+        results={[
+          {
+            kind: 'media',
+            id: 1,
+            title: 'Paper',
+            meta: { type: 'pdf' },
+            raw: { word_count: 1000 }
+          }
+        ]}
+        totalCount={1}
+        storageUsage={{
+          loading: false,
+          error: null,
+          totalMb: 10,
+          quotaMb: 100,
+          usagePercentage: 10,
+          warning: null
+        }}
+      />
+    )
+
+    const toggle = screen.getByTestId('media-library-stats-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('media-library-stats-visible')).not.toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('media-library-stats-visible')).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByTestId('media-library-stats-visible')).not.toBeInTheDocument()
   })
 })

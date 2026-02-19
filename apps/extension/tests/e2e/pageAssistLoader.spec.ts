@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 
 test.describe('PageAssistLoader accessibility', () => {
   test('has dialog/progressbar roles and manages focus', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Snapshot current active element tag before loader steals focus
     const preFocusTag = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.tagName || null)

@@ -474,6 +474,7 @@ async def setup_database():
                 ensure_api_keys_tables_pg,
                 ensure_authnz_core_tables_pg,
                 ensure_billing_tables_pg,
+                ensure_byok_oauth_state_pg,
                 ensure_generated_files_table_pg,
                 ensure_org_provider_secrets_pg,
                 ensure_usage_tables_pg,
@@ -507,6 +508,7 @@ async def setup_database():
             # Ensure BYOK secrets tables
             await ensure_user_provider_secrets_pg(pool)
             await ensure_org_provider_secrets_pg(pool)
+            await ensure_byok_oauth_state_pg(pool)
 
             # Ensure usage/LLM usage tables and virtual-key counters for Postgres.
             # The SQLite path is covered by AuthNZ migrations; on Postgres we rely

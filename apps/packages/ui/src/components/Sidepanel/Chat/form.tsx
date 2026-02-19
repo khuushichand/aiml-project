@@ -122,6 +122,10 @@ type Props = {
   draftKey?: string
 }
 
+type DefaultCharacterPreferenceQueryResult = {
+  defaultCharacterId: string | null
+}
+
 export const SidepanelForm = ({
   dropedFile,
   inputRef,
@@ -144,13 +148,23 @@ export const SidepanelForm = ({
   const [imageBackendDefault] = useStorage("imageBackendDefault", "")
   const [storedCharacter, setStoredCharacter] =
     useSelectedCharacter<Character | null>(null)
-  const [defaultCharacter] = useStorage<Character | null>(
+  const [defaultCharacter, setDefaultCharacter] = useStorage<Character | null>(
     {
       key: DEFAULT_CHARACTER_STORAGE_KEY,
       instance: defaultCharacterStorage
     },
     null
   )
+  const { data: defaultCharacterPreference } = useQuery<DefaultCharacterPreferenceQueryResult>({
+    queryKey: ["tldw:defaultCharacterPreference:chat"],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      const defaultCharacterId = await tldwClient.getDefaultCharacterPreference()
+      return { defaultCharacterId }
+    },
+    staleTime: 60 * 1000,
+    throwOnError: false
+  })
   const [contextFileMaxSizeMb] = useSetting(CONTEXT_FILE_SIZE_MB_SETTING)
   const maxContextFileSizeBytes = React.useMemo(
     () => contextFileMaxSizeMb * 1024 * 1024,
@@ -689,9 +703,33 @@ export const SidepanelForm = ({
     () => resolveCharacterSelectionId(storedCharacter),
     [storedCharacter]
   )
-  const defaultCharacterId = React.useMemo(
+  const localDefaultCharacterId = React.useMemo(
     () => resolveCharacterSelectionId(defaultCharacter),
     [defaultCharacter]
+  )
+  const serverDefaultCharacterId = defaultCharacterPreference?.defaultCharacterId
+  const effectiveDefaultCharacter = React.useMemo<Character | null>(() => {
+    if (typeof serverDefaultCharacterId === "undefined") {
+      return defaultCharacter
+    }
+    if (!serverDefaultCharacterId) {
+      return null
+    }
+    if (
+      localDefaultCharacterId === serverDefaultCharacterId &&
+      defaultCharacter
+    ) {
+      return defaultCharacter
+    }
+    return { id: serverDefaultCharacterId } as Character
+  }, [
+    defaultCharacter,
+    localDefaultCharacterId,
+    serverDefaultCharacterId
+  ])
+  const effectiveDefaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(effectiveDefaultCharacter),
+    [effectiveDefaultCharacter]
   )
   const isFreshChat = React.useMemo(
     () => isFreshChatState(serverChatId, messages.length),
@@ -710,8 +748,26 @@ export const SidepanelForm = ({
   }, [storedCharacterId])
 
   React.useEffect(() => {
+    if (typeof serverDefaultCharacterId === "undefined") return
+
+    if (!serverDefaultCharacterId) {
+      if (localDefaultCharacterId) {
+        void setDefaultCharacter(null)
+      }
+      return
+    }
+
+    if (localDefaultCharacterId === serverDefaultCharacterId) return
+    void setDefaultCharacter({ id: serverDefaultCharacterId } as Character)
+  }, [
+    localDefaultCharacterId,
+    serverDefaultCharacterId,
+    setDefaultCharacter
+  ])
+
+  React.useEffect(() => {
     defaultCharacterBootstrapAppliedRef.current = false
-  }, [defaultCharacterId])
+  }, [effectiveDefaultCharacterId])
 
   React.useEffect(() => {
     if (
@@ -726,10 +782,10 @@ export const SidepanelForm = ({
   }, [isFreshChat])
 
   React.useEffect(() => {
-    if (!defaultCharacter || !defaultCharacterId) return
+    if (!effectiveDefaultCharacter || !effectiveDefaultCharacterId) return
     if (
       !shouldApplyDefaultCharacter({
-        defaultCharacterId,
+        defaultCharacterId: effectiveDefaultCharacterId,
         selectedCharacterId: storedCharacterId,
         isFreshChat,
         hasAppliedInSession: defaultCharacterBootstrapAppliedRef.current
@@ -739,10 +795,10 @@ export const SidepanelForm = ({
     }
 
     defaultCharacterBootstrapAppliedRef.current = true
-    void setStoredCharacter(defaultCharacter)
+    void setStoredCharacter(effectiveDefaultCharacter)
   }, [
-    defaultCharacter,
-    defaultCharacterId,
+    effectiveDefaultCharacter,
+    effectiveDefaultCharacterId,
     isFreshChat,
     setStoredCharacter,
     storedCharacterId

@@ -1,10 +1,18 @@
 import React from "react"
 import { Button, Tabs } from "antd"
 import { useTranslation } from "react-i18next"
+import {
+  BarChartOutlined,
+  EditOutlined,
+  PlayCircleOutlined,
+  SettingOutlined,
+  ThunderboltOutlined
+} from "@ant-design/icons"
 import { TakeQuizTab, GenerateTab, CreateTab, ManageTab, ResultsTab } from "./tabs"
 import type { TakeTabNavigationIntent } from "./navigation"
 import { RESULTS_FILTER_PREFS_KEY, TAKE_QUIZ_LIST_PREFS_KEY } from "./stateKeys"
 import { useAttemptsQuery, useQuizzesQuery } from "./hooks"
+import { parseQuizAssessmentIntentFromLocation } from "@/services/tldw/quiz-flashcards-handoff"
 
 type QuizTabKey = "take" | "generate" | "create" | "manage" | "results"
 
@@ -22,9 +30,38 @@ const INITIAL_TAB_RESET_VERSION: Record<QuizTabKey, number> = {
  */
 export const QuizPlayground: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
+  const initialAssessmentIntent = React.useMemo(
+    () =>
+      typeof window !== "undefined"
+        ? parseQuizAssessmentIntentFromLocation(window.location)
+        : null,
+    []
+  )
   const [activeTab, setActiveTab] = React.useState<QuizTabKey>("take")
   const [createTabDirty, setCreateTabDirty] = React.useState(false)
-  const [takeTabIntent, setTakeTabIntent] = React.useState<TakeTabNavigationIntent | null>(null)
+  const [takeTabIntent, setTakeTabIntent] = React.useState<TakeTabNavigationIntent | null>(() =>
+    initialAssessmentIntent
+      ? {
+        startQuizId: initialAssessmentIntent.startQuizId ?? null,
+        highlightQuizId:
+            initialAssessmentIntent.highlightQuizId ??
+            initialAssessmentIntent.startQuizId ??
+            null,
+        sourceTab: initialAssessmentIntent.assignmentMode === "shared"
+          ? "assignment"
+          : (initialAssessmentIntent.deckId != null ||
+              initialAssessmentIntent.deckName != null ||
+              initialAssessmentIntent.sourceAttemptId != null)
+            ? "flashcards"
+            : null,
+        attemptId: initialAssessmentIntent.sourceAttemptId ?? null,
+        assignmentMode: initialAssessmentIntent.assignmentMode ?? null,
+        assignmentDueAt: initialAssessmentIntent.assignmentDueAt ?? null,
+        assignmentNote: initialAssessmentIntent.assignmentNote ?? null,
+        assignedByRole: initialAssessmentIntent.assignedByRole ?? null
+      }
+      : null
+  )
   const [globalSearchQuery, setGlobalSearchQuery] = React.useState("")
   const [takeSearchIntent, setTakeSearchIntent] = React.useState<{ query: string; token: number } | null>(null)
   const [manageSearchIntent, setManageSearchIntent] = React.useState<{ query: string; token: number } | null>(null)
@@ -32,30 +69,65 @@ export const QuizPlayground: React.FC = () => {
     INITIAL_TAB_RESET_VERSION
   )
   const searchTokenCounter = React.useRef(0)
+  const tabsRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    if (!initialAssessmentIntent?.deckName) return
+    searchTokenCounter.current += 1
+    setTakeSearchIntent({
+      query: initialAssessmentIntent.deckName,
+      token: searchTokenCounter.current
+    })
+    setActiveTab("take")
+  }, [initialAssessmentIntent?.deckName])
 
   const { data: quizCounts } = useQuizzesQuery({ limit: 1, offset: 0 })
   const { data: attemptCounts } = useAttemptsQuery({ limit: 1, offset: 0 })
   const totalQuizzes = quizCounts?.count ?? 0
   const totalAttempts = attemptCounts?.count ?? 0
 
-  const renderTabLabel = React.useCallback((label: string, count?: number) => {
-    if (typeof count !== "number" || count < 0) return label
+  const renderTabLabel = React.useCallback((
+    label: string,
+    shortLabel: string,
+    icon: React.ReactNode,
+    count?: number
+  ) => {
+    const countBadge = typeof count === "number" && count >= 0 ? (
+      <span aria-hidden className="rounded bg-surface2 px-1.5 py-0.5 text-xs text-text">
+        {count}
+      </span>
+    ) : null
+
     return (
-      <span className="inline-flex items-center gap-1">
-        <span>{label}</span>
-        <span aria-hidden className="rounded bg-surface2 px-1.5 py-0.5 text-xs text-text">
-          {count}
-        </span>
+      <span className="inline-flex items-center gap-1.5" aria-label={label}>
+        <span aria-hidden>{icon}</span>
+        <span aria-hidden className="sm:hidden">{shortLabel}</span>
+        <span aria-hidden className="hidden sm:inline">{label}</span>
+        {countBadge}
       </span>
     )
   }, [])
+
+  React.useEffect(() => {
+    const root = tabsRef.current
+    if (!root) return
+    const activeTabNode = root.querySelector<HTMLElement>(".ant-tabs-tab-active")
+    activeTabNode?.scrollIntoView({
+      block: "nearest",
+      inline: "center"
+    })
+  }, [activeTab])
 
   const navigateToTake = React.useCallback((intent?: TakeTabNavigationIntent) => {
     setTakeTabIntent({
       startQuizId: intent?.startQuizId ?? null,
       highlightQuizId: intent?.highlightQuizId ?? intent?.startQuizId ?? null,
       sourceTab: intent?.sourceTab ?? null,
-      attemptId: intent?.attemptId ?? null
+      attemptId: intent?.attemptId ?? null,
+      assignmentMode: intent?.assignmentMode ?? null,
+      assignmentDueAt: intent?.assignmentDueAt ?? null,
+      assignmentNote: intent?.assignmentNote ?? null,
+      assignedByRole: intent?.assignedByRole ?? null
     })
     setActiveTab("take")
   }, [])
@@ -140,20 +212,31 @@ export const QuizPlayground: React.FC = () => {
           {t("option:quiz.resetCurrentTab", { defaultValue: "Reset Current Tab" })}
         </Button>
       </div>
-      <Tabs
-        activeKey={activeTab}
-        destroyInactiveTabPane={false}
-        onChange={handleTabChange}
-        items={[
+      <div ref={tabsRef}>
+        <Tabs
+          className="quiz-tabs [&_.ant-tabs-nav-wrap]:overflow-x-auto [&_.ant-tabs-nav-wrap]:scroll-smooth [&_.ant-tabs-nav-list]:min-w-max [&_.ant-tabs-tab]:px-1 [&_.ant-tabs-tab-btn]:whitespace-nowrap"
+          activeKey={activeTab}
+          destroyInactiveTabPane={false}
+          onChange={handleTabChange}
+          items={[
           {
             key: "take",
-            label: renderTabLabel(t("option:quiz.take", { defaultValue: "Take Quiz" }), totalQuizzes),
+            label: renderTabLabel(
+              t("option:quiz.take", { defaultValue: "Take Quiz" }),
+              t("option:quiz.takeShort", { defaultValue: "Take" }),
+              <PlayCircleOutlined />,
+              totalQuizzes
+            ),
             children: (
               <TakeQuizTab
                 key={`take-${tabResetVersion.take}`}
                 startQuizId={takeTabIntent?.startQuizId ?? null}
                 highlightQuizId={takeTabIntent?.highlightQuizId ?? null}
                 navigationSource={takeTabIntent?.sourceTab ?? null}
+                assignmentMode={takeTabIntent?.assignmentMode ?? null}
+                assignmentDueAt={takeTabIntent?.assignmentDueAt ?? null}
+                assignmentNote={takeTabIntent?.assignmentNote ?? null}
+                assignedByRole={takeTabIntent?.assignedByRole ?? null}
                 externalSearchQuery={takeSearchIntent?.query ?? null}
                 externalSearchToken={takeSearchIntent?.token ?? null}
                 onStartHandled={() =>
@@ -188,17 +271,26 @@ export const QuizPlayground: React.FC = () => {
           },
           {
             key: "generate",
-            label: renderTabLabel(t("option:quiz.generate", { defaultValue: "Generate" })),
+            label: renderTabLabel(
+              t("option:quiz.generate", { defaultValue: "Generate" }),
+              t("option:quiz.generateShort", { defaultValue: "Gen" }),
+              <ThunderboltOutlined />
+            ),
             children: (
               <GenerateTab
                 key={`generate-${tabResetVersion.generate}`}
                 onNavigateToTake={(intent) => navigateToTake(intent)}
+                onNavigateToManage={() => setActiveTab("manage")}
               />
             )
           },
           {
             key: "create",
-            label: renderTabLabel(t("option:quiz.create", { defaultValue: "Create" })),
+            label: renderTabLabel(
+              t("option:quiz.create", { defaultValue: "Create" }),
+              t("option:quiz.createShort", { defaultValue: "Build" }),
+              <EditOutlined />
+            ),
             children: (
               <CreateTab
                 key={`create-${tabResetVersion.create}`}
@@ -209,7 +301,12 @@ export const QuizPlayground: React.FC = () => {
           },
           {
             key: "manage",
-            label: renderTabLabel(t("option:quiz.manage", { defaultValue: "Manage" }), totalQuizzes),
+            label: renderTabLabel(
+              t("option:quiz.manage", { defaultValue: "Manage" }),
+              t("option:quiz.manageShort", { defaultValue: "Manage" }),
+              <SettingOutlined />,
+              totalQuizzes
+            ),
             children: (
               <ManageTab
                 key={`manage-${tabResetVersion.manage}`}
@@ -232,7 +329,12 @@ export const QuizPlayground: React.FC = () => {
           },
           {
             key: "results",
-            label: renderTabLabel(t("option:quiz.results", { defaultValue: "Results" }), totalAttempts),
+            label: renderTabLabel(
+              t("option:quiz.results", { defaultValue: "Results" }),
+              t("option:quiz.resultsShort", { defaultValue: "Stats" }),
+              <BarChartOutlined />,
+              totalAttempts
+            ),
             children: (
               <ResultsTab
                 key={`results-${tabResetVersion.results}`}
@@ -240,8 +342,9 @@ export const QuizPlayground: React.FC = () => {
               />
             )
           }
-        ]}
-      />
+          ]}
+        />
+      </div>
     </div>
   )
 }

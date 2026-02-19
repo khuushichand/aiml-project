@@ -20,7 +20,7 @@ If you have Python 3.10+ (recommended: 3.12):
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
-# make quickstart-install PYTHON=python3.12
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 ```
 
 This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
@@ -28,7 +28,7 @@ This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts t
 curl http://localhost:8000/health
 ```
 
-Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 **Not working?** Continue with the step-by-step options below.
 
@@ -43,9 +43,9 @@ Python support for this repo:
 
 | Requirement | Check Command | Install |
 |-------------|---------------|---------|
-| Python 3.10+ | `python3 --version` | [python.org](https://www.python.org/downloads/) |
+| Python 3.10+ | `python --version` (or `python3 --version` on macOS/Linux) | [python.org](https://www.python.org/downloads/) |
 | ffmpeg | `ffmpeg -version` | `brew install ffmpeg` (macOS) or your Linux package manager |
-| PyAudio/PortAudio (optional; audio capture paths) | `python3 -c "import pyaudio"` | Linux: install `portaudio` + `python3-pyaudio`; macOS: `brew install portaudio && pip install pyaudio`; Windows: `pip install pyaudio` |
+| PyAudio/PortAudio (optional; audio capture paths) | `python -c "import pyaudio"` | Linux: install `portaudio` + `python3-pyaudio`; macOS: `brew install portaudio && pip install pyaudio`; Windows: `pip install pyaudio` |
 | Bun (optional; WebUI section below) | `bun --version` | [bun.sh](https://bun.sh/) |
 | pip | `pip --version` | Comes with Python |
 
@@ -74,11 +74,11 @@ cd tldw_server
 
 # Create virtual environment with a supported Python interpreter
 # macOS/Linux (3.12 recommended)
-python3.12 -m venv .venv  # or python3.11 / python3.10
+python3.12 -m venv .venv  # or python3.13 / python3.11 / python3.10
 source .venv/bin/activate
 
 # Windows (PowerShell)
-py -3.12 -m venv .venv
+py -3.12 -m venv .venv  # or -3.13 / -3.11 / -3.10
 .venv\Scripts\Activate.ps1
 
 # Confirm the active interpreter version
@@ -87,6 +87,11 @@ python --version
 # Install dependencies
 pip install -e .
 ```
+
+PyAudio/PortAudio notes:
+- Linux: install `portaudio19-dev` + `python3-pyaudio` (Debian/Ubuntu) or `portaudio-devel` + `python3-pyaudio` (Fedora/RHEL).
+- macOS: `brew install portaudio`, then `pip install pyaudio` in the activated venv.
+- Windows: run `pip install pyaudio` in the activated venv; if build fails, install Microsoft C++ Build Tools and retry.
 
 **Expected output:** Lots of package installation messages, ending with "Successfully installed..."
 

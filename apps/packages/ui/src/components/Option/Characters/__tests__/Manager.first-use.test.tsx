@@ -2,7 +2,7 @@ import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { CharactersManager } from "../Manager"
+import { CharactersManager, withCharacterNameInLabel } from "../Manager"
 import { DEFAULT_CHARACTER_STORAGE_KEY } from "@/utils/default-character-preference"
 
 const TEMPLATE_CHOOSER_SEEN_KEY = "characters-template-chooser-seen"
@@ -56,7 +56,13 @@ const {
   },
   tldwClientMock: {
     initialize: vi.fn(async () => undefined),
+    getDefaultCharacterPreference: vi.fn(async () => null),
+    setDefaultCharacterPreference: vi.fn(async () => ({
+      applied: [],
+      skipped: []
+    })),
     listAllCharacters: vi.fn(async () => []),
+    listCharacters: vi.fn(async () => []),
     listCharactersPage: vi.fn(async () => ({
       items: [],
       total: 0,
@@ -86,7 +92,11 @@ const {
       assistant_content: "Quick chat response"
     })),
     listChatMessages: vi.fn(async () => []),
-    getChat: vi.fn(async () => null)
+    getChat: vi.fn(async () => null),
+    listWorldBooks: vi.fn(async () => ({ world_books: [] })),
+    listCharacterWorldBooks: vi.fn(async () => []),
+    attachWorldBookToCharacter: vi.fn(async () => ({})),
+    detachWorldBookFromCharacter: vi.fn(async () => ({}))
   },
   templateData: [
     {
@@ -320,6 +330,16 @@ describe("CharactersManager first-use onboarding", () => {
     return call?.[0] as any
   }
 
+  const getLatestListCharactersQueryOptions = () => {
+    const calls = [...useQueryMock.mock.calls].reverse()
+    const call = calls.find(([opts]) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      return key === "tldw:listCharacters"
+    })
+    expect(call).toBeDefined()
+    return call?.[0] as any
+  }
+
   const getDeletedScopeListCharactersQueryOptions = () => {
     const call = useQueryMock.mock.calls.find(([opts]) => {
       const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
@@ -329,6 +349,23 @@ describe("CharactersManager first-use onboarding", () => {
     expect(call).toBeDefined()
     return call?.[0] as any
   }
+
+  it("ensures aria labels include the current character name when localization is stale", () => {
+    expect(
+      withCharacterNameInLabel(
+        "Edit character Compare Alpha",
+        "Edit character {{name}}",
+        "Default Assistant"
+      )
+    ).toBe("Edit character Default Assistant")
+    expect(
+      withCharacterNameInLabel(
+        "Chat as {{name}}",
+        "Chat as {{name}}",
+        "Persona 2"
+      )
+    ).toBe("Chat as Persona 2")
+  })
 
   it("requests lightweight character list payload by default", async () => {
     render(<CharactersManager />)
@@ -346,6 +383,219 @@ describe("CharactersManager first-use onboarding", () => {
       })
     )
     expect(tldwClientMock.listAllCharacters).not.toHaveBeenCalled()
+  })
+
+  it("serializes created/updated date filters into query params and clears them", async () => {
+    const user = userEvent.setup()
+    render(<CharactersManager />)
+
+    fireEvent.change(
+      screen.getByLabelText("Filter characters created on or after"),
+      { target: { value: "2026-02-01" } }
+    )
+    fireEvent.change(
+      screen.getByLabelText("Filter characters created on or before"),
+      { target: { value: "2026-02-03" } }
+    )
+    fireEvent.change(
+      screen.getByLabelText("Filter characters updated on or after"),
+      { target: { value: "2026-02-10" } }
+    )
+    fireEvent.change(
+      screen.getByLabelText("Filter characters updated on or before"),
+      { target: { value: "2026-02-11" } }
+    )
+
+    await waitFor(() => {
+      const latestListQuery = getLatestListCharactersQueryOptions()
+      expect(latestListQuery.queryKey[1]).toMatchObject({
+        created_from: "2026-02-01T00:00:00.000Z",
+        created_to: "2026-02-03T23:59:59.999Z",
+        updated_from: "2026-02-10T00:00:00.000Z",
+        updated_to: "2026-02-11T23:59:59.999Z"
+      })
+    })
+
+    const latestListQuery = getLatestListCharactersQueryOptions()
+    await latestListQuery.queryFn()
+
+    expect(tldwClientMock.listCharactersPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        created_from: "2026-02-01T00:00:00.000Z",
+        created_to: "2026-02-03T23:59:59.999Z",
+        updated_from: "2026-02-10T00:00:00.000Z",
+        updated_to: "2026-02-11T23:59:59.999Z"
+      })
+    )
+
+    const clearButtons = screen.getAllByRole("button", { name: "Clear filters" })
+    await user.click(clearButtons[0])
+
+    expect(
+      screen.getByLabelText("Filter characters created on or after")
+    ).toHaveValue("")
+    expect(
+      screen.getByLabelText("Filter characters created on or before")
+    ).toHaveValue("")
+    expect(
+      screen.getByLabelText("Filter characters updated on or after")
+    ).toHaveValue("")
+    expect(
+      screen.getByLabelText("Filter characters updated on or before")
+    ).toHaveValue("")
+
+    await waitFor(() => {
+      const clearedListQuery = getLatestListCharactersQueryOptions()
+      expect(clearedListQuery.queryKey[1].created_from).toBeUndefined()
+      expect(clearedListQuery.queryKey[1].created_to).toBeUndefined()
+      expect(clearedListQuery.queryKey[1].updated_from).toBeUndefined()
+      expect(clearedListQuery.queryKey[1].updated_to).toBeUndefined()
+    })
+  })
+
+  it("forces server query mode for date filters when rollout flag is disabled", async () => {
+    useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
+      if (resolveStorageKey(key) === "ff_characters_server_query") {
+        return [false, vi.fn(), { isLoading: false }]
+      }
+      return [defaultValue ?? null, vi.fn(), { isLoading: false }]
+    })
+
+    render(<CharactersManager />)
+
+    fireEvent.change(
+      screen.getByLabelText("Filter characters created on or after"),
+      { target: { value: "2026-02-01" } }
+    )
+
+    await waitFor(() => {
+      const latestListQuery = getLatestListCharactersQueryOptions()
+      expect(latestListQuery.queryKey[2]).toBe("server")
+      expect(latestListQuery.queryKey[1]).toMatchObject({
+        created_from: "2026-02-01T00:00:00.000Z"
+      })
+    })
+  })
+
+  it("maps persisted last-used sort state to server sort params", async () => {
+    const records = [
+      {
+        id: "last-used-1",
+        name: "Recently Used Character",
+        system_prompt: "Prompt text",
+        last_used_at: "2026-02-18T12:00:00.000Z",
+        version: 1
+      }
+    ]
+
+    window.localStorage.setItem("characters-sort-column", "lastUsedAt")
+    window.localStorage.setItem("characters-sort-order", "descend")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(await screen.findByRole("columnheader", { name: /Last used/i })).toBeInTheDocument()
+
+    const listQuery = getLatestListCharactersQueryOptions()
+    expect(listQuery.queryKey[1]).toMatchObject({
+      sort_by: "last_used_at",
+      sort_order: "desc"
+    })
+
+    await listQuery.queryFn()
+    expect(tldwClientMock.listCharactersPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sort_by: "last_used_at",
+        sort_order: "desc"
+      })
+    )
+  })
+
+  it("falls back to legacy list loading when /characters/query hits path.character_id route conflict", async () => {
+    const routeConflictError = Object.assign(
+      new Error(
+        "Input should be a valid integer, unable to parse string as an integer (path.character_id) (GET /api/v1/characters/query?page=1&page_size=10)"
+      ),
+      { status: 422 }
+    )
+    tldwClientMock.listCharactersPage.mockRejectedValueOnce(routeConflictError)
+    tldwClientMock.listCharacters.mockResolvedValueOnce([
+      { id: "legacy-1", name: "Legacy Character" }
+    ])
+
+    render(<CharactersManager />)
+
+    const listQuery = getListCharactersQueryOptions()
+    const response = await listQuery.queryFn()
+
+    expect(tldwClientMock.listCharactersPage).toHaveBeenCalled()
+    expect(tldwClientMock.listCharacters).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 10,
+        offset: 0,
+        include_image_base64: false
+      })
+    )
+    expect(response.items).toEqual([
+      expect.objectContaining({ id: "legacy-1", name: "Legacy Character" })
+    ])
+    expect(notificationMock.error).not.toHaveBeenCalled()
+  })
+
+  it("falls back when route-conflict marker is only present on error details payload", async () => {
+    const routeConflictError = Object.assign(new Error("Request failed"), {
+      details: {
+        detail:
+          "Input should be a valid integer, unable to parse string as an integer (path.character_id)"
+      }
+    })
+    tldwClientMock.listCharactersPage.mockRejectedValueOnce(routeConflictError)
+    tldwClientMock.listCharacters.mockResolvedValueOnce([
+      { id: "legacy-2", name: "Legacy Details Character" }
+    ])
+
+    render(<CharactersManager />)
+
+    const listQuery = getListCharactersQueryOptions()
+    const response = await listQuery.queryFn()
+
+    expect(tldwClientMock.listCharactersPage).toHaveBeenCalled()
+    expect(tldwClientMock.listCharacters).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 10,
+        offset: 0,
+        include_image_base64: false
+      })
+    )
+    expect(response.items).toEqual([
+      expect.objectContaining({
+        id: "legacy-2",
+        name: "Legacy Details Character"
+      })
+    ])
+    expect(notificationMock.error).not.toHaveBeenCalled()
+  })
+
+  it("pins character list query throwOnError to false", async () => {
+    render(<CharactersManager />)
+    const listQuery = getListCharactersQueryOptions()
+    expect(listQuery.throwOnError).toBe(false)
   })
 
   it("falls back to legacy client-side query path when rollout flag is disabled", async () => {
@@ -431,7 +681,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     expect(await screen.findByText("Choose a template")).toBeInTheDocument()
     expect(window.localStorage.getItem(TEMPLATE_CHOOSER_SEEN_KEY)).toBe("true")
-  })
+  }, 60000)
 
   it("keeps template chooser collapsed when seen flag already exists", async () => {
     const user = userEvent.setup()
@@ -510,7 +760,7 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(createScope.getByRole("button", { name: "Metadata" }))
     expect(createScope.getByText("Extensions (JSON)")).toBeInTheDocument()
     expect(createScope.getByText("Mood images (coming soon)")).toBeInTheDocument()
-  }, 30000)
+  }, 60000)
 
   it("renders the same advanced section structure in edit mode", async () => {
     const user = userEvent.setup()
@@ -578,7 +828,286 @@ describe("CharactersManager first-use onboarding", () => {
 
     await user.click(editScope.getByRole("button", { name: "Metadata" }))
     expect(editScope.getByText("Mood images (coming soon)")).toBeInTheDocument()
-  }, 30000)
+  }, 60000)
+
+  it("preloads world-book attachments in edit mode and syncs attachments on save", async () => {
+    const characterRecord = {
+      id: 101,
+      name: "Worldbook Character",
+      system_prompt: "Existing system prompt.",
+      greeting: "Hi",
+      description: "Existing description",
+      tags: ["existing"],
+      version: 4
+    }
+
+    tldwClientMock.listCharacterWorldBooks.mockResolvedValue([
+      { world_book_id: 11, world_book_name: "Lore Atlas" }
+    ])
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any, callbacks?: any) => {
+        try {
+          const result = await opts?.mutationFn?.(variables)
+          opts?.onSuccess?.(result, variables, undefined)
+          callbacks?.onSuccess?.(result)
+        } catch (error) {
+          opts?.onError?.(error, variables, undefined)
+          callbacks?.onError?.(error)
+        }
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterEditWorldBooks") {
+        return makeUseQueryResult({
+          data: {
+            options: [
+              { id: 11, name: "Lore Atlas", enabled: true },
+              { id: 22, name: "Ship Registry", enabled: true }
+            ],
+            attachedIds: [11, 22]
+          }
+        })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    fireEvent.click(await screen.findByRole("button", { name: /Edit character/i }))
+
+    const saveButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Save changes" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const editFormElement = saveButton.closest("form")
+    expect(editFormElement).not.toBeNull()
+    const editScope = within(editFormElement as HTMLElement)
+
+    fireEvent.click(editScope.getByRole("button", { name: "Show advanced fields" }))
+    fireEvent.click(editScope.getByRole("button", { name: "Metadata" }))
+    fireEvent.click(saveButton)
+
+    await waitFor(() => {
+      expect(tldwClientMock.updateCharacter).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.listCharacterWorldBooks).toHaveBeenCalledWith(101)
+    })
+  }, 60000)
+
+  it("syncs selected world-book attachments after creating a character", async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+    tldwClientMock.createCharacter.mockResolvedValueOnce({ id: 205 })
+    tldwClientMock.listCharacterWorldBooks.mockResolvedValue([])
+
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any, callbacks?: any) => {
+        try {
+          const result = await opts?.mutationFn?.(variables)
+          opts?.onSuccess?.(result, variables, undefined)
+          callbacks?.onSuccess?.(result)
+        } catch (error) {
+          opts?.onError?.(error, variables, undefined)
+          callbacks?.onError?.(error)
+        }
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [], status: "success" })
+      }
+      if (key === "tldw:characterEditWorldBooks") {
+        return makeUseQueryResult({
+          data: {
+            options: [
+              { id: 11, name: "Lore Atlas" },
+              { id: 22, name: "Ship Registry" }
+            ],
+            attachedIds: []
+          }
+        })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+    await user.click(screen.getByRole("button", { name: "New character" }))
+
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const createFormElement = createSubmitButton.closest("form")
+    expect(createFormElement).not.toBeNull()
+    const createScope = within(createFormElement as HTMLElement)
+
+    fireEvent.change(createScope.getByPlaceholderText("e.g. Writing coach"), {
+      target: { value: "Worldbook Builder" }
+    })
+    fireEvent.change(
+      createScope.getByPlaceholderText(
+        "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples."
+      ),
+      { target: { value: "You are a grounded assistant." } }
+    )
+
+    await user.click(createScope.getByRole("button", { name: "Show advanced fields" }))
+    await user.click(createScope.getByRole("button", { name: "Metadata" }))
+
+    const worldBookPlaceholder = createScope.getByText("Select world book to attach")
+    fireEvent.mouseDown(worldBookPlaceholder)
+    await user.click(await screen.findByText("Lore Atlas"))
+
+    await user.click(createScope.getByRole("button", { name: "Create character" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.createCharacter).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.listCharacterWorldBooks).toHaveBeenCalledWith(205)
+    })
+    await waitFor(() => {
+      expect(tldwClientMock.attachWorldBookToCharacter).toHaveBeenCalledWith(205, 11)
+    })
+    expect(tldwClientMock.detachWorldBookFromCharacter).not.toHaveBeenCalled()
+  }, 60000)
+
+  it("shows a permission error when world-book attachment sync is forbidden", async () => {
+    window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
+    tldwClientMock.createCharacter.mockResolvedValueOnce({ id: 206 })
+    tldwClientMock.listCharacterWorldBooks.mockResolvedValue([])
+    const forbiddenError = Object.assign(new Error("Forbidden"), { status: 403 })
+    tldwClientMock.attachWorldBookToCharacter.mockRejectedValueOnce(forbiddenError)
+
+    useMutationMock.mockImplementation((opts: any) => ({
+      mutate: async (variables: any, callbacks?: any) => {
+        try {
+          const result = await opts?.mutationFn?.(variables)
+          opts?.onSuccess?.(result, variables, undefined)
+          callbacks?.onSuccess?.(result)
+        } catch (error) {
+          opts?.onError?.(error, variables, undefined)
+          callbacks?.onError?.(error)
+        }
+      },
+      mutateAsync: async (variables: any) => {
+        const result = await opts?.mutationFn?.(variables)
+        opts?.onSuccess?.(result, variables, undefined)
+        return result
+      },
+      isPending: false
+    }))
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [], status: "success" })
+      }
+      if (key === "tldw:characterEditWorldBooks") {
+        return makeUseQueryResult({
+          data: {
+            options: [{ id: 11, name: "Lore Atlas" }],
+            attachedIds: []
+          }
+        })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+    fireEvent.click(screen.getByRole("button", { name: "New character" }))
+
+    const createSubmitButton = await waitFor(() => {
+      const candidate = screen
+        .getAllByRole("button", { name: "Create character" })
+        .find((button) => button.getAttribute("type") === "submit")
+      expect(candidate).toBeDefined()
+      return candidate as HTMLElement
+    })
+    const createFormElement = createSubmitButton.closest("form")
+    expect(createFormElement).not.toBeNull()
+    const createScope = within(createFormElement as HTMLElement)
+
+    fireEvent.change(createScope.getByPlaceholderText("e.g. Writing coach"), {
+      target: { value: "Forbidden Worldbook Builder" }
+    })
+    fireEvent.change(
+      createScope.getByPlaceholderText(
+        "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples."
+      ),
+      { target: { value: "You are a grounded assistant." } }
+    )
+
+    fireEvent.click(createScope.getByRole("button", { name: "Show advanced fields" }))
+    fireEvent.click(createScope.getByRole("button", { name: "Metadata" }))
+
+    const worldBookPlaceholder = createScope.getByText("Select world book to attach")
+    fireEvent.mouseDown(worldBookPlaceholder)
+    fireEvent.click(await screen.findByText("Lore Atlas"))
+
+    fireEvent.click(createScope.getByRole("button", { name: "Create character" }))
+
+    await waitFor(() => {
+      expect(notificationMock.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "You do not have permission to modify world-book attachments."
+        })
+      )
+    })
+  }, 60000)
 
   it("persists gallery density preference and applies compact rendering", async () => {
     const user = userEvent.setup()
@@ -658,7 +1187,7 @@ describe("CharactersManager first-use onboarding", () => {
     expect(window.localStorage.getItem("characters-page-size")).toBe("25")
   }, 30000)
 
-  it("enforces the explicit 75-character name limit in create mode", async () => {
+  it("enforces the explicit 500-character name limit in create mode", async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
 
@@ -677,9 +1206,9 @@ describe("CharactersManager first-use onboarding", () => {
     const createScope = within(createFormElement as HTMLElement)
 
     const nameInput = createScope.getByPlaceholderText("e.g. Writing coach")
-    expect(nameInput).toHaveAttribute("maxlength", "75")
+    expect(nameInput).toHaveAttribute("maxlength", "500")
 
-    fireEvent.change(nameInput, { target: { value: "A".repeat(76) } })
+    fireEvent.change(nameInput, { target: { value: "A".repeat(501) } })
     fireEvent.change(
       createScope.getByPlaceholderText(
         "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples."
@@ -690,7 +1219,7 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(createScope.getByRole("button", { name: "Create character" }))
 
     expect(
-      await screen.findByText("Name must be 75 characters or fewer")
+      await screen.findByText("Name must be 500 characters or fewer")
     ).toBeInTheDocument()
     expect(tldwClientMock.createCharacter).not.toHaveBeenCalled()
   }, 30000)
@@ -933,7 +1462,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
   }, 45000)
 
-  it("shows actionable restore errors and emits recovery telemetry when restore fails", async () => {
+  it("shows actionable restore-window errors and emits recovery telemetry when restore fails", async () => {
     const user = userEvent.setup()
     const dispatchSpy = vi.spyOn(window, "dispatchEvent")
     const records = [
@@ -946,7 +1475,9 @@ describe("CharactersManager first-use onboarding", () => {
     ]
 
     tldwClientMock.restoreCharacter.mockRejectedValueOnce(
-      new Error("Restore conflict from server")
+      new Error(
+        "Restore window expired for character ID 7. This character was deleted at 2026-02-10T10:00:00Z and could only be restored until 2026-02-11T10:00:00Z UTC."
+      )
     )
 
     useMutationMock.mockImplementation((opts: any) => ({
@@ -1012,7 +1543,8 @@ describe("CharactersManager first-use onboarding", () => {
     })
     const payload = notificationMock.error.mock.calls.at(-1)?.[0]
     expect(payload?.message).toBe("Failed to restore character")
-    expect(payload?.description).toContain("Restore conflict from server")
+    expect(payload?.description).toContain("Restore window expired")
+    expect(payload?.description).toContain("could only be restored until")
     expect(payload?.description).toContain("check server logs")
 
     const recoveryEvent = dispatchSpy.mock.calls
@@ -1108,6 +1640,242 @@ describe("CharactersManager first-use onboarding", () => {
     await waitFor(() => {
       expect(tldwClientMock.restoreCharacter).toHaveBeenCalledWith("bulk-2", 21)
     })
+  }, 30000)
+
+  it("enables compare only when exactly two characters are selected", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "cmp-1",
+        name: "Compare One",
+        description: "Description one",
+        system_prompt: "Prompt one",
+        tags: ["alpha"],
+        version: 1
+      },
+      {
+        id: "cmp-2",
+        name: "Compare Two",
+        description: "Description two",
+        system_prompt: "Prompt two",
+        tags: ["beta"],
+        version: 2
+      },
+      {
+        id: "cmp-3",
+        name: "Compare Three",
+        description: "Description three",
+        system_prompt: "Prompt three",
+        tags: ["gamma"],
+        version: 3
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("checkbox", { name: "Select Compare One" }))
+    expect(await screen.findByRole("button", { name: "Compare" })).toBeDisabled()
+
+    await user.click(screen.getByRole("checkbox", { name: "Select Compare Two" }))
+    expect(screen.getByRole("button", { name: "Compare" })).toBeEnabled()
+
+    await user.click(screen.getByRole("checkbox", { name: "Select Compare Three" }))
+    expect(screen.getByRole("button", { name: "Compare" })).toBeDisabled()
+  }, 30000)
+
+  it("opens a compare modal for two selected characters and shows field differences", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "cmp-a",
+        name: "Compare Alpha",
+        description: "Alpha description",
+        system_prompt: "Prompt alpha",
+        tags: ["alpha"],
+        version: 11
+      },
+      {
+        id: "cmp-b",
+        name: "Compare Beta",
+        description: "Beta description",
+        system_prompt: "Prompt beta",
+        tags: ["beta"],
+        version: 12
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByRole("checkbox", { name: "Select all on page" }))
+    const compareButton = await screen.findByRole("button", { name: "Compare" })
+    await waitFor(() => {
+      expect(compareButton).toBeEnabled()
+    })
+    await user.click(compareButton)
+
+    const compareTitle = await screen.findByText("Compare characters")
+    const dialog = compareTitle.closest(".ant-modal")
+    expect(dialog).not.toBeNull()
+    expect(within(dialog as HTMLElement).getByText("Prompt alpha")).toBeInTheDocument()
+    expect(within(dialog as HTMLElement).getByText("Prompt beta")).toBeInTheDocument()
+    expect(
+      within(dialog as HTMLElement).getByText(/tracked fields differ/i)
+    ).toBeInTheDocument()
+
+    const closeButtons = within(dialog as HTMLElement).getAllByRole("button", {
+      name: "Close"
+    })
+    const footerCloseButton = closeButtons.find(
+      (button) => !button.classList.contains("ant-modal-close")
+    )
+    expect(footerCloseButton).toBeDefined()
+    await user.click(footerCloseButton as HTMLElement)
+  }, 30000)
+
+  it("copies and exports comparison summaries from the compare modal", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "cmp-copy-1",
+        name: "Copy Left",
+        description: "Left description",
+        system_prompt: "Prompt left",
+        tags: ["left"],
+        version: 31
+      },
+      {
+        id: "cmp-copy-2",
+        name: "Copy Right",
+        description: "Right description",
+        system_prompt: "Prompt right",
+        tags: ["right"],
+        version: 32
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    const writeTextMock = vi.fn(async () => undefined)
+    const originalClipboard = (navigator as Navigator & { clipboard?: Clipboard }).clipboard
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: writeTextMock }
+    })
+
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    const createObjectURLMock = vi.fn(() => "blob:compare-summary")
+    const revokeObjectURLMock = vi.fn()
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: createObjectURLMock
+    })
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: revokeObjectURLMock
+    })
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined)
+
+    try {
+      render(<CharactersManager />)
+
+      await user.click(await screen.findByRole("checkbox", { name: "Select all on page" }))
+      const compareButton = await screen.findByRole("button", { name: "Compare" })
+      await waitFor(() => {
+        expect(compareButton).toBeEnabled()
+      })
+      await user.click(compareButton)
+
+      const compareTitle = await screen.findByText("Compare characters")
+      const dialog = compareTitle.closest(".ant-modal")
+      expect(dialog).not.toBeNull()
+
+      await user.click(
+        within(dialog as HTMLElement).getByRole("button", { name: "Copy summary" })
+      )
+      await waitFor(() => {
+        expect(writeTextMock).toHaveBeenCalledTimes(1)
+      })
+      expect(writeTextMock.mock.calls[0]?.[0]).toContain("Character comparison summary")
+      expect(writeTextMock.mock.calls[0]?.[0]).toContain("Copy Left")
+      expect(writeTextMock.mock.calls[0]?.[0]).toContain("Copy Right")
+
+      await user.click(
+        within(dialog as HTMLElement).getByRole("button", { name: "Export summary" })
+      )
+      expect(createObjectURLMock).toHaveBeenCalledTimes(1)
+      expect(anchorClickSpy).toHaveBeenCalledTimes(1)
+      expect(revokeObjectURLMock).toHaveBeenCalledWith("blob:compare-summary")
+    } finally {
+      anchorClickSpy.mockRestore()
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: originalClipboard
+      })
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: originalCreateObjectURL
+      })
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: originalRevokeObjectURL
+      })
+    }
   }, 30000)
 
   it("supports keyboard Enter to trigger and commit inline name editing", async () => {
@@ -2071,6 +2839,9 @@ describe("CharactersManager first-use onboarding", () => {
         })
       )
     })
+    expect(tldwClientMock.setDefaultCharacterPreference).toHaveBeenCalledWith(
+      "char-default"
+    )
   }, 30000)
 
   it("clears default character from row actions when selected record is default", async () => {
@@ -2125,6 +2896,9 @@ describe("CharactersManager first-use onboarding", () => {
     await waitFor(() => {
       expect(setDefaultCharacterMock).toHaveBeenCalledWith(null)
     })
+    expect(tldwClientMock.setDefaultCharacterPreference).toHaveBeenCalledWith(
+      null
+    )
   }, 30000)
 
   it("shows conversation insights summary with last active and average message count", async () => {
@@ -2318,6 +3092,156 @@ describe("CharactersManager first-use onboarding", () => {
       "Ask this character a quick question..."
     )
     expect(screen.getByText("Hi from gallery quick chat")).toBeInTheDocument()
+  }, 30000)
+
+  it("shows attached world books in gallery preview context", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "preview-worldbook",
+      name: "Preview Worldbook Character",
+      system_prompt: "Preview world-book prompt",
+      greeting: "Preview greeting",
+      description: "Preview world-book description",
+      version: 1
+    }
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterPreviewWorldBooks") {
+        return makeUseQueryResult({
+          data: [
+            { id: 11, name: "Lore Atlas" },
+            { id: 22, name: "Chronicle Index" }
+          ]
+        })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByText("Preview Worldbook Character"))
+
+    const previewTitle = await screen.findByText("Character Preview")
+    const previewModal = previewTitle.closest(".ant-modal")
+    expect(previewModal).not.toBeNull()
+
+    const modalScope = within(previewModal as HTMLElement)
+    expect(modalScope.getByText("World Books")).toBeInTheDocument()
+    expect(modalScope.getByRole("link", { name: "Open World Books workspace" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("focusCharacterId=preview-worldbook")
+    )
+
+    const loreLink = modalScope.getByRole("link", { name: "Open world book Lore Atlas" })
+    expect(loreLink).toHaveAttribute("href", expect.stringContaining("focusWorldBookId=11"))
+    expect(loreLink).toHaveAttribute(
+      "href",
+      expect.stringContaining("focusCharacterId=preview-worldbook")
+    )
+
+    const chronicleLink = modalScope.getByRole("link", {
+      name: "Open world book Chronicle Index"
+    })
+    expect(chronicleLink).toHaveAttribute("href", expect.stringContaining("focusWorldBookId=22"))
+  }, 30000)
+
+  it("shows world-book empty state in gallery preview when no attachments exist", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "preview-no-worldbook",
+      name: "Preview Empty Worldbooks",
+      system_prompt: "No world books",
+      greeting: "No linked books",
+      description: "Empty preview",
+      version: 1
+    }
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterPreviewWorldBooks") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByText("Preview Empty Worldbooks"))
+    await screen.findByText("Character Preview")
+    expect(
+      await screen.findByText("No world books attached to this character.")
+    ).toBeInTheDocument()
+  }, 30000)
+
+  it("shows world-book loading state in gallery preview while attachments fetch", async () => {
+    const user = userEvent.setup()
+    const characterRecord = {
+      id: "preview-loading-worldbook",
+      name: "Preview Loading Worldbooks",
+      system_prompt: "Loading world books",
+      greeting: "Loading linked books",
+      description: "Loading preview",
+      version: 1
+    }
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterPreviewWorldBooks") {
+        return makeUseQueryResult({ data: [], isFetching: true })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByText("Preview Loading Worldbooks"))
+    await screen.findByText("Character Preview")
+    expect(
+      await screen.findByText("Loading attached world books...")
+    ).toBeInTheDocument()
   }, 30000)
 
   it("promotes quick chat into full chat flow without route changes until promoted", async () => {
@@ -2690,6 +3614,123 @@ describe("CharactersManager first-use onboarding", () => {
       expect.objectContaining({ name: "uploaded-character.json" }),
       expect.objectContaining({ allowImageOnly: false })
     )
+  })
+
+  it("opens import preview when files are dropped on the import drop zone", async () => {
+    render(<CharactersManager />)
+
+    const dropZone = screen.getByTestId("character-import-dropzone")
+    const droppedFile = new File(
+      [JSON.stringify({ name: "Dropped Character" })],
+      "dropped-character.json",
+      { type: "application/json" }
+    )
+    const dataTransfer = {
+      files: [droppedFile]
+    }
+
+    fireEvent.dragEnter(dropZone, { dataTransfer })
+    fireEvent.dragOver(dropZone, { dataTransfer })
+    fireEvent.drop(dropZone, { dataTransfer })
+
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(await screen.findByText("Dropped Character")).toBeInTheDocument()
+    expect(
+      screen.getByTestId("character-import-progress-summary")
+    ).toHaveTextContent("Queued 1")
+  })
+
+  it("renders per-file runtime status transitions during batch import", async () => {
+    const user = userEvent.setup()
+    let resolveFirstImport: ((value: { success: boolean; message: string }) => void) | null =
+      null
+    const firstImport = new Promise<{ success: boolean; message: string }>((resolve) => {
+      resolveFirstImport = resolve
+    })
+    tldwClientMock.importCharacterFile
+      .mockImplementationOnce(() => firstImport)
+      .mockRejectedValueOnce(new Error("Invalid character payload"))
+
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const fileOne = new File(
+      [JSON.stringify({ name: "Status One" })],
+      "status-one.json",
+      { type: "application/json" }
+    )
+    const fileTwo = new File(
+      [JSON.stringify({ name: "Status Two" })],
+      "status-two.json",
+      { type: "application/json" }
+    )
+    await user.upload(input, [fileOne, fileTwo])
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+    expect(screen.getAllByTestId("character-import-status-queued")).toHaveLength(2)
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId("character-import-status-processing")).toBeInTheDocument()
+    })
+
+    resolveFirstImport?.({
+      success: true,
+      message: "First import ok"
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("character-import-status-success")).toBeInTheDocument()
+      expect(screen.getByTestId("character-import-status-failure")).toBeInTheDocument()
+    })
+
+    const summary = screen.getByTestId("character-import-progress-summary")
+    expect(summary).toHaveTextContent("Success 1")
+    expect(summary).toHaveTextContent("Failed 1")
+  })
+
+  it("retries only failed files from import preview without duplicating successful imports", async () => {
+    const user = userEvent.setup()
+    tldwClientMock.importCharacterFile
+      .mockResolvedValueOnce({ success: true, message: "First import ok" })
+      .mockRejectedValueOnce(new Error("Second import failed"))
+      .mockResolvedValueOnce({ success: true, message: "Second retry ok" })
+
+    const { container } = render(<CharactersManager />)
+    const input = container.querySelector("input[type='file']") as HTMLInputElement
+    expect(input).not.toBeNull()
+
+    const fileOne = new File(
+      [JSON.stringify({ name: "Retry One" })],
+      "retry-one.json",
+      { type: "application/json" }
+    )
+    const fileTwo = new File(
+      [JSON.stringify({ name: "Retry Two" })],
+      "retry-two.json",
+      { type: "application/json" }
+    )
+
+    await user.upload(input, [fileOne, fileTwo])
+    expect(await screen.findByText("Import preview")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Confirm import" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledTimes(2)
+      expect(screen.getByTestId("character-import-status-failure")).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole("button", { name: "Retry failed" }))
+
+    await waitFor(() => {
+      expect(tldwClientMock.importCharacterFile).toHaveBeenCalledTimes(3)
+      expect(screen.queryByTestId("character-import-status-failure")).not.toBeInTheDocument()
+    })
+
+    const thirdCallFile = tldwClientMock.importCharacterFile.mock.calls[2]?.[0]
+    expect(thirdCallFile?.name).toBe("retry-two.json")
   })
 
   it("imports a batch of files and reports per-file failures", async () => {

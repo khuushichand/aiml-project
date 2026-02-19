@@ -652,6 +652,28 @@ export const LAST_NOTE_ID_SETTING = defineSetting(
   }
 )
 
+const NOTES_PAGE_SIZE_VALUES = [20, 50, 100] as const
+export type NotesPageSize = (typeof NOTES_PAGE_SIZE_VALUES)[number]
+
+const coerceNotesPageSize = (value: unknown): NotesPageSize => {
+  const parsed = Math.round(coerceNumber(value, 20))
+  if (NOTES_PAGE_SIZE_VALUES.includes(parsed as NotesPageSize)) {
+    return parsed as NotesPageSize
+  }
+  return 20
+}
+
+export const NOTES_PAGE_SIZE_SETTING = defineSetting(
+  "tldw:notesPageSize",
+  20 as NotesPageSize,
+  (value) => coerceNotesPageSize(value),
+  {
+    area: "local",
+    localStorageKey: "tldw:notesPageSize",
+    mirrorToLocalStorage: true
+  }
+)
+
 const NOTES_TITLE_STRATEGY_VALUES = ["heuristic", "llm", "llm_fallback"] as const
 export type NotesTitleSuggestStrategy = (typeof NOTES_TITLE_STRATEGY_VALUES)[number]
 
@@ -676,6 +698,87 @@ export type NotesRecentOpenedEntry = {
   id: string
   title: string
 }
+
+const coerceNotesPinnedIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  const deduped: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    const rawId = String(entry || "").trim()
+    if (!rawId || seen.has(rawId)) continue
+    seen.add(rawId)
+    deduped.push(rawId)
+    if (deduped.length >= 500) break
+  }
+  return deduped
+}
+
+export const NOTES_PINNED_IDS_SETTING = defineSetting(
+  "tldw:notesPinnedIds",
+  [] as string[],
+  coerceNotesPinnedIds,
+  {
+    area: "local",
+    localStorageKey: "tldw:notesPinnedIds",
+    mirrorToLocalStorage: true
+  }
+)
+
+export type NotesNotebookSetting = {
+  id: number
+  name: string
+  keywords: string[]
+}
+
+const coerceNotesNotebookSettings = (value: unknown): NotesNotebookSetting[] => {
+  if (!Array.isArray(value)) return []
+  const out: NotesNotebookSetting[] = []
+  const seenIds = new Set<number>()
+  const seenNames = new Set<string>()
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue
+    const idCandidate = Number((entry as any).id)
+    const name = String((entry as any).name || "").trim()
+    if (!Number.isFinite(idCandidate) || idCandidate <= 0) continue
+    if (!name) continue
+    const id = Math.floor(idCandidate)
+    if (seenIds.has(id)) continue
+    const nameKey = name.toLowerCase()
+    if (seenNames.has(nameKey)) continue
+    const keywordsRaw = Array.isArray((entry as any).keywords)
+      ? (entry as any).keywords
+      : []
+    const keywordSeen = new Set<string>()
+    const keywords: string[] = []
+    for (const keyword of keywordsRaw) {
+      const normalizedKeyword = String(keyword || "").trim().toLowerCase()
+      if (!normalizedKeyword || keywordSeen.has(normalizedKeyword)) continue
+      keywordSeen.add(normalizedKeyword)
+      keywords.push(normalizedKeyword)
+      if (keywords.length >= 25) break
+    }
+    seenIds.add(id)
+    seenNames.add(nameKey)
+    out.push({
+      id,
+      name,
+      keywords
+    })
+    if (out.length >= 100) break
+  }
+  return out
+}
+
+export const NOTES_NOTEBOOKS_SETTING = defineSetting(
+  "tldw:notesNotebooks",
+  [] as NotesNotebookSetting[],
+  coerceNotesNotebookSettings,
+  {
+    area: "local",
+    localStorageKey: "tldw:notesNotebooks",
+    mirrorToLocalStorage: true
+  }
+)
 
 const coerceNotesRecentOpened = (value: unknown): NotesRecentOpenedEntry[] => {
   if (!Array.isArray(value)) return []
@@ -715,6 +818,17 @@ export const LAST_DECK_ID_SETTING = defineSetting(
   {
     area: "local",
     localStorageKey: "tldw:lastDeckId",
+    mirrorToLocalStorage: true
+  }
+)
+
+export const FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING = defineSetting(
+  "tldw:flashcards:reviewOnboardingDismissed",
+  false,
+  (value) => coerceBoolean(value, false),
+  {
+    area: "local",
+    localStorageKey: "tldw:flashcards:reviewOnboardingDismissed",
     mirrorToLocalStorage: true
   }
 )

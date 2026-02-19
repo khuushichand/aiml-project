@@ -8,7 +8,9 @@ from fastapi import status
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
@@ -301,6 +303,97 @@ def test_chat_completion_default_model_tracks_model(authenticated_client, mock_c
 
         assert response.status_code == status.HTTP_200_OK
         assert captured.get("model") == "default-model"
+
+
+def test_chat_completion_openai_oauth_auth_failure_retries_once(
+    authenticated_client,
+    mock_chacha_db,
+    setup_dependencies,
+):
+    request_data = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+    forced_refresh_flags: list[bool] = []
+
+    async def _resolve_byok(provider: str, *_args, **kwargs):
+        forced = bool(kwargs.get("force_oauth_refresh", False))
+        forced_refresh_flags.append(forced)
+        api_key = "oauth-refreshed-key" if forced else "oauth-initial-key"
+        return ResolvedByokCredentials(
+            provider=provider,
+            api_key=api_key,
+            app_config=None,
+            credential_fields={},
+            source="user",
+            allowlisted=True,
+            auth_source="oauth",
+        )
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.resolve_byok_credentials", side_effect=_resolve_byok),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+    ):
+        mock_llm.side_effect = [
+            ChatAuthenticationError("expired oauth access token", provider="openai"),
+            {
+                "id": "chatcmpl-test",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "Recovered after refresh"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        ]
+
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+    assert response.status_code == status.HTTP_200_OK
+    assert mock_llm.call_count == 2
+    assert forced_refresh_flags[:2] == [False, True]
+
+
+def test_chat_completion_openai_oauth_reconnect_required_after_second_auth_failure(
+    authenticated_client,
+    mock_chacha_db,
+    setup_dependencies,
+):
+    request_data = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
+    )
+
+    async def _resolve_byok(provider: str, *_args, **kwargs):
+        forced = bool(kwargs.get("force_oauth_refresh", False))
+        api_key = "oauth-refreshed-key" if forced else "oauth-initial-key"
+        return ResolvedByokCredentials(
+            provider=provider,
+            api_key=api_key,
+            app_config=None,
+            credential_fields={},
+            source="user",
+            allowlisted=True,
+            auth_source="oauth",
+        )
+
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.resolve_byok_credentials", side_effect=_resolve_byok),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+    ):
+        mock_llm.side_effect = [
+            ChatAuthenticationError("expired oauth access token", provider="openai"),
+            ChatAuthenticationError("oauth refresh token revoked", provider="openai"),
+        ]
+
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    detail = response.json().get("detail", {})
+    assert detail.get("error_code") == "oauth_reconnect_required"
+    assert detail.get("reconnect_required") is True
 
 
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):

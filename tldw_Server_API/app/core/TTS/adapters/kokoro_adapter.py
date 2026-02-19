@@ -36,6 +36,7 @@ from ..tts_exceptions import (
 )
 from ..tts_resource_manager import get_resource_manager as _get_resource_manager
 from ...testing import env_flag_enabled, is_explicit_pytest_runtime, is_test_mode
+from ...Utils.torch_import_guard import safe_import_torch
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 
@@ -205,8 +206,10 @@ class KokoroAdapter(TTSAdapter):
         mps_avail = False
 
         def _probe_devices() -> tuple[bool, bool]:
+            if is_test_mode() or is_explicit_pytest_runtime() or env_flag_enabled("MINIMAL_TEST_APP"):
+                return False, False
             try:
-                import torch  # type: ignore
+                torch = safe_import_torch()
                 cuda_ok = torch.cuda.is_available()
                 mps_ok = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
                 return cuda_ok, mps_ok
@@ -623,21 +626,21 @@ class KokoroAdapter(TTSAdapter):
 
     async def _initialize_pytorch(self) -> bool:
         """Initialize PyTorch backend"""
-        try:
-            import torch
-        except ImportError as e:
-            raise TTSModelLoadError(
-                "PyTorch is required for Kokoro PyTorch backend",
-                provider=self.provider_name,
-                details={"error": str(e), "suggestion": "pip install torch"}
-            ) from e
-        # Check model file
+        # Check model file before importing torch so missing-model failures stay lightweight.
         if not os.path.exists(self.model_path):
             raise TTSModelNotFoundError(
                 f"Kokoro PyTorch model not found at {self.model_path}",
                 provider=self.provider_name,
                 details={"model_path": self.model_path}
             )
+        try:
+            torch = safe_import_torch()
+        except ImportError as e:
+            raise TTSModelLoadError(
+                "PyTorch is required for Kokoro PyTorch backend",
+                provider=self.provider_name,
+                details={"error": str(e), "suggestion": "pip install torch"}
+            ) from e
         # Try native Kokoro PyTorch if available
         try:
             from kokoro.model import KModel  # type: ignore
@@ -1441,7 +1444,7 @@ class KokoroAdapter(TTSAdapter):
             if hasattr(item, "audio"):
                 audio = item.audio
                 try:
-                    import torch  # type: ignore
+                    torch = safe_import_torch()
 
                     if isinstance(audio, torch.Tensor):
                         audio = audio.detach().cpu().numpy()
@@ -1648,7 +1651,9 @@ class KokoroAdapter(TTSAdapter):
             # Clear CUDA cache if using GPU
             if self.device.startswith("cuda"):
                 try:
-                    import torch
+                    if is_test_mode() or is_explicit_pytest_runtime() or env_flag_enabled("MINIMAL_TEST_APP"):
+                        return
+                    torch = safe_import_torch()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                         logger.debug(f"{self.provider_name}: CUDA cache cleared")

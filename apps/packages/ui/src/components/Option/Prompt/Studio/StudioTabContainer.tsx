@@ -63,6 +63,30 @@ export const getStudioStatusRefetchInterval = (
   status: { processing?: number } | null | undefined
 ): number => (Number(status?.processing || 0) > 0 ? 5000 : 30000)
 
+const normalizeSettingsProjects = (
+  payload: unknown
+): Array<{ id: number; name: string }> => {
+  const raw =
+    (payload as any)?.data?.data ??
+    (payload as any)?.data ??
+    []
+
+  if (!Array.isArray(raw)) {
+    return []
+  }
+
+  return raw
+    .map((entry) => {
+      const id = Number((entry as any)?.id)
+      const name = (entry as any)?.name
+      if (!Number.isFinite(id) || typeof name !== "string" || name.trim().length === 0) {
+        return null
+      }
+      return { id, name: name.trim() }
+    })
+    .filter((entry): entry is { id: number; name: string } => entry !== null)
+}
+
 export const StudioTabContainer: React.FC = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const [searchParams, setSearchParams] = useSearchParams()
@@ -114,10 +138,7 @@ export const StudioTabContainer: React.FC = () => {
       settingsDefaultsResponse?.autoSyncWorkspacePrompts !== false
   }
 
-  const settingsProjects: Array<{ id: number; name: string }> =
-    (settingsProjectsResponse as any)?.data?.data ??
-    (settingsProjectsResponse as any)?.data ??
-    []
+  const settingsProjects = normalizeSettingsProjects(settingsProjectsResponse)
 
   const updateSettingsMutation = useMutation({
     mutationFn: (updates: {

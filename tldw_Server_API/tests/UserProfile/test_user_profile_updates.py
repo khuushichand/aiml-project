@@ -89,6 +89,88 @@ def test_user_profile_preferences_include_sources(auth_headers) -> None:
     assert entry.get("source") == "user"
 
 
+def test_user_profile_update_default_character_preference_set_and_clear(
+    auth_headers,
+) -> None:
+    with TestClient(app) as client:
+        set_resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {
+                        "key": "preferences.chat.default_character_id",
+                        "value": "char-123",
+                    }
+                ]
+            },
+        )
+        assert set_resp.status_code == 200
+        assert (
+            "preferences.chat.default_character_id"
+            in set_resp.json().get("applied", [])
+        )
+
+        profile_resp = client.get(
+            "/api/v1/users/me/profile",
+            params={"sections": "preferences"},
+            headers=auth_headers,
+        )
+        assert profile_resp.status_code == 200
+        preferences = profile_resp.json().get("preferences", {})
+        assert preferences.get("preferences.chat.default_character_id") == "char-123"
+
+        clear_resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {
+                        "key": "preferences.chat.default_character_id",
+                        "value": None,
+                    }
+                ]
+            },
+        )
+        assert clear_resp.status_code == 200
+        assert (
+            "preferences.chat.default_character_id"
+            in clear_resp.json().get("applied", [])
+        )
+
+        profile_after_clear = client.get(
+            "/api/v1/users/me/profile",
+            params={"sections": "preferences"},
+            headers=auth_headers,
+        )
+        assert profile_after_clear.status_code == 200
+        cleared_preferences = profile_after_clear.json().get("preferences", {})
+
+    assert "preferences.chat.default_character_id" not in cleared_preferences
+
+
+def test_user_profile_update_default_character_preference_type_validation(
+    auth_headers,
+) -> None:
+    with TestClient(app) as client:
+        resp = client.patch(
+            "/api/v1/users/me/profile",
+            headers=auth_headers,
+            json={
+                "updates": [
+                    {
+                        "key": "preferences.chat.default_character_id",
+                        "value": 123,
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 422
+        payload = resp.json()
+        assert payload.get("error_code") == "profile_update_invalid"
+        assert payload.get("errors")
+
+
 def test_admin_profile_update_storage_quota(auth_headers) -> None:
     with TestClient(app) as client:
         user_id = _get_user_id(client, auth_headers)

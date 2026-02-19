@@ -387,6 +387,50 @@ class Settings(BaseSettings):
         default=None,
         description="Secondary BYOK encryption key for dual-read during rotations"
     )
+    OPENAI_OAUTH_ENABLED: bool = Field(
+        default=False,
+        description="Enable OpenAI OAuth account-linking for BYOK users",
+    )
+    OPENAI_OAUTH_CLIENT_ID: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth client ID",
+    )
+    OPENAI_OAUTH_CLIENT_SECRET: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth client secret",
+    )
+    OPENAI_OAUTH_AUTH_URL: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth authorize URL",
+    )
+    OPENAI_OAUTH_TOKEN_URL: Optional[str] = Field(
+        default=None,
+        description="OpenAI OAuth token URL",
+    )
+    OPENAI_OAUTH_SCOPES: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="OAuth scopes requested during OpenAI account linking",
+    )
+    OPENAI_OAUTH_STATE_TTL_MINUTES: int = Field(
+        default=10,
+        ge=1,
+        le=60,
+        description="OAuth state TTL in minutes for OpenAI account linking",
+    )
+    OPENAI_OAUTH_REFRESH_SKEW_SECONDS: int = Field(
+        default=120,
+        ge=0,
+        le=3600,
+        description="Proactive refresh lead time in seconds for OpenAI OAuth access tokens",
+    )
+    OPENAI_OAUTH_REDIRECT_URI: Optional[str] = Field(
+        default=None,
+        description="Optional fixed callback URI override for OpenAI OAuth flow",
+    )
+    OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["/"],
+        description="Allowed app-relative return path prefixes for OpenAI OAuth flow",
+    )
 
     # ===== Token Rotation =====
     ROTATE_REFRESH_TOKENS: bool = Field(
@@ -919,6 +963,52 @@ class Settings(BaseSettings):
             return v or None
         return v
 
+    @field_validator("OPENAI_OAUTH_ENABLED", mode="before")
+    @classmethod
+    def parse_openai_oauth_enabled(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_ENABLED")
+            if env_val is not None:
+                return _bool_from_str(env_val)
+        return v
+
+    @field_validator("OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_SECRET", mode="before")
+    @classmethod
+    def normalize_openai_oauth_secret_fields(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("OPENAI_OAUTH_AUTH_URL", "OPENAI_OAUTH_TOKEN_URL", "OPENAI_OAUTH_REDIRECT_URI", mode="before")
+    @classmethod
+    def normalize_openai_oauth_urls(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("OPENAI_OAUTH_SCOPES", mode="before")
+    @classmethod
+    def parse_openai_oauth_scopes(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_SCOPES")
+            if env_val is not None:
+                v = env_val
+        return _split_csv(v)
+
+    @field_validator("OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES", mode="before")
+    @classmethod
+    def parse_openai_oauth_allowed_return_path_prefixes(cls, v):
+        if v is None:
+            env_val = os.getenv("OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES")
+            if env_val is not None:
+                v = env_val
+        parsed = _split_csv(v)
+        if not parsed:
+            return ["/"]
+        return parsed
+
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_database_url(cls, v, info):
@@ -1019,6 +1109,24 @@ def _load_overrides_from_config() -> dict:
         maybe_set("BYOK_ALLOWED_BASE_URL_PROVIDERS", "byok_allowed_base_url_providers", _split_csv)
         maybe_set("BYOK_ENCRYPTION_KEY", "byok_encryption_key", lambda v: v.strip())
         maybe_set("BYOK_SECONDARY_ENCRYPTION_KEY", "byok_secondary_encryption_key", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_ENABLED", "openai_oauth_enabled", _bool_from_str)
+        maybe_set("OPENAI_OAUTH_CLIENT_ID", "openai_oauth_client_id", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_CLIENT_SECRET", "openai_oauth_client_secret", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_AUTH_URL", "openai_oauth_auth_url", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_TOKEN_URL", "openai_oauth_token_url", lambda v: v.strip())
+        maybe_set("OPENAI_OAUTH_SCOPES", "openai_oauth_scopes", _split_csv)
+        maybe_set("OPENAI_OAUTH_STATE_TTL_MINUTES", "openai_oauth_state_ttl_minutes", lambda v: int(v))
+        maybe_set(
+            "OPENAI_OAUTH_REFRESH_SKEW_SECONDS",
+            "openai_oauth_refresh_skew_seconds",
+            lambda v: int(v),
+        )
+        maybe_set("OPENAI_OAUTH_REDIRECT_URI", "openai_oauth_redirect_uri", lambda v: v.strip())
+        maybe_set(
+            "OPENAI_OAUTH_ALLOWED_RETURN_PATH_PREFIXES",
+            "openai_oauth_allowed_return_path_prefixes",
+            _split_csv,
+        )
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
         # Legacy aliases in config.txt
         maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)

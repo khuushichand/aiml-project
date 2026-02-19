@@ -38,6 +38,22 @@ function makeTempProfileDirs() {
   return { homeDir, userDataDir }
 }
 
+function isExtensionBuildDir(dir: string): boolean {
+  if (!dir || !fs.existsSync(dir)) {
+    return false
+  }
+
+  const manifestPath = path.join(dir, 'manifest.json')
+  if (!fs.existsSync(manifestPath)) {
+    return false
+  }
+
+  const backgroundPath = path.join(dir, 'background.js')
+  const optionsPath = path.join(dir, 'options.html')
+  const sidepanelPath = path.join(dir, 'sidepanel.html')
+  return fs.existsSync(backgroundPath) && (fs.existsSync(optionsPath) || fs.existsSync(sidepanelPath))
+}
+
 function resolveChromiumExecutablePath(explicitPath?: string): string | undefined {
   const fromEnv = String(explicitPath || '').trim()
   if (fromEnv) {
@@ -103,8 +119,13 @@ export async function launchWithExtension(
   extensionPath: string,
   {
     seedConfig,
-    seedLocalStorage
-  }: { seedConfig?: Record<string, any>; seedLocalStorage?: Record<string, any> } = {}
+    seedLocalStorage,
+    launchTimeoutMs
+  }: {
+    seedConfig?: Record<string, any>
+    seedLocalStorage?: Record<string, any>
+    launchTimeoutMs?: number
+  } = {}
 ): Promise<LaunchWithExtensionResult> {
   const isDevBuild = (dir: string) => {
     const optionsPath = path.join(dir, 'options.html')
@@ -118,11 +139,12 @@ export async function launchWithExtension(
   }
 
   // Pick the first existing extension build so tests work whether dev output or prod build is present.
-  const candidates = [
+  const rawCandidates = [
     extensionPath,
     path.resolve('.output/chrome-mv3'),
     path.resolve('build/chrome-mv3')
   ].filter((p) => p && fs.existsSync(p))
+  const candidates = rawCandidates.filter(isExtensionBuildDir)
   const allowDev = ['1', 'true', 'yes'].includes(
     String(process.env.TLDW_E2E_ALLOW_DEV || '').toLowerCase()
   )
@@ -131,11 +153,15 @@ export async function launchWithExtension(
   const extPath =
     prodCandidates[0] || (allowDev ? devCandidates[0] : undefined)
   if (!extPath) {
+    const invalidCandidates = rawCandidates.filter((p) => !candidates.includes(p))
+    const invalidHint = invalidCandidates.length
+      ? `Ignored invalid extension directories (missing manifest or required assets): ${invalidCandidates.join(', ')}. `
+      : ''
     const devHint = devCandidates.length
       ? 'Found only dev-server builds. Run "bun run build:chrome" or start the dev server and set TLDW_E2E_ALLOW_DEV=1.'
       : 'Run "bun run build:chrome" first.'
     throw new Error(
-      `No production extension build found. Tried: ${candidates.join(
+      `No production extension build found. ${invalidHint}Tried: ${rawCandidates.join(
         ', '
       )}. ${devHint}`
     )
@@ -143,10 +169,21 @@ export async function launchWithExtension(
 
   const { homeDir, userDataDir } = makeTempProfileDirs()
 
+  const configuredLaunchTimeout = Number.parseInt(
+    String(process.env.TLDW_E2E_EXTENSION_LAUNCH_TIMEOUT_MS || ""),
+    10
+  )
+  const effectiveLaunchTimeoutMs =
+    launchTimeoutMs ??
+    (Number.isFinite(configuredLaunchTimeout) && configuredLaunchTimeout > 0
+      ? configuredLaunchTimeout
+      : 30000)
+
   const executablePath = resolveChromiumExecutablePath(
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
   )
   const context = await chromium.launchPersistentContext(userDataDir, {
+    timeout: effectiveLaunchTimeoutMs,
     headless: !!process.env.CI,
     acceptDownloads: true,
     ignoreDefaultArgs: ['--disable-extensions'],
@@ -164,6 +201,15 @@ export async function launchWithExtension(
     ]
   })
 
+  const configuredTargetWait = Number.parseInt(
+    String(process.env.TLDW_E2E_EXTENSION_TARGET_WAIT_MS || ""),
+    10
+  )
+  const targetWaitMs =
+    Number.isFinite(configuredTargetWait) && configuredTargetWait > 0
+      ? configuredTargetWait
+      : 30000
+
   // Wait for background targets to appear (service worker or background page)
   const waitForTargets = async () => {
     // Already present?
@@ -171,7 +217,7 @@ export async function launchWithExtension(
     await Promise.race([
       context.waitForEvent('serviceworker').catch(() => null),
       context.waitForEvent('backgroundpage').catch(() => null),
-      new Promise((r) => setTimeout(r, 7000))
+      new Promise((r) => setTimeout(r, targetWaitMs))
     ])
   }
   await waitForTargets()

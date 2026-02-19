@@ -1,6 +1,6 @@
 import React from "react"
 import { Dropdown, Tooltip } from "antd"
-import { Copy, MessageCircle, MoreHorizontal, Pen, Trash2 } from "lucide-react"
+import { Copy, History, MessageCircle, MoreHorizontal, Pen, Trash2 } from "lucide-react"
 
 type DictionaryActionsCellProps = {
   record: any
@@ -11,6 +11,7 @@ type DictionaryActionsCellProps = {
   onExportJson: (record: any) => void
   onExportMarkdown: (record: any) => void
   onOpenStats: (record: any) => void
+  onOpenVersions: (record: any) => void
   onDuplicate: (record: any) => void
   onDelete: (record: any) => void
 }
@@ -24,6 +25,7 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
   onExportJson,
   onExportMarkdown,
   onOpenStats,
+  onOpenVersions,
   onDuplicate,
   onDelete
 }) => {
@@ -61,6 +63,11 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
               { key: "markdown", label: "Export Markdown" },
               { key: "stats", label: "View statistics" },
               {
+                key: "versions",
+                label: "Version history",
+                icon: <History className="w-4 h-4" />
+              },
+              {
                 key: "duplicate",
                 label: "Duplicate dictionary",
                 icon: <Copy className="w-4 h-4" />
@@ -85,6 +92,9 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
                   return
                 case "stats":
                   onOpenStats(record)
+                  return
+                case "versions":
+                  onOpenVersions(record)
                   return
                 case "duplicate":
                   onDuplicate(record)
@@ -144,6 +154,15 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
               aria-label={`View statistics for ${record.name}`}
             >
               Stats
+            </button>
+          </Tooltip>
+          <Tooltip title="View version history">
+            <button
+              className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+              onClick={() => onOpenVersions(record)}
+              aria-label={`Version history for ${record.name}`}
+            >
+              Versions
             </button>
           </Tooltip>
           <Tooltip title="Duplicate dictionary">

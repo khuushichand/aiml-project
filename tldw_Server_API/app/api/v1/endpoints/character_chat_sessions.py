@@ -413,6 +413,9 @@ def _convert_db_conversation_to_response(
         last_modified=conv_data.get('last_modified', datetime.now(timezone.utc)),
         message_count=conv_data.get('message_count', 0),
         version=conv_data.get('version', 1),
+        parent_conversation_id=conv_data.get('parent_conversation_id'),
+        root_id=conv_data.get('root_id'),
+        forked_from_message_id=conv_data.get('forked_from_message_id'),
         settings=settings,
     )
 
@@ -2090,6 +2093,7 @@ async def create_chat_session(
         parent_conversation = None
         validated_parent_id: Optional[str] = None
         parent_root_id: Optional[str] = None
+        validated_forked_from_message_id: Optional[str] = None
         if session_data.parent_conversation_id:
             parent_conversation = db.get_conversation_by_id(session_data.parent_conversation_id)
             _verify_chat_ownership(parent_conversation, current_user.id, session_data.parent_conversation_id)
@@ -2097,6 +2101,22 @@ async def create_chat_session(
                 validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
                 parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
             # Cross-character forks are intentionally supported; do not enforce a character_id match.
+
+        if session_data.forked_from_message_id:
+            if not validated_parent_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="forked_from_message_id requires parent_conversation_id",
+                )
+            source_message = db.get_message_by_id(session_data.forked_from_message_id)
+            if not source_message or source_message.get("conversation_id") != validated_parent_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="forked_from_message_id must belong to parent_conversation_id",
+                )
+            validated_forked_from_message_id = (
+                source_message.get("id") or session_data.forked_from_message_id
+            )
 
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
@@ -2110,6 +2130,7 @@ async def create_chat_session(
             'title': title,
             'root_id': parent_root_id or chat_id,  # Inherit root for forks
             'parent_conversation_id': validated_parent_id,
+            'forked_from_message_id': validated_forked_from_message_id,
             'client_id': str(current_user.id),
             'version': 1,
             'state': session_data.state,

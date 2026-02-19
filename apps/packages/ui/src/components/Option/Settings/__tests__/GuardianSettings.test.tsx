@@ -284,7 +284,7 @@ describe("GuardianSettings", () => {
     })
 
     expect(document.querySelector('.ant-select-item-option[title="Warn"]')).toBeNull()
-  })
+  }, 30000)
 
   it("shows Accept action only in dependent view", async () => {
     render(<GuardianSettings />)

@@ -69,5 +69,5 @@ describe("CreateTab validation accessibility", () => {
 
     expect(createQuizMutateAsync).not.toHaveBeenCalled()
     expect(screen.queryByText("Failed to create quiz")).not.toBeInTheDocument()
-  })
+  }, 15000)
 })

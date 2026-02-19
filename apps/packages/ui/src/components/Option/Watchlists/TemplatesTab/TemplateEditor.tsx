@@ -25,6 +25,7 @@ import type {
   WatchlistTemplateCreate,
   WatchlistTemplateVersionSummary
 } from "@/types/watchlists"
+import { WatchlistsHelpTooltip } from "../shared"
 
 interface TemplateEditorProps {
   template: WatchlistTemplate | null
@@ -207,8 +208,14 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       children: (
         <div className="space-y-3">
           <div className="rounded-lg border border-border p-3">
-            <div className="mb-2 text-xs font-medium text-text-muted">
-              {t("watchlists:templates.quickInsert", "Quick insert snippets")}
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 text-xs font-medium text-text-muted">
+                {t("watchlists:templates.quickInsert", "Quick insert snippets")}
+                <WatchlistsHelpTooltip topic="jinja2" />
+              </div>
+              <Button size="small" type="link" onClick={() => setActiveTab("docs")}>
+                {t("watchlists:templates.openDocs", "Open variables & sample context")}
+              </Button>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button size="small" onClick={() => insertSnippet("{% for item in items %}\n{{ item.title }}\n{% endfor %}")}>
@@ -279,7 +286,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             showIcon
           />
           <div className="bg-surface rounded-lg p-4 font-mono text-xs space-y-2 max-h-80 overflow-auto">
-            <div><span className="text-primary">{"{{ job }}"}</span> - Job object with name, description, filters</div>
+            <div><span className="text-primary">{"{{ job }}"}</span> - Monitor object with name, description, filters</div>
             <div><span className="text-primary">{"{{ run }}"}</span> - Run object with status, stats, timestamps</div>
             <div><span className="text-primary">{"{{ items }}"}</span> - List of scraped items</div>
             <div className="ml-4"><span className="text-success">item.title</span> - Item title</div>
@@ -292,6 +299,15 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             <div className="ml-4"><span className="text-success">item.filter_matches</span> - Matched filter names</div>
             <div><span className="text-primary">{"{{ filter_tallies }}"}</span> - Dict of filter name → count</div>
             <div><span className="text-primary">{"{{ generated_at }}"}</span> - Generation timestamp</div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-surface p-3">
+            <div className="mb-2 text-xs font-medium text-text-muted">
+              {t("watchlists:templates.docs.sampleContextTitle", "Sample context payload")}
+            </div>
+            <pre className="max-h-52 overflow-auto text-[11px] leading-4">
+              {JSON.stringify(SAMPLE_TEMPLATE_CONTEXT_PAYLOAD, null, 2)}
+            </pre>
           </div>
 
           <div className="text-text-muted text-xs">
@@ -422,6 +438,45 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       </Form>
     </Modal>
   )
+}
+
+const SAMPLE_TEMPLATE_CONTEXT_PAYLOAD = {
+  job: {
+    id: 77,
+    name: "Morning Monitor",
+    description: "Daily digest",
+    scope: {
+      sources: [1, 2],
+      tags: ["tech"]
+    }
+  },
+  run: {
+    id: 101,
+    status: "completed",
+    started_at: "2026-02-18T09:00:00Z",
+    finished_at: "2026-02-18T09:02:00Z",
+    stats: {
+      items_found: 4,
+      items_ingested: 3,
+      items_filtered: 1
+    }
+  },
+  generated_at: "2026-02-18T09:02:05Z",
+  filter_tallies: {
+    include: 3,
+    exclude: 1
+  },
+  items: [
+    {
+      title: "AI policy update",
+      url: "https://example.com/ai-policy",
+      summary: "Summary text",
+      author: "Reporter",
+      published_at: "2026-02-18T08:55:00Z",
+      source: { name: "Tech Daily" },
+      filter_matches: ["policy include"]
+    }
+  ]
 }
 
 // Default template for new templates

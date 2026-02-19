@@ -1,14 +1,13 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe("API Key validation", () => {
   test("rejects invalid key and accepts valid key (real server)", async () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, optionsUrl } = await launchWithExtension(extPath)
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, extPath)
 
     await page.goto(optionsUrl + "#/settings/tldw", {
       waitUntil: "domcontentloaded"

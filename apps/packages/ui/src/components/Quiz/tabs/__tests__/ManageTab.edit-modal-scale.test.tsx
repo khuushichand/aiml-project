@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ManageTab } from "../ManageTab"
 import {
+  useCreateQuizMutation,
   useCreateQuestionMutation,
   useDeleteQuestionMutation,
   useDeleteQuizMutation,
@@ -43,6 +44,7 @@ vi.mock("react-i18next", () => ({
 vi.mock("../../hooks", () => ({
   useQuizzesQuery: vi.fn(),
   useQuestionsQuery: vi.fn(),
+  useCreateQuizMutation: vi.fn(),
   useDeleteQuizMutation: vi.fn(),
   useUpdateQuizMutation: vi.fn(),
   useCreateQuestionMutation: vi.fn(),
@@ -125,6 +127,9 @@ describe("ManageTab edit modal scale", () => {
     } as any)
 
     vi.mocked(useDeleteQuizMutation).mockReturnValue({ mutateAsync: vi.fn(async () => undefined) } as any)
+    vi.mocked(useCreateQuizMutation).mockReturnValue({
+      mutateAsync: vi.fn(async () => ({ id: 1012 }))
+    } as any)
     vi.mocked(useUpdateQuizMutation).mockReturnValue({ mutateAsync: vi.fn(async () => undefined), isPending: false } as any)
     vi.mocked(useCreateQuestionMutation).mockReturnValue({ mutateAsync: vi.fn(async () => undefined) } as any)
     vi.mocked(useUpdateQuestionMutation).mockReturnValue({

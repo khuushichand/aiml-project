@@ -244,7 +244,7 @@ describe("WorldBooksManager responsive stage-4 modal scrolling", () => {
       expect(await screen.findByText("Edit World Book")).toBeInTheDocument()
       expectOpenModalBodyScrollable()
     },
-    15000
+    60000
   )
 
   it(

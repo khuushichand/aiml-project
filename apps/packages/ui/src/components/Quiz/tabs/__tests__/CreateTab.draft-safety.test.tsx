@@ -85,7 +85,7 @@ describe("CreateTab draft safety", () => {
     })
     expect(screen.getByText(/Questions/)).toHaveTextContent("(1)")
     expect(screen.getByDisplayValue("Recovered question?")).toBeInTheDocument()
-  })
+  }, 15000)
 
   it("signals dirty state and blocks browser unload while dirty", () => {
     const onDirtyStateChange = vi.fn()

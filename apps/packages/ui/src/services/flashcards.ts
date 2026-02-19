@@ -1,4 +1,4 @@
-import { bgRequest } from "@/services/background-proxy"
+import { bgRequest, bgUpload } from "@/services/background-proxy"
 import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import {
   buildQuery,
@@ -39,6 +39,7 @@ export type Flashcard = {
   repetitions: number
   lapses: number
   due_at?: string | null
+  created_at?: string | null
   last_reviewed_at?: string | null
   last_modified?: string | null
   deleted: boolean
@@ -95,6 +96,30 @@ export type FlashcardReviewRequest = {
   answer_time_ms?: number | null
 }
 
+export type FlashcardGeneratedDraft = {
+  front: string
+  back: string
+  tags?: string[] | null
+  model_type?: "basic" | "basic_reverse" | "cloze"
+  notes?: string | null
+  extra?: string | null
+}
+
+export type FlashcardsGenerateRequest = {
+  text: string
+  num_cards?: number
+  card_type?: "basic" | "basic_reverse" | "cloze"
+  difficulty?: "easy" | "medium" | "hard" | "mixed"
+  focus_topics?: string[] | null
+  provider?: string | null
+  model?: string | null
+}
+
+export type FlashcardsGenerateResponse = {
+  flashcards: FlashcardGeneratedDraft[]
+  count: number
+}
+
 export type FlashcardReviewResponse = {
   uuid: string
   ef: number
@@ -111,6 +136,16 @@ export type FlashcardsImportRequest = {
   content: string
   delimiter?: string | null
   has_header?: boolean | null
+}
+
+export type FlashcardsImportJsonRequest = {
+  content: string
+  filename?: string | null
+}
+
+export type FlashcardsImportApkgRequest = {
+  bytes: Uint8Array
+  filename?: string | null
 }
 
 export type FlashcardsImportError = {
@@ -241,6 +276,17 @@ export async function reviewFlashcard(input: FlashcardReviewRequest): Promise<Fl
   })
 }
 
+export async function generateFlashcards(
+  input: FlashcardsGenerateRequest
+): Promise<FlashcardsGenerateResponse> {
+  return await bgRequest<FlashcardsGenerateResponse, AllowedPath, "POST">({
+    path: "/api/v1/flashcards/generate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: input
+  })
+}
+
 // Import
 export async function getFlashcardsImportLimits(): Promise<any> {
   return await bgRequest<any, AllowedPath, "GET">({
@@ -265,6 +311,64 @@ export async function importFlashcards(payload: FlashcardsImportRequest, overrid
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: payload
+  })
+}
+
+export async function importFlashcardsJson(
+  payload: FlashcardsImportJsonRequest,
+  overrides?: {
+    max_items?: number | null
+    max_field_length?: number | null
+  }
+): Promise<FlashcardsImportResponse> {
+  const query = buildQuery({
+    max_items: overrides?.max_items,
+    max_field_length: overrides?.max_field_length
+  })
+  const path = `/api/v1/flashcards/import/json${query}` as AllowedPath
+  const filename = (payload.filename || "flashcards.json").trim() || "flashcards.json"
+  const lowerName = filename.toLowerCase()
+  const mimeType =
+    lowerName.endsWith(".jsonl") || lowerName.endsWith(".ndjson")
+      ? "application/x-ndjson"
+      : "application/json"
+  const bytes = new TextEncoder().encode(payload.content)
+
+  return await bgUpload<FlashcardsImportResponse, AllowedPath, "POST">({
+    path,
+    method: "POST",
+    fileFieldName: "file",
+    file: {
+      name: filename,
+      type: mimeType,
+      data: bytes
+    }
+  })
+}
+
+export async function importFlashcardsApkg(
+  payload: FlashcardsImportApkgRequest,
+  overrides?: {
+    max_items?: number | null
+    max_field_length?: number | null
+  }
+): Promise<FlashcardsImportResponse> {
+  const query = buildQuery({
+    max_items: overrides?.max_items,
+    max_field_length: overrides?.max_field_length
+  })
+  const path = `/api/v1/flashcards/import/apkg${query}` as AllowedPath
+  const filename = (payload.filename || "flashcards.apkg").trim() || "flashcards.apkg"
+
+  return await bgUpload<FlashcardsImportResponse, AllowedPath, "POST">({
+    path,
+    method: "POST",
+    fileFieldName: "file",
+    file: {
+      name: filename,
+      type: "application/apkg",
+      data: payload.bytes
+    }
   })
 }
 

@@ -186,8 +186,8 @@ const makeUseMutationResult = (opts: any) => ({
   isPending: false
 })
 
-const getSelectInputByLabel = (labelText: string): HTMLInputElement => {
-  const labelNode = screen.getByText(labelText)
+const getSelectInputByLabel = async (labelText: string): Promise<HTMLInputElement> => {
+  const labelNode = await screen.findByText(labelText)
   const wrapper = labelNode.closest(".space-y-1")
   const input = wrapper?.querySelector('input[role="combobox"]')
   if (!input) {
@@ -201,7 +201,7 @@ const chooseSelectOption = async (
   labelText: string,
   optionText: string
 ) => {
-  await user.click(getSelectInputByLabel(labelText))
+  await user.click(await getSelectInputByLabel(labelText))
   await user.click(
     await screen.findByText(optionText, {
       selector: ".ant-select-item-option-content"

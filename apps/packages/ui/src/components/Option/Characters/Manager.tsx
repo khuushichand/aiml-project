@@ -27,7 +27,7 @@ import {
   type ServerChatSummary
 } from "@/services/tldw/TldwApiClient"
 import { fetchChatModels } from "@/services/tldw-server"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, StarOff, ExternalLink, Clock3 } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal, Star, StarOff, ExternalLink, Clock3, Columns2 } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard, type GalleryCardDensity } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
@@ -45,6 +45,12 @@ import {
   paginateCharactersForWorkspace,
   sortCharactersForWorkspace
 } from "./search-utils"
+import {
+  characterImportQueueReducer,
+  initialCharacterImportQueueState,
+  shouldHandleImportUploadEvent,
+  summarizeCharacterImportQueue
+} from "./import-state-model"
 import { GenerateCharacterPanel, GenerationPreviewModal } from "./GenerateCharacterPanel"
 import { GenerateFieldButton } from "./GenerateFieldButton"
 import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
@@ -82,7 +88,8 @@ import {
   resolveCharacterSelectionId
 } from "@/utils/default-character-preference"
 
-const MAX_NAME_LENGTH = 75
+const MAX_NAME_LENGTH = 500
+const MAX_NAME_DISPLAY_LENGTH = 75
 const MAX_DESCRIPTION_LENGTH = 65
 const MAX_TAG_LENGTH = 20
 const MAX_TAGS_DISPLAYED = 6
@@ -99,6 +106,9 @@ const SYSTEM_PROMPT_EXAMPLE =
 type AdvancedSectionKey = "promptControl" | "generationSettings" | "metadata"
 type AdvancedSectionState = Record<AdvancedSectionKey, boolean>
 type CharacterListScope = "active" | "deleted"
+type DefaultCharacterPreferenceQueryResult = {
+  defaultCharacterId: string | null
+}
 const DEFAULT_ADVANCED_SECTION_STATE: AdvancedSectionState = {
   promptControl: true,
   generationSettings: false,
@@ -162,6 +172,20 @@ type CharacterImportOptions = {
   invalidateOnSuccess?: boolean
 }
 
+type CharacterComparisonRow = {
+  field: string
+  label: string
+  leftValue: string
+  rightValue: string
+  different: boolean
+}
+
+type CharacterComparisonFieldDefinition = {
+  field: string
+  label: string
+  getValue: (record: any) => unknown
+}
+
 type CharacterImportPreview = {
   id: string
   file: File
@@ -177,6 +201,20 @@ type CharacterImportPreview = {
     fallback: string
     values?: Record<string, string | number>
   } | null
+}
+
+type CharacterWorldBookOption = {
+  id: number
+  name: string
+  enabled?: boolean
+}
+
+const EMPTY_CHARACTER_WORLD_BOOK_DATA: {
+  options: CharacterWorldBookOption[]
+  attachedIds: number[]
+} = {
+  options: [],
+  attachedIds: []
 }
 
 const IMPORT_ALLOWED_EXTENSIONS = [
@@ -205,8 +243,48 @@ const buildDefaultImportName = (fileName: string): string => {
   return base.trim() || fileName
 }
 
+const DATE_INPUT_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+const toIsoBoundaryFromDateInput = (
+  value: string,
+  boundary: "start" | "end"
+): string | undefined => {
+  const normalized = value.trim()
+  if (!normalized || !DATE_INPUT_PATTERN.test(normalized)) return undefined
+  return `${normalized}${
+    boundary === "start" ? "T00:00:00.000Z" : "T23:59:59.999Z"
+  }`
+}
+
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0
+
+const normalizeWorldBookIds = (value: unknown): number[] => {
+  if (!Array.isArray(value)) return []
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => Number(entry))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => Math.trunc(id))
+    )
+  ).sort((a, b) => a - b)
+}
+
+const toCharacterWorldBookOption = (value: any): CharacterWorldBookOption | null => {
+  const id = Number(value?.world_book_id ?? value?.id)
+  if (!Number.isFinite(id) || id <= 0) return null
+  const rawName = value?.world_book_name ?? value?.name
+  const name =
+    typeof rawName === "string" && rawName.trim().length > 0
+      ? rawName.trim()
+      : `World Book ${Math.trunc(id)}`
+  return {
+    id: Math.trunc(id),
+    name,
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : undefined
+  }
+}
 
 const normalizeImportTags = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -509,6 +587,8 @@ const toCharactersSortBy = (column: string | null): CharacterListSortBy => {
       return "created_at"
     case "updatedAt":
       return "updated_at"
+    case "lastUsedAt":
+      return "last_used_at"
     case "conversations":
       return "conversation_count"
     case "name":
@@ -520,6 +600,100 @@ const toCharactersSortBy = (column: string | null): CharacterListSortBy => {
 const toCharactersSortOrder = (
   order: "ascend" | "descend" | null
 ): CharacterListSortOrder => (order === "descend" ? "desc" : "asc")
+
+export const withCharacterNameInLabel = (
+  localizedLabel: string,
+  fallbackTemplate: string,
+  characterName: string
+): string => {
+  const name = String(characterName || "").trim()
+  const localized = String(localizedLabel || "").trim()
+  const fallback = String(fallbackTemplate || "").trim()
+
+  if (!name) return localized || fallback
+  if (localized.includes(name)) return localized
+
+  if (localized.includes("{{name}}")) {
+    return localized.replace(/\{\{\s*name\s*\}\}/g, name)
+  }
+
+  if (fallback.includes("{{name}}")) {
+    return fallback.replace(/\{\{\s*name\s*\}\}/g, name)
+  }
+
+  return `${fallback || localized} ${name}`.trim()
+}
+
+const getCharacterQueryErrorStatusCode = (error: unknown): number | null => {
+  const candidate = error as
+    | {
+        status?: unknown
+        response?: { status?: unknown }
+        message?: unknown
+        details?: unknown
+      }
+    | null
+    | undefined
+  const rawStatus = candidate?.status ?? candidate?.response?.status
+  const statusCodeFromNumberLike =
+    typeof rawStatus === "number"
+      ? rawStatus
+      : typeof rawStatus === "string"
+        ? Number(rawStatus)
+        : Number.NaN
+  if (Number.isFinite(statusCodeFromNumberLike)) {
+    return statusCodeFromNumberLike
+  }
+  const message = String(candidate?.message || "")
+  const detailsText = (() => {
+    const details = candidate?.details
+    if (typeof details === "string") return details
+    if (details == null) return ""
+    try {
+      return JSON.stringify(details)
+    } catch {
+      return String(details)
+    }
+  })()
+  const statusMatch = `${message} ${detailsText}`.match(/\b(404|405|422)\b/)
+  const statusCode = statusMatch ? Number(statusMatch[1]) : Number.NaN
+  return Number.isFinite(statusCode) ? statusCode : null
+}
+
+const isCharacterQueryRouteConflictError = (error: unknown): boolean => {
+  const candidate = error as
+    | {
+        message?: unknown
+        details?: unknown
+      }
+    | null
+    | undefined
+  const statusCode = getCharacterQueryErrorStatusCode(error)
+  const normalizedMessage = String(candidate?.message || "").toLowerCase()
+  const normalizedDetails = (() => {
+    const details = candidate?.details
+    if (typeof details === "string") return details.toLowerCase()
+    if (details == null) return ""
+    try {
+      return JSON.stringify(details).toLowerCase()
+    } catch {
+      return String(details).toLowerCase()
+    }
+  })()
+  return (
+    statusCode === 404 ||
+    statusCode === 405 ||
+    statusCode === 422 ||
+    normalizedMessage.includes("path.character_id") ||
+    normalizedMessage.includes("unable to parse string as an integer") ||
+    normalizedMessage.includes('input":"query"') ||
+    normalizedMessage.includes("/api/v1/characters/query") ||
+    normalizedDetails.includes("path.character_id") ||
+    normalizedDetails.includes("unable to parse string as an integer") ||
+    normalizedDetails.includes('input":"query"') ||
+    normalizedDetails.includes("/api/v1/characters/query")
+  )
+}
 
 const truncateText = (value?: string, max?: number) => {
   if (!value) return ""
@@ -645,29 +819,6 @@ const resolveCharacterNumericId = (record: any): number | null => {
   return parsed
 }
 
-type CharacterWorldBookLink = {
-  id: number
-  name: string
-}
-
-const normalizeCharacterWorldBookLinks = (
-  value: unknown
-): CharacterWorldBookLink[] => {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((book: any) => {
-      const rawId = Number(book?.world_book_id ?? book?.id)
-      if (!Number.isFinite(rawId) || rawId <= 0) return null
-      const rawName = book?.world_book_name ?? book?.name
-      const name =
-        typeof rawName === "string" && rawName.trim().length > 0
-          ? rawName.trim()
-          : `World Book ${rawId}`
-      return { id: rawId, name }
-    })
-    .filter((book): book is CharacterWorldBookLink => book !== null)
-}
-
 const normalizeAlternateGreetings = (value: any): string[] => {
   if (!value) return []
   if (Array.isArray(value)) {
@@ -709,6 +860,136 @@ const parseExtensionsObject = (
   }
   return {}
 }
+
+const normalizeCharacterComparisonValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => normalizeVersionSnapshotValue(entry))
+      .join("\n")
+      .trim()
+  }
+  return normalizeVersionSnapshotValue(value)
+}
+
+const formatCharacterComparisonValue = (value: unknown): string => {
+  if (value === null || typeof value === "undefined") return "—"
+
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? value : "—"
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "—"
+    const hasComplexEntries = value.some(
+      (entry) => typeof entry === "object" && entry !== null
+    )
+    if (!hasComplexEntries) {
+      return value.map((entry) => String(entry)).join(", ")
+    }
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value)
+  }
+
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const toComparisonFilenameSegment = (value: unknown): string => {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  return normalized || "character"
+}
+
+const CHARACTER_COMPARISON_FIELDS: CharacterComparisonFieldDefinition[] = [
+  { field: "name", label: "Name", getValue: (record) => record?.name },
+  {
+    field: "description",
+    label: "Description",
+    getValue: (record) => record?.description
+  },
+  {
+    field: "system_prompt",
+    label: "System prompt",
+    getValue: (record) => record?.system_prompt
+  },
+  {
+    field: "first_message",
+    label: "Greeting",
+    getValue: (record) => record?.first_message
+  },
+  {
+    field: "personality",
+    label: "Personality",
+    getValue: (record) => record?.personality
+  },
+  {
+    field: "scenario",
+    label: "Scenario",
+    getValue: (record) => record?.scenario
+  },
+  {
+    field: "post_history_instructions",
+    label: "Post-history instructions",
+    getValue: (record) => record?.post_history_instructions
+  },
+  {
+    field: "message_example",
+    label: "Message example",
+    getValue: (record) => record?.message_example
+  },
+  {
+    field: "creator_notes",
+    label: "Creator notes",
+    getValue: (record) => record?.creator_notes
+  },
+  {
+    field: "tags",
+    label: "Tags",
+    getValue: (record) => parseCharacterTags(record?.tags).sort()
+  },
+  {
+    field: "prompt_preset",
+    label: "Prompt preset",
+    getValue: (record) => record?.prompt_preset
+  },
+  { field: "model", label: "Model", getValue: (record) => record?.model },
+  {
+    field: "temperature",
+    label: "Temperature",
+    getValue: (record) => record?.temperature
+  },
+  { field: "top_p", label: "Top P", getValue: (record) => record?.top_p },
+  {
+    field: "max_tokens",
+    label: "Max tokens",
+    getValue: (record) => record?.max_tokens
+  },
+  { field: "creator", label: "Creator", getValue: (record) => record?.creator },
+  {
+    field: "character_version",
+    label: "Character version",
+    getValue: (record) => record?.character_version
+  },
+  {
+    field: "extensions",
+    label: "Extensions",
+    getValue: (record) => parseExtensionsObject(record?.extensions) ?? {}
+  }
+]
 
 const normalizePromptPresetId = (
   value: unknown
@@ -826,56 +1107,6 @@ const applyFavoriteToExtensions = (
   }
 
   return Object.keys(next).length > 0 ? next : undefined
-}
-
-type CharacterWorldBookOption = {
-  id: number
-  name: string
-  enabled: boolean
-}
-
-const normalizeCharacterWorldBookIds = (value: unknown): number[] => {
-  if (!Array.isArray(value)) return []
-  const parsed = value
-    .map((entry) => {
-      const numeric = Number(entry)
-      return Number.isFinite(numeric) && numeric > 0
-        ? Math.trunc(numeric)
-        : null
-    })
-    .filter((entry): entry is number => entry !== null)
-  return Array.from(new Set(parsed))
-}
-
-const normalizeCharacterWorldBookOption = (
-  raw: any
-): CharacterWorldBookOption | null => {
-  const worldBookId = Number(raw?.id ?? raw?.world_book_id)
-  if (!Number.isFinite(worldBookId) || worldBookId <= 0) return null
-  const rawName =
-    typeof raw?.name === "string"
-      ? raw.name
-      : typeof raw?.world_book_name === "string"
-        ? raw.world_book_name
-        : ""
-  const fallbackName = `World Book ${Math.trunc(worldBookId)}`
-  return {
-    id: Math.trunc(worldBookId),
-    name: rawName.trim().length > 0 ? rawName.trim() : fallbackName,
-    enabled: raw?.enabled !== false
-  }
-}
-
-const extractCharacterWorldBookOptions = (response: any): CharacterWorldBookOption[] => {
-  const worldBooks = Array.isArray(response)
-    ? response
-    : Array.isArray(response?.world_books)
-      ? response.world_books
-      : []
-  return worldBooks
-    .map((book: any) => normalizeCharacterWorldBookOption(book))
-    .filter((book): book is CharacterWorldBookOption => book !== null)
-    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 type CharacterGenerationSettings = {
@@ -1239,6 +1470,11 @@ type SharedCharacterFormProps = {
   form: FormInstance
   mode: "create" | "edit"
   initialValues?: Record<string, any>
+  worldBookFieldContext: {
+    options: CharacterWorldBookOption[]
+    loading: boolean
+    editCharacterNumericId: number | null
+  }
   isSubmitting: boolean
   submitButtonClassName?: string
   submitPendingLabel: string
@@ -1295,6 +1531,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [filterTags, setFilterTags] = React.useState<string[]>([])
   const [matchAllTags, setMatchAllTags] = React.useState(false)
   const [creatorFilter, setCreatorFilter] = React.useState<string | undefined>(undefined)
+  const [createdFromDate, setCreatedFromDate] = React.useState("")
+  const [createdToDate, setCreatedToDate] = React.useState("")
+  const [updatedFromDate, setUpdatedFromDate] = React.useState("")
+  const [updatedToDate, setUpdatedToDate] = React.useState("")
   const [hasConversationsOnly, setHasConversationsOnly] = React.useState(false)
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
   const [showEditAdvanced, setShowEditAdvanced] = React.useState(false)
@@ -1318,10 +1558,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [quickChatSessionId, setQuickChatSessionId] = React.useState<string | null>(null)
   const [quickChatSending, setQuickChatSending] = React.useState(false)
   const [quickChatError, setQuickChatError] = React.useState<string | null>(null)
-  const [selectedWorldBookIdForAttach, setSelectedWorldBookIdForAttach] =
-    React.useState<number | null>(null)
-  const [worldBookAttachmentBusy, setWorldBookAttachmentBusy] =
-    React.useState(false)
   const [versionHistoryOpen, setVersionHistoryOpen] = React.useState(false)
   const [versionHistoryCharacter, setVersionHistoryCharacter] = React.useState<any | null>(null)
   const [versionFrom, setVersionFrom] = React.useState<number | null>(null)
@@ -1375,6 +1611,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [importPreviewOpen, setImportPreviewOpen] = React.useState(false)
   const [importPreviewLoading, setImportPreviewLoading] = React.useState(false)
   const [importPreviewItems, setImportPreviewItems] = React.useState<CharacterImportPreview[]>([])
+  const [importPreviewProcessing, setImportPreviewProcessing] = React.useState(false)
+  const [importQueueState, dispatchImportQueue] = React.useReducer(
+    characterImportQueueReducer,
+    initialCharacterImportQueueState
+  )
+  const importDropDepthRef = React.useRef(0)
   const [previewCharacter, setPreviewCharacter] = React.useState<any | null>(null)
   const crossNavigationContext = React.useMemo(
     () => {
@@ -1404,6 +1646,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     const parsed = Number(previewCharacter?.id)
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null
   }, [previewCharacter?.id])
+  const editCharacterNumericId = React.useMemo(() => {
+    const parsed = Number(editId)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
+  }, [editId])
 
   // Inline editing state (M1)
   const [inlineEdit, setInlineEdit] = React.useState<{
@@ -1437,6 +1683,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [bulkTagModalOpen, setBulkTagModalOpen] = React.useState(false)
   const [bulkTagsToAdd, setBulkTagsToAdd] = React.useState<string[]>([])
   const [bulkOperationLoading, setBulkOperationLoading] = React.useState(false)
+  const [compareModalOpen, setCompareModalOpen] = React.useState(false)
+  const [compareCharacters, setCompareCharacters] = React.useState<[any, any] | null>(null)
   const [tagManagerOpen, setTagManagerOpen] = React.useState(false)
   const [tagManagerLoading, setTagManagerLoading] = React.useState(false)
   const [tagManagerSubmitting, setTagManagerSubmitting] = React.useState(false)
@@ -1680,6 +1928,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         void closeQuickChat()
       } else if (openEdit) {
         setOpenEdit(false)
+        editWorldBooksInitializedRef.current = false
         setShowEditSystemPromptExample(false)
       } else if (open) {
         setOpen(false)
@@ -2354,8 +2603,15 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     [t]
   )
 
-  const renderAdvancedFields = React.useCallback(
-    (form: FormInstance, mode: "create" | "edit") => {
+  const renderAdvancedFields = (
+    form: FormInstance,
+    mode: "create" | "edit",
+    worldBookFieldContext: SharedCharacterFormProps["worldBookFieldContext"]
+  ) => {
+      const worldBookOptions = worldBookFieldContext.options
+      const worldBookOptionsLoading = worldBookFieldContext.loading
+      const worldBookEditCharacterNumericId =
+        worldBookFieldContext.editCharacterNumericId
       const showAdvanced = mode === "create" ? showCreateAdvanced : showEditAdvanced
       const setShowAdvanced =
         mode === "create" ? setShowCreateAdvanced : setShowEditAdvanced
@@ -2646,98 +2902,39 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     )}>
                     <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} />
                   </Form.Item>
-                  {mode === "edit" && (
-                    <div className="rounded-md border border-border/70 bg-bg/30 p-3">
-                      <div className="text-sm font-medium text-text">
-                        {t("settings:manageCharacters.worldBooks.editorTitle", {
-                          defaultValue: "World book attachments"
-                        })}
-                      </div>
-                      <p className="mt-1 text-xs text-text-muted">
-                        {t("settings:manageCharacters.worldBooks.editorDescription", {
-                          defaultValue:
-                            "Attach or detach world books used for character context injection."
-                        })}
-                      </p>
-
-                      {editCharacterNumericId == null ? (
-                        <div className="mt-2 text-xs text-text-muted">
-                          {t("settings:manageCharacters.worldBooks.unsyncedCharacter", {
-                            defaultValue:
-                              "Save this character to the server before attaching world books."
-                          })}
-                        </div>
-                      ) : (
-                        <>
-                          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-                            <Select
-                              className="min-w-[14rem] flex-1"
-                              value={selectedWorldBookIdForAttach ?? undefined}
-                              options={attachableWorldBookOptions}
-                              placeholder={t(
-                                "settings:manageCharacters.worldBooks.attachPlaceholder",
-                                {
-                                  defaultValue: "Select world book to attach"
-                                }
-                              )}
-                              onChange={(value) =>
-                                setSelectedWorldBookIdForAttach(
-                                  typeof value === "number" ? value : null
-                                )
-                              }
-                              loading={worldBooksLoading}
-                            />
-                            <Button
-                              type="primary"
-                              size="small"
-                              onClick={() => {
-                                void handleAttachWorldBookToEditingCharacter()
-                              }}
-                              loading={worldBookAttachmentBusy}
-                              disabled={selectedWorldBookIdForAttach == null}
-                            >
-                              {t("settings:manageCharacters.worldBooks.attach", {
-                                defaultValue: "Attach"
-                              })}
-                            </Button>
-                          </div>
-
-                          <div className="mt-3">
-                            {editAttachedWorldBooksLoading ? (
-                              <div className="text-xs text-text-muted">
-                                {t("settings:manageCharacters.worldBooks.loading", {
-                                  defaultValue:
-                                    "Loading attached world books..."
-                                })}
-                              </div>
-                            ) : editAttachedWorldBooks.length === 0 ? (
-                              <div className="text-xs text-text-muted">
-                                {t("settings:manageCharacters.worldBooks.empty", {
-                                  defaultValue:
-                                    "No world books attached to this character."
-                                })}
-                              </div>
-                            ) : (
-                              <div className="flex flex-wrap gap-2">
-                                {editAttachedWorldBooks.map((worldBook) => (
-                                  <Tag
-                                    key={worldBook.id}
-                                    closable
-                                    onClose={(event) => {
-                                      event.preventDefault()
-                                      void handleDetachWorldBookFromEditingCharacter(
-                                        worldBook.id
-                                      )
-                                    }}
-                                  >
-                                    {worldBook.name}
-                                  </Tag>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </>
+                  <Form.Item
+                    name="world_book_ids"
+                    label={t("settings:manageCharacters.worldBooks.editorTitle", {
+                      defaultValue: "World book attachments"
+                    })}
+                    help={t("settings:manageCharacters.worldBooks.editorDescription", {
+                      defaultValue:
+                        "Attach or detach world books used for character context injection."
+                    })}
+                  >
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      optionFilterProp="label"
+                      placeholder={t(
+                        "settings:manageCharacters.worldBooks.attachPlaceholder",
+                        {
+                          defaultValue: "Select world book to attach"
+                        }
                       )}
+                      options={worldBookOptions.map((worldBook) => ({
+                        value: worldBook.id,
+                        label: worldBook.name
+                      }))}
+                      loading={worldBookOptionsLoading}
+                    />
+                  </Form.Item>
+                  {mode === "edit" && worldBookEditCharacterNumericId == null && (
+                    <div className="-mt-2 text-xs text-text-muted">
+                      {t("settings:manageCharacters.worldBooks.unsyncedCharacter", {
+                        defaultValue:
+                          "Save this character to the server before attaching world books."
+                      })}
                     </div>
                   )}
                   <div className="rounded-md border border-dashed border-border px-3 py-2">
@@ -2759,33 +2956,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           )}
         </>
       )
-    },
-    [
-      attachableWorldBookOptions,
-      createAdvancedSections,
-      editAttachedWorldBooks,
-      editAttachedWorldBooksLoading,
-      editCharacterNumericId,
-      editAdvancedSections,
-      generatingField,
-      handleAttachWorldBookToEditingCharacter,
-      handleDetachWorldBookFromEditingCharacter,
-      handleGenerateField,
-      isGenerating,
-      renderAlternateGreetingsField,
-      selectedWorldBookIdForAttach,
-      showCreateAdvanced,
-      showEditAdvanced,
-      t,
-      worldBookAttachmentBusy,
-      worldBooksLoading
-    ]
-  )
+    }
 
   const renderSharedCharacterForm = ({
     form,
     mode,
     initialValues,
+    worldBookFieldContext,
     isSubmitting,
     submitButtonClassName,
     submitPendingLabel,
@@ -2811,7 +2988,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       {renderDescriptionField(form, mode)}
       {renderTagsField(form, mode)}
       {renderAvatarField(form)}
-      {renderAdvancedFields(form, mode)}
+      {renderAdvancedFields(form, mode, worldBookFieldContext)}
 
       {/* Preview toggle */}
       <button
@@ -3082,7 +3259,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   const resetImportPreview = React.useCallback(() => {
     setImportPreviewOpen(false)
+    setImportPreviewProcessing(false)
     setImportPreviewLoading(false)
+    importDropDepthRef.current = 0
+    dispatchImportQueue({ type: "queue/reset" })
     setImportPreviewItems((previous) => {
       revokeImportPreviewAvatarUrls(previous)
       return []
@@ -3098,6 +3278,25 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const importablePreviewItems = React.useMemo(
     () => importPreviewItems.filter((item) => !item.parseError),
     [importPreviewItems]
+  )
+  const importQueueItemsById = React.useMemo(() => {
+    const map = new Map<string, (typeof importQueueState.items)[number]>()
+    for (const item of importQueueState.items) {
+      map.set(item.id, item)
+    }
+    return map
+  }, [importQueueState.items])
+  const importQueueSummary = React.useMemo(
+    () => summarizeCharacterImportQueue(importQueueState.items),
+    [importQueueState.items]
+  )
+  const retryableFailedPreviewItems = React.useMemo(
+    () =>
+      importablePreviewItems.filter((item) => {
+        const state = importQueueItemsById.get(item.id)?.state
+        return state === "failure"
+      }),
+    [importQueueItemsById, importablePreviewItems]
   )
 
   const importCharacterFile = React.useCallback(
@@ -3197,15 +3396,39 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   )
 
   const runBatchImport = React.useCallback(
-    async (batch: File[]) => {
-      const results: CharacterImportResult[] = []
-      for (const nextFile of batch) {
-        results.push(
-          await importCharacterFile(nextFile, {
+    async (batchItems: CharacterImportPreview[]) => {
+      const results: (CharacterImportResult & { id: string })[] = []
+      setImportPreviewProcessing(true)
+      try {
+        for (const nextItem of batchItems) {
+          dispatchImportQueue({
+            type: "item/processing",
+            id: nextItem.id
+          })
+          const result = await importCharacterFile(nextItem.file, {
             suppressNotifications: true,
             invalidateOnSuccess: false
           })
-        )
+          results.push({
+            ...result,
+            id: nextItem.id
+          })
+          if (result.success) {
+            dispatchImportQueue({
+              type: "item/success",
+              id: nextItem.id,
+              message: result.message
+            })
+          } else {
+            dispatchImportQueue({
+              type: "item/failure",
+              id: nextItem.id,
+              message: result.message
+            })
+          }
+        }
+      } finally {
+        setImportPreviewProcessing(false)
       }
 
       const successCount = results.filter((result) => result.success).length
@@ -3271,6 +3494,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           revokeImportPreviewAvatarUrls(previous)
           return previews
         })
+        dispatchImportQueue({
+          type: "queue/replace",
+          files: previews.map((item) => ({
+            id: item.id,
+            fileName: item.fileName
+          }))
+        })
+        for (const item of previews) {
+          if (!item.parseError) continue
+          dispatchImportQueue({
+            type: "item/failure",
+            id: item.id,
+            message: t(item.parseError.key, {
+              defaultValue: item.parseError.fallback,
+              ...(item.parseError.values || {})
+            })
+          })
+        }
+        dispatchImportQueue({ type: "drag/leave" })
+        setImportPreviewProcessing(false)
         setImportPreviewOpen(true)
       } catch (error: any) {
         notification.error({
@@ -3292,9 +3535,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   )
 
   const handleConfirmImportPreview = React.useCallback(async () => {
-    const importableFiles = importablePreviewItems.map((item) => item.file)
-    const skippedCount = importPreviewItems.length - importableFiles.length
-    if (importableFiles.length === 0) {
+    if (importPreviewProcessing) return
+
+    const skippedCount = importPreviewItems.length - importablePreviewItems.length
+    if (importablePreviewItems.length === 0) {
       notification.error({
         message: t("settings:manageCharacters.import.previewNothingTitle", {
           defaultValue: "No importable files"
@@ -3306,13 +3550,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       return
     }
 
-    resetImportPreview()
-
-    if (importableFiles.length === 1) {
-      await importCharacterFile(importableFiles[0])
-    } else {
-      await runBatchImport(importableFiles)
-    }
+    await runBatchImport(importablePreviewItems)
 
     if (skippedCount > 0) {
       notification.warning({
@@ -3327,13 +3565,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       })
     }
   }, [
-    importCharacterFile,
+    importPreviewProcessing,
     importPreviewItems.length,
     importablePreviewItems,
     notification,
-    resetImportPreview,
     runBatchImport,
     t
+  ])
+
+  const handleRetryFailedImportPreview = React.useCallback(async () => {
+    if (importPreviewProcessing) return
+    if (retryableFailedPreviewItems.length === 0) return
+    await runBatchImport(retryableFailedPreviewItems)
+  }, [
+    importPreviewProcessing,
+    retryableFailedPreviewItems,
+    runBatchImport
   ])
 
   const handleImportUpload = React.useCallback(
@@ -3342,19 +3589,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         Boolean
       )
 
-      if (batch.length > 1) {
-        const first = batch[0]
-        const firstUid = (first as any)?.uid
-        const fileUid = (file as any)?.uid
-        const isFirstFile =
-          (typeof fileUid === "string" &&
-            typeof firstUid === "string" &&
-            fileUid === firstUid) ||
-          (first &&
-            file.name === first.name &&
-            file.size === first.size &&
-            file.lastModified === first.lastModified)
-        if (!isFirstFile) return false
+      if (
+        !shouldHandleImportUploadEvent({
+          file,
+          fileList: batch
+        })
+      ) {
+        return false
       }
 
       await openImportPreviewForBatch(batch)
@@ -3363,10 +3604,104 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     [openImportPreviewForBatch]
   )
 
+  const isImportBusy =
+    importing || importPreviewLoading || importPreviewProcessing
+
+  const handleImportDragEnter = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (isImportBusy) return
+      event.preventDefault()
+      event.stopPropagation()
+      importDropDepthRef.current += 1
+      dispatchImportQueue({ type: "drag/enter" })
+    },
+    [isImportBusy]
+  )
+
+  const handleImportDragLeave = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (isImportBusy) return
+      event.preventDefault()
+      event.stopPropagation()
+      importDropDepthRef.current = Math.max(importDropDepthRef.current - 1, 0)
+      if (importDropDepthRef.current === 0) {
+        dispatchImportQueue({ type: "drag/leave" })
+      }
+    },
+    [isImportBusy]
+  )
+
+  const handleImportDragOver = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (isImportBusy) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy"
+      }
+    },
+    [isImportBusy]
+  )
+
+  const handleImportDrop = React.useCallback(
+    async (event: React.DragEvent<HTMLDivElement>) => {
+      if (isImportBusy) return
+      event.preventDefault()
+      event.stopPropagation()
+      importDropDepthRef.current = 0
+      dispatchImportQueue({ type: "drag/leave" })
+
+      const files = Array.from(event.dataTransfer?.files || []).filter(
+        Boolean
+      ) as File[]
+      if (files.length === 0) return
+      await openImportPreviewForBatch(files)
+    },
+    [isImportBusy, openImportPreviewForBatch]
+  )
+
+  const getImportQueueStateLabel = React.useCallback(
+    (state: "queued" | "processing" | "success" | "failure") => {
+      if (state === "processing") {
+        return t("settings:manageCharacters.import.state.processing", {
+          defaultValue: "Processing"
+        })
+      }
+      if (state === "success") {
+        return t("settings:manageCharacters.import.state.success", {
+          defaultValue: "Success"
+        })
+      }
+      if (state === "failure") {
+        return t("settings:manageCharacters.import.state.failure", {
+          defaultValue: "Failed"
+        })
+      }
+      return t("settings:manageCharacters.import.state.queued", {
+        defaultValue: "Queued"
+      })
+    },
+    [t]
+  )
+
+  const getImportQueueStateColor = React.useCallback(
+    (state: "queued" | "processing" | "success" | "failure") => {
+      if (state === "processing") return "processing"
+      if (state === "success") return "success"
+      if (state === "failure") return "error"
+      return "default"
+    },
+    []
+  )
+
   const hasFilters =
     searchTerm.trim().length > 0 ||
     (filterTags && filterTags.length > 0) ||
     !!creatorFilter ||
+    createdFromDate.trim().length > 0 ||
+    createdToDate.trim().length > 0 ||
+    updatedFromDate.trim().length > 0 ||
+    updatedToDate.trim().length > 0 ||
     hasConversationsOnly ||
     favoritesOnly
 
@@ -3489,7 +3824,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     () => toCharactersSortOrder(sortOrder),
     [sortOrder]
   )
-  const useServerQuery = isServerQueryRolloutEnabled || characterListScope === "deleted"
+  const createdFromIso = React.useMemo(
+    () => toIsoBoundaryFromDateInput(createdFromDate, "start"),
+    [createdFromDate]
+  )
+  const createdToIso = React.useMemo(
+    () => toIsoBoundaryFromDateInput(createdToDate, "end"),
+    [createdToDate]
+  )
+  const updatedFromIso = React.useMemo(
+    () => toIsoBoundaryFromDateInput(updatedFromDate, "start"),
+    [updatedFromDate]
+  )
+  const updatedToIso = React.useMemo(
+    () => toIsoBoundaryFromDateInput(updatedToDate, "end"),
+    [updatedToDate]
+  )
+  const useServerQuery =
+    isServerQueryRolloutEnabled ||
+    characterListScope === "deleted" ||
+    Boolean(createdFromIso || createdToIso || updatedFromIso || updatedToIso)
   const characterQueryParams = React.useMemo(
     () => ({
       page: currentPage,
@@ -3500,6 +3854,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       creator: creatorFilter || undefined,
       has_conversations: hasConversationsOnly ? true : undefined,
       favorite_only: favoritesOnly ? true : undefined,
+      created_from: createdFromIso,
+      created_to: createdToIso,
+      updated_from: updatedFromIso,
+      updated_to: updatedToIso,
       include_deleted: characterListScope === "deleted" ? true : undefined,
       deleted_only: characterListScope === "deleted" ? true : undefined,
       sort_by: serverSortBy,
@@ -3508,6 +3866,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }),
     [
       characterListScope,
+      createdFromIso,
+      createdToIso,
       creatorFilter,
       currentPage,
       debouncedSearchTerm,
@@ -3517,7 +3877,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       matchAllTags,
       pageSize,
       serverSortBy,
-      serverSortOrder
+      serverSortOrder,
+      updatedFromIso,
+      updatedToIso
     ]
   )
 
@@ -3533,12 +3895,69 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       useServerQuery ? "server" : "legacy"
     ],
     queryFn: async () => {
-      try {
-        await tldwClient.initialize()
-        if (useServerQuery) {
-          return await tldwClient.listCharactersPage(characterQueryParams)
-        }
+      const hasLegacyClientFilters =
+        Boolean(debouncedSearchTerm.trim()) ||
+        filterTags.length > 0 ||
+        Boolean(creatorFilter) ||
+        hasConversationsOnly ||
+        favoritesOnly
+      const loadLegacyCharacterPage = async () => {
+        const offset = Math.max(0, (currentPage - 1) * pageSize)
+        const response = await tldwClient.listCharacters({
+          limit: pageSize,
+          offset,
+          query: debouncedSearchTerm.trim() || undefined,
+          tags: filterTags.length > 0 ? filterTags : undefined,
+          match_all_tags: filterTags.length > 0 ? matchAllTags : undefined,
+          creator: creatorFilter || undefined,
+          has_conversations: hasConversationsOnly ? true : undefined,
+          favorite_only: favoritesOnly ? true : undefined,
+          created_from: createdFromIso,
+          created_to: createdToIso,
+          updated_from: updatedFromIso,
+          updated_to: updatedToIso,
+          include_deleted: characterListScope === "deleted" ? true : undefined,
+          deleted_only: characterListScope === "deleted" ? true : undefined,
+          sort_by: serverSortBy,
+          sort_order: serverSortOrder,
+          include_image_base64: false
+        })
 
+        const candidate = response as
+          | {
+              items?: unknown
+              total?: unknown
+              page?: unknown
+              page_size?: unknown
+              has_more?: unknown
+            }
+          | undefined
+          | null
+        const items = Array.isArray(candidate?.items)
+          ? candidate.items
+          : Array.isArray(response)
+            ? response
+            : []
+        const totalFromResponse =
+          typeof candidate?.total === "number" && Number.isFinite(candidate.total)
+            ? candidate.total
+            : null
+        const hasMoreFromResponse =
+          typeof candidate?.has_more === "boolean"
+            ? candidate.has_more
+            : items.length >= pageSize
+        const total =
+          totalFromResponse ??
+          (hasMoreFromResponse ? offset + items.length + 1 : offset + items.length)
+        return {
+          items,
+          total,
+          page: currentPage,
+          page_size: pageSize,
+          has_more: hasMoreFromResponse
+        }
+      }
+      const loadLegacyCharacterList = async () => {
         const allCharacters = await tldwClient.listAllCharacters({
           pageSize: 250,
           maxPages: 50
@@ -3573,7 +3992,49 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           page_size: paged.pageSize,
           has_more: paged.hasMore
         }
+      }
+      const loadLegacyFallbackAfterRouteConflict = async () => {
+        if (characterListScope === "deleted") {
+          return {
+            items: [],
+            total: 0,
+            page: currentPage,
+            page_size: pageSize,
+            has_more: false
+          }
+        }
+        if (!hasLegacyClientFilters) {
+          try {
+            return await loadLegacyCharacterPage()
+          } catch {
+            // Fall back to full-list pagination if server list page path is unavailable.
+          }
+        }
+        return await loadLegacyCharacterList()
+      }
+
+      try {
+        await tldwClient.initialize()
+        if (useServerQuery) {
+          try {
+            return await tldwClient.listCharactersPage(characterQueryParams)
+          } catch (serverQueryError) {
+            if (isCharacterQueryRouteConflictError(serverQueryError)) {
+              return await loadLegacyFallbackAfterRouteConflict()
+            }
+            throw serverQueryError
+          }
+        }
+
+        return await loadLegacyCharacterList()
       } catch (e: any) {
+        if (useServerQuery && isCharacterQueryRouteConflictError(e)) {
+          try {
+            return await loadLegacyFallbackAfterRouteConflict()
+          } catch {
+            // fall through to existing notification + error state
+          }
+        }
         notification.error({
           message: t("settings:manageCharacters.notification.error", {
             defaultValue: "Error"
@@ -3587,8 +4048,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         throw e
       }
     },
-    staleTime: 5 * 60 * 1000
+    staleTime: 5 * 60 * 1000,
+    throwOnError: false
   })
+
+  const { data: defaultCharacterPreference } = useQuery<DefaultCharacterPreferenceQueryResult>({
+    queryKey: ["tldw:defaultCharacterPreference"],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      const defaultCharacterId = await tldwClient.getDefaultCharacterPreference()
+      return { defaultCharacterId }
+    },
+    staleTime: 60 * 1000,
+    throwOnError: false
+  })
+
+  const serverDefaultCharacterId = defaultCharacterPreference?.defaultCharacterId
+  const effectiveDefaultCharacterId =
+    typeof serverDefaultCharacterId === "undefined"
+      ? defaultCharacterId
+      : serverDefaultCharacterId
 
   const isLegacyCharacterListResponse = Array.isArray(characterListResponse)
   const rawData = React.useMemo(
@@ -3627,8 +4106,25 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     queryFn: async () => {
       if (characterIds.length === 0) return {}
       await tldwClient.initialize()
-      // Fetch all chats once and count by character_id
-      const chats = await tldwClient.listChats({ limit: 1000 })
+      // Fetch chats in backend-safe pages (server enforces limit <= 200).
+      const chats: ServerChatSummary[] = []
+      const pageSize = 200
+      const maxPages = 5
+      for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+        const offset = pageIndex * pageSize
+        const page = await tldwClient.listChats({
+          limit: pageSize,
+          offset,
+          ordering: "-updated_at"
+        })
+        if (!Array.isArray(page) || page.length === 0) {
+          break
+        }
+        chats.push(...page)
+        if (page.length < pageSize) {
+          break
+        }
+      }
       const counts: Record<string, number> = {}
       for (const chat of chats) {
         const charId = String(chat.character_id ?? "")
@@ -3641,67 +4137,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     enabled: characterIds.length > 0,
     staleTime: 60 * 1000 // Cache for 1 minute
   })
-
-  const {
-    data: worldBookOptions = [],
-    isFetching: worldBookOptionsLoading
-  } = useQuery<CharacterWorldBookOption[]>({
-    queryKey: ["tldw:characterFormWorldBooks"],
-    queryFn: async () => {
-      await tldwClient.initialize()
-      const response = await tldwClient.listWorldBooks(true)
-      return extractCharacterWorldBookOptions(response)
-    },
-    enabled: open || openEdit,
-    staleTime: 60 * 1000
-  })
-
-  const worldBookOptionMap = React.useMemo(() => {
-    const entries = worldBookOptions.map((worldBook) => [worldBook.id, worldBook.name] as const)
-    return new Map<number, string>(entries)
-  }, [worldBookOptions])
-
-  const editCharacterNumericId = React.useMemo(() => {
-    if (!editId) return null
-    const parsed = Number(editId)
-    if (!Number.isFinite(parsed) || parsed <= 0) return null
-    return Math.trunc(parsed)
-  }, [editId])
-
-  const {
-    data: editCharacterWorldBookLinks = [],
-    isFetching: editCharacterWorldBooksLoading
-  } = useQuery<CharacterWorldBookOption[]>({
-    queryKey: ["tldw:characterEditWorldBooks", editCharacterNumericId],
-    queryFn: async () => {
-      if (editCharacterNumericId == null) return []
-      await tldwClient.initialize()
-      const response = await tldwClient.listCharacterWorldBooks(editCharacterNumericId)
-      return extractCharacterWorldBookOptions(response)
-    },
-    enabled: openEdit && editCharacterNumericId != null,
-    staleTime: 30 * 1000
-  })
-
-  React.useEffect(() => {
-    if (!openEdit) return
-    if (editWorldBooksInitializedRef.current) return
-    if (editCharacterNumericId == null) return
-    if (editCharacterWorldBooksLoading) return
-    editWorldBooksInitializedRef.current = true
-    editForm.setFieldValue(
-      "world_book_ids",
-      normalizeCharacterWorldBookIds(
-        editCharacterWorldBookLinks.map((worldBook) => worldBook.id)
-      )
-    )
-  }, [
-    editCharacterNumericId,
-    editCharacterWorldBookLinks,
-    editCharacterWorldBooksLoading,
-    editForm,
-    openEdit
-  ])
 
   const {
     data: previewCharacterWorldBooks = [],
@@ -3731,133 +4166,76 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     staleTime: 30 * 1000
   })
 
-  const editCharacterNumericId = React.useMemo(
-    () => resolveCharacterNumericId({ id: editId }),
-    [editId]
-  )
-
-  const { data: availableWorldBooks = [], isFetching: worldBooksLoading } =
-    useQuery<Array<CharacterWorldBookLink>>({
-      queryKey: ["tldw:worldBooksForCharacterEditor"],
-      queryFn: async () => {
-        await tldwClient.initialize()
-        const books = await tldwClient.listWorldBooks()
-        return normalizeCharacterWorldBookLinks(books).sort((a, b) =>
-          a.name.localeCompare(b.name)
-        )
-      },
-      enabled: openEdit && editCharacterNumericId != null,
-      staleTime: 30 * 1000
-    })
-
   const {
-    data: editAttachedWorldBooks = [],
-    isFetching: editAttachedWorldBooksLoading,
-    refetch: refetchEditAttachedWorldBooks
-  } = useQuery<Array<CharacterWorldBookLink>>({
+    data: characterWorldBookData = EMPTY_CHARACTER_WORLD_BOOK_DATA,
+    isFetching: worldBookOptionsLoading
+  } = useQuery<{ options: CharacterWorldBookOption[]; attachedIds: number[] }>({
     queryKey: ["tldw:characterEditWorldBooks", editCharacterNumericId],
     queryFn: async () => {
-      if (editCharacterNumericId == null) return []
       await tldwClient.initialize()
-      const linkedBooks = await tldwClient.listCharacterWorldBooks(
-        editCharacterNumericId
-      )
-      return normalizeCharacterWorldBookLinks(linkedBooks).sort((a, b) =>
+      const allBooksResponse = await tldwClient.listWorldBooks(true)
+      const attachedBooksResponse =
+        editCharacterNumericId == null
+          ? []
+          : await tldwClient.listCharacterWorldBooks(editCharacterNumericId)
+
+      const allBooks = Array.isArray(allBooksResponse?.world_books)
+        ? allBooksResponse.world_books
+        : Array.isArray(allBooksResponse)
+          ? allBooksResponse
+          : []
+      const attachedBooks = Array.isArray(attachedBooksResponse)
+        ? attachedBooksResponse
+        : []
+
+      const optionMap = new Map<number, CharacterWorldBookOption>()
+      for (const rawBook of allBooks) {
+        const option = toCharacterWorldBookOption(rawBook)
+        if (!option) continue
+        optionMap.set(option.id, option)
+      }
+      for (const rawBook of attachedBooks) {
+        const option = toCharacterWorldBookOption(rawBook)
+        if (!option) continue
+        if (!optionMap.has(option.id)) {
+          optionMap.set(option.id, option)
+        }
+      }
+
+      const options = Array.from(optionMap.values()).sort((a, b) =>
         a.name.localeCompare(b.name)
       )
+      const attachedIds = normalizeWorldBookIds(
+        attachedBooks.map((book: any) => book?.world_book_id ?? book?.id)
+      )
+
+      return { options, attachedIds }
     },
-    enabled: openEdit && editCharacterNumericId != null,
-    staleTime: 15 * 1000
+    enabled: open || openEdit,
+    staleTime: 30 * 1000
   })
 
-  const attachableWorldBookOptions = React.useMemo(() => {
-    const attachedIds = new Set(editAttachedWorldBooks.map((book) => book.id))
-    return availableWorldBooks
-      .filter((book) => !attachedIds.has(book.id))
-      .map((book) => ({
-        value: book.id,
-        label: book.name
-      }))
-  }, [availableWorldBooks, editAttachedWorldBooks])
-
-  const handleAttachWorldBookToEditingCharacter = React.useCallback(async () => {
-    if (editCharacterNumericId == null || selectedWorldBookIdForAttach == null) {
-      return
-    }
-    setWorldBookAttachmentBusy(true)
-    try {
-      await tldwClient.attachWorldBookToCharacter(
-        editCharacterNumericId,
-        selectedWorldBookIdForAttach
-      )
-      setSelectedWorldBookIdForAttach(null)
-      await refetchEditAttachedWorldBooks()
-      notification.success({
-        message: t("settings:manageCharacters.worldBooks.attachSuccess", {
-          defaultValue: "World book attached"
-        })
-      })
-    } catch (error: any) {
-      notification.error({
-        message: t("settings:manageCharacters.worldBooks.attachError", {
-          defaultValue: "Couldn't attach world book"
-        }),
-        description:
-          error?.message ||
-          t("settings:manageCharacters.notification.someError", {
-            defaultValue: "Something went wrong. Please try again later"
-          })
-      })
-    } finally {
-      setWorldBookAttachmentBusy(false)
-    }
-  }, [
-    editCharacterNumericId,
-    notification,
-    refetchEditAttachedWorldBooks,
-    selectedWorldBookIdForAttach,
-    t
-  ])
-
-  const handleDetachWorldBookFromEditingCharacter = React.useCallback(
-    async (worldBookId: number) => {
-      if (editCharacterNumericId == null) return
-      setWorldBookAttachmentBusy(true)
-      try {
-        await tldwClient.detachWorldBookFromCharacter(
-          editCharacterNumericId,
-          worldBookId
-        )
-        await refetchEditAttachedWorldBooks()
-        notification.success({
-          message: t("settings:manageCharacters.worldBooks.detachSuccess", {
-            defaultValue: "World book detached"
-          })
-        })
-      } catch (error: any) {
-        notification.error({
-          message: t("settings:manageCharacters.worldBooks.detachError", {
-            defaultValue: "Couldn't detach world book"
-          }),
-          description:
-            error?.message ||
-            t("settings:manageCharacters.notification.someError", {
-              defaultValue: "Something went wrong. Please try again later"
-            })
-        })
-      } finally {
-        setWorldBookAttachmentBusy(false)
-      }
-    },
-    [editCharacterNumericId, notification, refetchEditAttachedWorldBooks, t]
-  )
+  const worldBookOptions = characterWorldBookData.options
 
   React.useEffect(() => {
     if (!openEdit) {
-      setSelectedWorldBookIdForAttach(null)
-      setWorldBookAttachmentBusy(false)
+      editWorldBooksInitializedRef.current = false
+      editForm.setFieldValue("world_book_ids", [])
+      return
     }
-  }, [openEdit])
+    if (editCharacterNumericId == null) return
+    if (worldBookOptionsLoading) return
+    if (editWorldBooksInitializedRef.current) return
+    const attachedIds = normalizeWorldBookIds(characterWorldBookData.attachedIds)
+    editWorldBooksInitializedRef.current = true
+    editForm.setFieldValue("world_book_ids", attachedIds)
+  }, [
+    characterWorldBookData.attachedIds,
+    editCharacterNumericId,
+    editForm,
+    openEdit,
+    worldBookOptionsLoading
+  ])
 
   const versionHistoryCharacterId = React.useMemo(
     () => resolveCharacterNumericId(versionHistoryCharacter),
@@ -4025,6 +4403,40 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   )
 
   React.useEffect(() => {
+    if (typeof serverDefaultCharacterId === "undefined") return
+
+    if (!serverDefaultCharacterId) {
+      if (defaultCharacterId) {
+        void setDefaultCharacterSelection(null)
+      }
+      return
+    }
+
+    if (serverDefaultCharacterId === defaultCharacterId) return
+
+    const matchingCharacter = (data || []).find((record: any) => {
+      const candidateId = resolveCharacterSelectionId({
+        id: record?.id || record?.slug || record?.name
+      } as any)
+      return candidateId === serverDefaultCharacterId
+    })
+
+    if (matchingCharacter) {
+      void setDefaultCharacterSelection(
+        buildCharacterSelectionPayload(matchingCharacter)
+      )
+      return
+    }
+
+    void setDefaultCharacterSelection({ id: serverDefaultCharacterId } as any)
+  }, [
+    data,
+    defaultCharacterId,
+    serverDefaultCharacterId,
+    setDefaultCharacterSelection
+  ])
+
+  React.useEffect(() => {
     if (hasHandledFocusCharacterRef.current) return
     const focusCharacterId = crossNavigationContext.focusCharacterId.trim()
     if (!focusCharacterId) {
@@ -4120,38 +4532,82 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return creators.map((creator) => ({ label: creator, value: creator }))
   }, [data])
 
+  const getWorldBookSyncError = React.useCallback(
+    (error: unknown): Error => {
+      const statusRaw = (error as { status?: unknown } | null)?.status
+      const statusCode =
+        typeof statusRaw === "number"
+          ? statusRaw
+          : typeof statusRaw === "string"
+            ? Number(statusRaw)
+            : Number.NaN
+
+      if (statusCode === 401 || statusCode === 403) {
+        return new Error(
+          t("settings:manageCharacters.worldBooks.permissionDenied", {
+            defaultValue: "You do not have permission to modify world-book attachments."
+          })
+        )
+      }
+
+      if (statusCode === 404) {
+        return new Error(
+          t("settings:manageCharacters.worldBooks.referenceMissing", {
+            defaultValue: "A selected world book could not be found. Refresh and try again."
+          })
+        )
+      }
+
+      if (error instanceof Error) return error
+      return new Error(
+        t("settings:manageCharacters.worldBooks.syncFailed", {
+          defaultValue: "Failed to update world-book attachments."
+        })
+      )
+    },
+    [t]
+  )
+
   const syncCharacterWorldBookSelection = React.useCallback(
     async (characterId: number, nextWorldBookIds: number[]) => {
       await tldwClient.initialize()
-      const currentLinks = await tldwClient.listCharacterWorldBooks(characterId)
-      const currentIds = normalizeCharacterWorldBookIds(
-        Array.isArray(currentLinks)
-          ? currentLinks.map((book: any) => book?.world_book_id ?? book?.id)
-          : []
+      let currentLinks: any[] = []
+      try {
+        const response = await tldwClient.listCharacterWorldBooks(characterId)
+        currentLinks = Array.isArray(response) ? response : []
+      } catch (error) {
+        throw getWorldBookSyncError(error)
+      }
+      const currentIds = normalizeWorldBookIds(
+        currentLinks.map((book: any) => book?.world_book_id ?? book?.id)
       )
-      const desiredIds = normalizeCharacterWorldBookIds(nextWorldBookIds)
+      const desiredIds = normalizeWorldBookIds(nextWorldBookIds)
       const currentSet = new Set(currentIds)
       const desiredSet = new Set(desiredIds)
       const toAttach = desiredIds.filter((id) => !currentSet.has(id))
       const toDetach = currentIds.filter((id) => !desiredSet.has(id))
 
       if (toAttach.length > 0) {
-        await Promise.all(
-          toAttach.map((worldBookId) =>
-            tldwClient.attachWorldBookToCharacter(characterId, worldBookId)
-          )
-        )
+        for (const worldBookId of toAttach) {
+          try {
+            await tldwClient.attachWorldBookToCharacter(characterId, worldBookId)
+          } catch (error) {
+            throw getWorldBookSyncError(error)
+          }
+        }
       }
 
       if (toDetach.length > 0) {
-        await Promise.all(
-          toDetach.map((worldBookId) =>
-            tldwClient.detachWorldBookFromCharacter(characterId, worldBookId)
-          )
-        )
+        for (const worldBookId of toDetach) {
+          try {
+            await tldwClient.detachWorldBookFromCharacter(characterId, worldBookId)
+          } catch (error) {
+            throw getWorldBookSyncError(error)
+          }
+        }
       }
     },
-    []
+    [getWorldBookSyncError]
   )
 
   const { mutate: createCharacter, isPending: creating } = useMutation({
@@ -4159,7 +4615,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       const createdCharacter = await tldwClient.createCharacter(
         buildCharacterPayload(values)
       )
-      const selectedWorldBookIds = normalizeCharacterWorldBookIds(
+      const selectedWorldBookIds = normalizeWorldBookIds(
         values?.world_book_ids
       )
       if (selectedWorldBookIds.length === 0) {
@@ -4291,7 +4747,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         editVersion ?? undefined
       )
       if (typeof values?.world_book_ids !== "undefined") {
-        const selectedWorldBookIds = normalizeCharacterWorldBookIds(
+        const selectedWorldBookIds = normalizeWorldBookIds(
           values?.world_book_ids
         )
         const editCharacterId = Number(editId)
@@ -4440,6 +4896,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   const selectedCount = selectedCharacterIds.size
   const hasSelection = selectedCount > 0
+  const selectedCharacters = React.useMemo(() => {
+    if (!Array.isArray(data) || data.length === 0) return []
+    return data.filter((character: any) =>
+      selectedCharacterIds.has(String(character.id || character.slug || character.name))
+    )
+  }, [data, selectedCharacterIds])
 
   // Check if all items on current page are selected
   const allOnPageSelected = React.useMemo(() => {
@@ -4725,6 +5187,162 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
   }, [selectedCharacterIds, data, bulkTagsToAdd, notification, t, qc])
 
+  const closeCompareModal = React.useCallback(() => {
+    setCompareModalOpen(false)
+    setCompareCharacters(null)
+  }, [])
+
+  const comparisonRows = React.useMemo<CharacterComparisonRow[]>(() => {
+    if (!compareCharacters) return []
+    const [leftCharacter, rightCharacter] = compareCharacters
+    return CHARACTER_COMPARISON_FIELDS.map((fieldDef) => {
+      const leftRawValue = fieldDef.getValue(leftCharacter)
+      const rightRawValue = fieldDef.getValue(rightCharacter)
+      return {
+        field: fieldDef.field,
+        label: fieldDef.label,
+        leftValue: formatCharacterComparisonValue(leftRawValue),
+        rightValue: formatCharacterComparisonValue(rightRawValue),
+        different:
+          normalizeCharacterComparisonValue(leftRawValue) !==
+          normalizeCharacterComparisonValue(rightRawValue)
+      }
+    })
+  }, [compareCharacters])
+
+  const changedComparisonRows = React.useMemo(
+    () => comparisonRows.filter((row) => row.different),
+    [comparisonRows]
+  )
+
+  const comparisonSummaryText = React.useMemo(() => {
+    if (!compareCharacters) return ""
+    const [leftCharacter, rightCharacter] = compareCharacters
+    const leftName = String(leftCharacter?.name || leftCharacter?.id || "Character A")
+    const rightName = String(rightCharacter?.name || rightCharacter?.id || "Character B")
+
+    const lines: string[] = [
+      "Character comparison summary",
+      `Left: ${leftName} (${leftCharacter?.id ?? "n/a"})`,
+      `Right: ${rightName} (${rightCharacter?.id ?? "n/a"})`,
+      `Different fields: ${changedComparisonRows.length}/${comparisonRows.length}`,
+      ""
+    ]
+
+    if (changedComparisonRows.length === 0) {
+      lines.push("No tracked differences found.")
+      return lines.join("\n")
+    }
+
+    for (const row of changedComparisonRows) {
+      lines.push(`[${row.label}]`)
+      lines.push(`Left: ${row.leftValue}`)
+      lines.push(`Right: ${row.rightValue}`)
+      lines.push("")
+    }
+
+    return lines.join("\n")
+  }, [changedComparisonRows, compareCharacters, comparisonRows.length])
+
+  const handleOpenCompareModal = React.useCallback(() => {
+    if (selectedCharacters.length !== 2) {
+      notification.warning({
+        message: t("settings:manageCharacters.compare.selectTwo", {
+          defaultValue: "Select exactly two characters to compare."
+        })
+      })
+      return
+    }
+
+    setCompareCharacters([selectedCharacters[0], selectedCharacters[1]])
+    setCompareModalOpen(true)
+  }, [notification, selectedCharacters, t])
+
+  const handleCopyComparisonSummary = React.useCallback(async () => {
+    if (!comparisonSummaryText.trim()) return
+
+    try {
+      if (
+        typeof navigator === "undefined" ||
+        !navigator.clipboard ||
+        typeof navigator.clipboard.writeText !== "function"
+      ) {
+        throw new Error("Clipboard API unavailable")
+      }
+      await navigator.clipboard.writeText(comparisonSummaryText)
+      notification.success({
+        message: t("settings:manageCharacters.compare.copySuccess", {
+          defaultValue: "Copied comparison summary"
+        })
+      })
+    } catch {
+      notification.warning({
+        message: t("settings:manageCharacters.compare.copyFailure", {
+          defaultValue: "Unable to copy comparison summary"
+        })
+      })
+    }
+  }, [comparisonSummaryText, notification, t])
+
+  const handleExportComparisonSummary = React.useCallback(() => {
+    if (!compareCharacters || !comparisonSummaryText.trim()) return
+
+    if (
+      typeof URL === "undefined" ||
+      typeof URL.createObjectURL !== "function" ||
+      typeof URL.revokeObjectURL !== "function"
+    ) {
+      notification.warning({
+        message: t("settings:manageCharacters.compare.exportFailure", {
+          defaultValue: "Unable to export comparison summary"
+        })
+      })
+      return
+    }
+
+    try {
+      const [leftCharacter, rightCharacter] = compareCharacters
+      const leftSegment = toComparisonFilenameSegment(
+        leftCharacter?.name || leftCharacter?.id
+      )
+      const rightSegment = toComparisonFilenameSegment(
+        rightCharacter?.name || rightCharacter?.id
+      )
+      const fileName = `character-compare-${leftSegment}-vs-${rightSegment}.txt`
+
+      const blob = new Blob([comparisonSummaryText], {
+        type: "text/plain;charset=utf-8"
+      })
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = objectUrl
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(objectUrl)
+
+      notification.success({
+        message: t("settings:manageCharacters.compare.exportSuccess", {
+          defaultValue: "Exported comparison summary"
+        })
+      })
+    } catch {
+      notification.warning({
+        message: t("settings:manageCharacters.compare.exportFailure", {
+          defaultValue: "Unable to export comparison summary"
+        })
+      })
+    }
+  }, [compareCharacters, comparisonSummaryText, notification, t])
+
+  React.useEffect(() => {
+    if (!compareModalOpen) return
+    if (selectedCount !== 2) {
+      closeCompareModal()
+    }
+  }, [closeCompareModal, compareModalOpen, selectedCount])
+
   const loadTagManagerCharacters = React.useCallback(async () => {
     setTagManagerLoading(true)
     try {
@@ -4749,6 +5367,18 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
       setTagManagerCharacters(allCharacters)
     } catch (e: any) {
+      if (isCharacterQueryRouteConflictError(e)) {
+        try {
+          const legacyCharacters = await tldwClient.listAllCharacters({
+            pageSize: 250,
+            maxPages: 50
+          })
+          setTagManagerCharacters(Array.isArray(legacyCharacters) ? legacyCharacters : [])
+          return
+        } catch {
+          // Keep existing error notification flow when legacy fallback also fails.
+        }
+      }
       notification.error({
         message: t("settings:manageCharacters.tags.manageLoadErrorTitle", {
           defaultValue: "Couldn't load tags"
@@ -5115,19 +5745,58 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   const isDefaultCharacterRecord = React.useCallback(
     (record: any) => {
-      if (!defaultCharacterId) return false
+      if (!effectiveDefaultCharacterId) return false
       const recordId = resolveCharacterSelectionId({
         id: record?.id || record?.slug || record?.name
       } as any)
-      return recordId === defaultCharacterId
+      return recordId === effectiveDefaultCharacterId
     },
-    [defaultCharacterId]
+    [effectiveDefaultCharacterId]
   )
 
   const handleSetDefaultCharacter = React.useCallback(
     async (record: any) => {
       try {
-        await setDefaultCharacterSelection(buildCharacterSelectionPayload(record))
+        const nextSelection = buildCharacterSelectionPayload(record)
+        const nextDefaultId = resolveCharacterSelectionId(nextSelection)
+        if (!nextDefaultId) {
+          throw new Error(
+            t("settings:manageCharacters.notification.defaultSetError", {
+              defaultValue: "Couldn't set default character"
+            })
+          )
+        }
+
+        let serverWriteError: any = null
+        try {
+          await tldwClient.setDefaultCharacterPreference(nextDefaultId)
+        } catch (serverError) {
+          serverWriteError = serverError
+        }
+
+        await setDefaultCharacterSelection(nextSelection)
+
+        if (serverWriteError) {
+          notification.warning({
+            message: t(
+              "settings:manageCharacters.notification.defaultSetLocalOnly",
+              {
+                defaultValue: "Default character saved locally only"
+              }
+            ),
+            description:
+              serverWriteError?.message ||
+              t(
+                "settings:manageCharacters.notification.defaultSetLocalOnlyDesc",
+                {
+                  defaultValue:
+                    "Server preference update failed. This device will still use your selected default."
+                }
+              )
+          })
+          return
+        }
+
         notification.success({
           message: t("settings:manageCharacters.notification.defaultSet", {
             defaultValue: "Default character set"
@@ -5155,7 +5824,36 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   const handleClearDefaultCharacter = React.useCallback(async () => {
     try {
+      let serverWriteError: any = null
+      try {
+        await tldwClient.setDefaultCharacterPreference(null)
+      } catch (serverError) {
+        serverWriteError = serverError
+      }
+
       await setDefaultCharacterSelection(null)
+
+      if (serverWriteError) {
+        notification.warning({
+          message: t(
+            "settings:manageCharacters.notification.defaultClearedLocalOnly",
+            {
+              defaultValue: "Default cleared locally only"
+            }
+          ),
+          description:
+            serverWriteError?.message ||
+            t(
+              "settings:manageCharacters.notification.defaultClearedLocalOnlyDesc",
+              {
+                defaultValue:
+                  "Server preference update failed. This device will still clear the default."
+              }
+            )
+        })
+        return
+      }
+
       notification.info({
         message: t("settings:manageCharacters.notification.defaultCleared", {
           defaultValue: "Default character cleared"
@@ -5170,7 +5868,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           error?.message ||
           t("settings:manageCharacters.notification.someError", {
             defaultValue: "Something went wrong. Please try again later"
-          })
+            })
       })
     }
   }, [notification, setDefaultCharacterSelection, t])
@@ -5697,19 +6395,37 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               defaultValue: "New character"
             })}
           </Button>
-          <div ref={importButtonContainerRef}>
+          <div
+            ref={importButtonContainerRef}
+            data-testid="character-import-dropzone"
+            className={`rounded-md border border-dashed px-2 py-1 transition-colors ${
+              importQueueState.dragState === "drag-over"
+                ? "border-primary bg-primary/5"
+                : "border-border bg-surface/40"
+            }`}
+            onDragEnter={handleImportDragEnter}
+            onDragOver={handleImportDragOver}
+            onDragLeave={handleImportDragLeave}
+            onDrop={(event) => {
+              void handleImportDrop(event)
+            }}>
             <Upload
               accept={IMPORT_UPLOAD_ACCEPT}
               multiple
               showUploadList={false}
               beforeUpload={handleImportUpload}
-              disabled={importing || importPreviewLoading}>
-              <Button loading={importing || importPreviewLoading}>
+              disabled={isImportBusy}>
+              <Button loading={isImportBusy}>
                 {t("settings:manageCharacters.import.button", {
                   defaultValue: "Upload character"
                 })}
               </Button>
             </Upload>
+            <div className="mt-1 text-[11px] text-text-subtle">
+              {t("settings:manageCharacters.import.dropHint", {
+                defaultValue: "Drag and drop files here"
+              })}
+            </div>
           </div>
         </div>
         <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
@@ -5799,6 +6515,46 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               options={creatorFilterOptions}
               onChange={(value) => setCreatorFilter(value || undefined)}
             />
+            <Input
+              type="date"
+              className="min-w-[9.25rem]"
+              aria-label={t("settings:manageCharacters.filter.createdFromAriaLabel", {
+                defaultValue: "Filter characters created on or after"
+              })}
+              value={createdFromDate}
+              max={createdToDate || undefined}
+              onChange={(event) => setCreatedFromDate(event.target.value)}
+            />
+            <Input
+              type="date"
+              className="min-w-[9.25rem]"
+              aria-label={t("settings:manageCharacters.filter.createdToAriaLabel", {
+                defaultValue: "Filter characters created on or before"
+              })}
+              value={createdToDate}
+              min={createdFromDate || undefined}
+              onChange={(event) => setCreatedToDate(event.target.value)}
+            />
+            <Input
+              type="date"
+              className="min-w-[9.25rem]"
+              aria-label={t("settings:manageCharacters.filter.updatedFromAriaLabel", {
+                defaultValue: "Filter characters updated on or after"
+              })}
+              value={updatedFromDate}
+              max={updatedToDate || undefined}
+              onChange={(event) => setUpdatedFromDate(event.target.value)}
+            />
+            <Input
+              type="date"
+              className="min-w-[9.25rem]"
+              aria-label={t("settings:manageCharacters.filter.updatedToAriaLabel", {
+                defaultValue: "Filter characters updated on or before"
+              })}
+              value={updatedToDate}
+              min={updatedFromDate || undefined}
+              onChange={(event) => setUpdatedToDate(event.target.value)}
+            />
             <Checkbox
               checked={matchAllTags}
               onChange={(e) => setMatchAllTags(e.target.checked)}>
@@ -5828,6 +6584,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   setFilterTags([])
                   setMatchAllTags(false)
                   setCreatorFilter(undefined)
+                  setCreatedFromDate("")
+                  setCreatedToDate("")
+                  setUpdatedFromDate("")
+                  setUpdatedToDate("")
                   setHasConversationsOnly(false)
                   setFavoritesOnly(false)
                 }}>
@@ -6017,7 +6777,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Import character"
               })}
               onSecondaryAction={triggerImportPicker}
-              secondaryDisabled={importing || importPreviewLoading}
+              secondaryDisabled={isImportBusy}
             />
 
             <div className="rounded-xl border border-border bg-surface p-3">
@@ -6070,7 +6830,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               <span className="text-text-muted">
                 {t("settings:manageCharacters.deletedEmptyDescription", {
                   defaultValue:
-                    "Soft-deleted characters appear here for up to 30 days."
+                    "Soft-deleted characters appear here while they remain within the server restore window."
                 })}
               </span>
               <div>
@@ -6104,6 +6864,10 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     setFilterTags([])
                     setMatchAllTags(false)
                     setCreatorFilter(undefined)
+                    setCreatedFromDate("")
+                    setCreatedToDate("")
+                    setUpdatedFromDate("")
+                    setUpdatedToDate("")
                     setHasConversationsOnly(false)
                     setFavoritesOnly(false)
                     refetch()
@@ -6143,6 +6907,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     })}
                   </span>
                 )}
+                {(createdFromDate || createdToDate) && (
+                  <span className="inline-flex items-center gap-1 rounded bg-surface2 px-2 py-0.5">
+                    {t("settings:manageCharacters.filter.activeCreatedRange", {
+                      defaultValue: "Created: {{from}} to {{to}}",
+                      from: createdFromDate || "—",
+                      to: createdToDate || "—"
+                    })}
+                  </span>
+                )}
+                {(updatedFromDate || updatedToDate) && (
+                  <span className="inline-flex items-center gap-1 rounded bg-surface2 px-2 py-0.5">
+                    {t("settings:manageCharacters.filter.activeUpdatedRange", {
+                      defaultValue: "Updated: {{from}} to {{to}}",
+                      from: updatedFromDate || "—",
+                      to: updatedToDate || "—"
+                    })}
+                  </span>
+                )}
                 {hasConversationsOnly && (
                   <span className="inline-flex items-center gap-1 rounded bg-surface2 px-2 py-0.5">
                     {t("settings:manageCharacters.filter.activeHasConversations", {
@@ -6167,7 +6949,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <div className="rounded-md border border-border bg-surface2 p-3 text-sm text-text-muted">
               {t("settings:manageCharacters.deletedListDescription", {
                 defaultValue:
-                  "Showing recently deleted characters. Restore them within 30 days."
+                  "Showing recently deleted characters. Restore is available while each item remains within the server restore window."
               })}
             </div>
           )}
@@ -6191,6 +6973,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                     onClick={() => setBulkTagModalOpen(true)}
                     loading={bulkOperationLoading}>
                     {t("settings:manageCharacters.bulk.addTags", { defaultValue: "Add tags" })}
+                  </Button>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    selectedCount === 2
+                      ? t("settings:manageCharacters.bulk.compareReady", {
+                          defaultValue: "Compare selected characters"
+                        })
+                      : t("settings:manageCharacters.bulk.compareHint", {
+                          defaultValue: "Select exactly 2 characters to compare"
+                        })
+                  }>
+                  <Button
+                    size="small"
+                    icon={<Columns2 className="w-4 h-4" />}
+                    onClick={handleOpenCompareModal}
+                    disabled={selectedCount !== 2 || bulkOperationLoading}>
+                    {t("settings:manageCharacters.bulk.compare", {
+                      defaultValue: "Compare"
+                    })}
                   </Button>
                 </Tooltip>
                 <Tooltip title={t("settings:manageCharacters.bulk.export", { defaultValue: "Export" })}>
@@ -6347,7 +7149,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 if (characterListScope === "deleted") {
                   return (
                     <span className="line-clamp-1" title={v || undefined}>
-                      {truncateText(v, MAX_NAME_LENGTH)}
+                      {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
                     </span>
                   )
                 }
@@ -6382,10 +7184,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       data-inline-edit-key={`${recordId}:name`}
                       role="button"
                       tabIndex={0}
-                      aria-label={t("settings:manageCharacters.table.inlineEditName", {
-                        defaultValue: "Edit name inline for {{name}}",
-                        name: v || record?.name || record?.slug || "character"
-                      })}
+                      aria-label={withCharacterNameInLabel(
+                        t("settings:manageCharacters.table.inlineEditName", {
+                          defaultValue: "Edit name inline for {{name}}",
+                          name: v || record?.name || record?.slug || "character"
+                        }),
+                        "Edit name inline for {{name}}",
+                        String(v || record?.name || record?.slug || "character")
+                      )}
                       onDoubleClick={(event) =>
                         startInlineEdit(record, 'name', event.currentTarget)
                       }
@@ -6396,7 +7202,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         }
                       }}
                     >
-                      {truncateText(v, MAX_NAME_LENGTH)}
+                      {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
                     </span>
                   </Tooltip>
                 )
@@ -6582,6 +7388,25 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               )
             },
             {
+              title: t("settings:manageCharacters.columns.lastUsedAt", {
+                defaultValue: "Last used"
+              }),
+              key: "lastUsedAt",
+              sorter: true,
+              sortDirections: ["ascend", "descend"] as const,
+              sortOrder: sortColumn === "lastUsedAt" ? sortOrder : undefined,
+              render: (_: any, record: any) => (
+                <span className="text-xs text-text-muted">
+                  {formatTableDateCell(record, [
+                    "last_used_at",
+                    "lastUsedAt",
+                    "last_active",
+                    "lastActive"
+                  ])}
+                </span>
+              )
+            },
+            {
               title: t("settings:manageCharacters.columns.conversations", {
                 defaultValue: "Chats"
               }),
@@ -6673,10 +7498,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
-                          aria-label={t("settings:manageCharacters.aria.restore", {
-                            defaultValue: "Restore character {{name}}",
+                          aria-label={withCharacterNameInLabel(
+                            t("settings:manageCharacters.aria.restore", {
+                              defaultValue: "Restore character {{name}}",
+                              name
+                            }),
+                            "Restore character {{name}}",
                             name
-                          })}
+                          )}
                           onClick={() => handleRestoreFromTrash(record)}>
                           <History className="w-4 h-4" />
                           <span className="hidden sm:inline text-xs font-medium">
@@ -6695,10 +7524,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
-                        aria-label={t("settings:manageCharacters.aria.chatWith", {
-                          defaultValue: "Chat as {{name}}",
+                        aria-label={withCharacterNameInLabel(
+                          t("settings:manageCharacters.aria.chatWith", {
+                            defaultValue: "Chat as {{name}}",
+                            name
+                          }),
+                          "Chat as {{name}}",
                           name
-                        })}
+                        )}
                         onClick={() => handleChat(record)}>
                         <MessageCircle className="w-4 h-4" />
                         <span className="hidden sm:inline text-xs font-medium">
@@ -6712,10 +7545,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
-                        aria-label={t("settings:manageCharacters.aria.edit", {
-                          defaultValue: "Edit character {{name}}",
+                        aria-label={withCharacterNameInLabel(
+                          t("settings:manageCharacters.aria.edit", {
+                            defaultValue: "Edit character {{name}}",
+                            name
+                          }),
+                          "Edit character {{name}}",
                           name
-                        })}
+                        )}
                         onClick={(e) => {
                           handleEdit(record, e.currentTarget)
                         }}>
@@ -6731,10 +7568,14 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-danger transition motion-reduce:transition-none hover:border-danger/30 hover:bg-danger/10 focus:outline-none focus:ring-2 focus:ring-danger focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
-                        aria-label={t("settings:manageCharacters.aria.delete", {
-                          defaultValue: "Delete character {{name}}",
+                        aria-label={withCharacterNameInLabel(
+                          t("settings:manageCharacters.aria.delete", {
+                            defaultValue: "Delete character {{name}}",
+                            name
+                          }),
+                          "Delete character {{name}}",
                           name
-                        })}
+                        )}
                         disabled={deleting}
                         onClick={async () => {
                           const ok = await confirmDanger({
@@ -6772,16 +7613,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                             ? "text-primary hover:border-primary/30 hover:bg-primary/10"
                             : "text-text-muted hover:border-border hover:bg-surface2"
                         }`}
-                        aria-label={t(
+                        aria-label={withCharacterNameInLabel(
+                          t(
+                            isFavorite
+                              ? "settings:manageCharacters.aria.removeFavorite"
+                              : "settings:manageCharacters.aria.addFavorite",
+                            {
+                              defaultValue: isFavorite
+                                ? "Remove {{name}} from favorites"
+                                : "Add {{name}} to favorites",
+                              name
+                            }
+                          ),
                           isFavorite
-                            ? "settings:manageCharacters.aria.removeFavorite"
-                            : "settings:manageCharacters.aria.addFavorite",
-                          {
-                            defaultValue: isFavorite
-                              ? "Remove {{name}} from favorites"
-                              : "Add {{name}} to favorites",
-                            name
-                          }
+                            ? "Remove {{name}} from favorites"
+                            : "Add {{name}} to favorites",
+                          name
                         )}
                         onClick={() => {
                           void handleToggleFavorite(record)
@@ -7037,14 +7884,32 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         footer={[
           <Button
             key="cancel"
+            disabled={importPreviewProcessing}
             onClick={resetImportPreview}>
             {t("common:cancel", { defaultValue: "Cancel" })}
           </Button>,
+          retryableFailedPreviewItems.length > 0 ? (
+            <Button
+              key="retry-failed"
+              disabled={importPreviewProcessing}
+              onClick={() => {
+                void handleRetryFailedImportPreview()
+              }}>
+              {t("settings:manageCharacters.import.retryFailed", {
+                defaultValue: "Retry failed"
+              })}
+            </Button>
+          ) : null,
           <Button
             key="confirm"
             type="primary"
-            loading={importing}
-            disabled={importablePreviewItems.length === 0 || importPreviewLoading}
+            loading={importPreviewProcessing || importing}
+            disabled={
+              importablePreviewItems.length === 0 ||
+              importPreviewLoading ||
+              importPreviewProcessing ||
+              importQueueSummary.complete
+            }
             onClick={() => {
               void handleConfirmImportPreview()
             }}>
@@ -7058,57 +7923,95 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           <Skeleton active paragraph={{ rows: 3 }} />
         ) : (
           <div className="space-y-3">
-            {importPreviewItems.map((item) => (
+            {importQueueSummary.total > 0 && (
               <div
-                key={item.id}
-                className="rounded-md border border-border bg-surface2/40 p-3"
-                data-testid="character-import-preview-item">
-                <div className="flex items-start gap-3">
-                  {item.avatarUrl ? (
-                    <img
-                      src={item.avatarUrl}
-                      alt={item.name}
-                      className="h-12 w-12 rounded-md object-cover border border-border"
-                    />
-                  ) : (
-                    <div className="flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface">
-                      <UserCircle2 className="h-6 w-6 text-text-muted" />
-                    </div>
-                  )}
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-sm text-text">
-                        {item.name}
-                      </span>
-                      <span className="text-xs text-text-subtle uppercase">
-                        {item.format}
-                      </span>
-                    </div>
-                    <div className="text-xs text-text-muted">{item.fileName}</div>
-                    {item.description && (
-                      <div className="text-sm text-text line-clamp-2">
-                        {item.description}
+                className="rounded-md border border-border bg-surface2/40 p-2 text-xs text-text-subtle"
+                data-testid="character-import-progress-summary">
+                {t("settings:manageCharacters.import.progressSummary", {
+                  defaultValue:
+                    "Queued {{queued}} · Processing {{processing}} · Success {{success}} · Failed {{failed}}",
+                  queued: importQueueSummary.queued,
+                  processing: importQueueSummary.processing,
+                  success: importQueueSummary.success,
+                  failed: importQueueSummary.failure
+                })}
+              </div>
+            )}
+            {importPreviewItems.map((item) => {
+              const queueItem = importQueueItemsById.get(item.id)
+              const runtimeState =
+                queueItem?.state || (item.parseError ? "failure" : "queued")
+              const runtimeMessage = queueItem?.message
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-md border border-border bg-surface2/40 p-3"
+                  data-testid="character-import-preview-item">
+                  <div className="flex items-start gap-3">
+                    {item.avatarUrl ? (
+                      <img
+                        src={item.avatarUrl}
+                        alt={item.name}
+                        className="h-12 w-12 rounded-md object-cover border border-border"
+                      />
+                    ) : (
+                      <div className="flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface">
+                        <UserCircle2 className="h-6 w-6 text-text-muted" />
                       </div>
                     )}
-                    <div className="text-xs text-text-subtle">
-                      {t("settings:manageCharacters.import.previewMeta", {
-                        defaultValue: "Fields: {{fields}} · Tags: {{tags}}",
-                        fields: item.fieldCount,
-                        tags: item.tagCount
-                      })}
-                    </div>
-                    {item.parseError && (
-                      <div className="text-xs text-danger">
-                        {t(item.parseError.key, {
-                          defaultValue: item.parseError.fallback,
-                          ...(item.parseError.values || {})
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-sm text-text">
+                          {item.name}
+                        </span>
+                        <span className="text-xs text-text-subtle uppercase">
+                          {item.format}
+                        </span>
+                        <Tag
+                          color={getImportQueueStateColor(runtimeState)}
+                          className="m-0"
+                          data-testid={`character-import-status-${runtimeState}`}>
+                          {getImportQueueStateLabel(runtimeState)}
+                        </Tag>
+                      </div>
+                      <div className="text-xs text-text-muted">{item.fileName}</div>
+                      {item.description && (
+                        <div className="text-sm text-text line-clamp-2">
+                          {item.description}
+                        </div>
+                      )}
+                      <div className="text-xs text-text-subtle">
+                        {t("settings:manageCharacters.import.previewMeta", {
+                          defaultValue: "Fields: {{fields}} · Tags: {{tags}}",
+                          fields: item.fieldCount,
+                          tags: item.tagCount
                         })}
                       </div>
-                    )}
+                      {item.parseError && (
+                        <div className="text-xs text-danger">
+                          {t(item.parseError.key, {
+                            defaultValue: item.parseError.fallback,
+                            ...(item.parseError.values || {})
+                          })}
+                        </div>
+                      )}
+                      {runtimeMessage && !item.parseError && (
+                        <div
+                          className={`text-xs ${
+                            runtimeState === "failure"
+                              ? "text-danger"
+                              : runtimeState === "success"
+                                ? "text-text"
+                                : "text-text-subtle"
+                          }`}>
+                          {runtimeMessage}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </Modal>
@@ -7669,6 +8572,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           form: createForm,
           mode: "create",
           initialValues: { prompt_preset: DEFAULT_CHARACTER_PROMPT_PRESET },
+          worldBookFieldContext: {
+            options: worldBookOptions,
+            loading: worldBookOptionsLoading,
+            editCharacterNumericId
+          },
           isSubmitting: creating,
           submitButtonClassName: "mt-4",
           submitPendingLabel: t("settings:manageCharacters.form.btnSave.saving", {
@@ -7713,6 +8621,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 editForm.resetFields()
                 setEditId(null)
                 setEditVersion(null)
+                editWorldBooksInitializedRef.current = false
                 setEditFormDirty(false)
                 setShowEditSystemPromptExample(false)
                 setTimeout(() => {
@@ -7725,6 +8634,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             editForm.resetFields()
             setEditId(null)
             setEditVersion(null)
+            editWorldBooksInitializedRef.current = false
             setShowEditSystemPromptExample(false)
             setTimeout(() => {
               lastEditTriggerRef.current?.focus()
@@ -7815,6 +8725,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         {renderSharedCharacterForm({
           form: editForm,
           mode: "edit",
+          worldBookFieldContext: {
+            options: worldBookOptions,
+            loading: worldBookOptionsLoading,
+            editCharacterNumericId
+          },
           isSubmitting: updating,
           submitButtonClassName: "w-full",
           submitPendingLabel: t("settings:manageCharacters.form.btnEdit.saving", {
@@ -8198,6 +9113,117 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               </div>
             )}
         </div>
+      </Modal>
+
+      <Modal
+        title={
+          <h2 className="m-0 text-base font-semibold text-text">
+            {t("settings:manageCharacters.compare.title", {
+              defaultValue: "Compare characters"
+            })}
+          </h2>
+        }
+        open={compareModalOpen}
+        onCancel={closeCompareModal}
+        width={960}
+        rootClassName="characters-motion-modal"
+        footer={[
+          <Button
+            key="copy"
+            icon={<Copy className="h-4 w-4" />}
+            onClick={() => {
+              void handleCopyComparisonSummary()
+            }}
+            disabled={!compareCharacters}>
+            {t("settings:manageCharacters.compare.copySummary", {
+              defaultValue: "Copy summary"
+            })}
+          </Button>,
+          <Button
+            key="export"
+            icon={<Download className="h-4 w-4" />}
+            onClick={handleExportComparisonSummary}
+            disabled={!compareCharacters}>
+            {t("settings:manageCharacters.compare.exportSummary", {
+              defaultValue: "Export summary"
+            })}
+          </Button>,
+          <Button key="close" onClick={closeCompareModal}>
+            {t("common:close", { defaultValue: "Close" })}
+          </Button>
+        ]}>
+        {!compareCharacters ? (
+          <Skeleton active paragraph={{ rows: 6 }} />
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-2 sm:grid-cols-2">
+              {compareCharacters.map((character, idx) => (
+                <div
+                  key={String(character?.id || character?.name || idx)}
+                  className="rounded-md border border-border bg-surface2 p-3">
+                  <div className="text-xs uppercase text-text-subtle">
+                    {idx === 0
+                      ? t("settings:manageCharacters.compare.left", {
+                          defaultValue: "Left character"
+                        })
+                      : t("settings:manageCharacters.compare.right", {
+                          defaultValue: "Right character"
+                        })}
+                  </div>
+                  <div className="text-sm font-semibold text-text">
+                    {String(character?.name || character?.id || "Untitled")}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Alert
+              type="info"
+              showIcon
+              title={t("settings:manageCharacters.compare.changedCount", {
+                defaultValue: "{{changed}} of {{total}} tracked fields differ",
+                changed: changedComparisonRows.length,
+                total: comparisonRows.length
+              })}
+            />
+
+            <div className="grid grid-cols-[140px_1fr_1fr] gap-2 px-1 text-xs font-medium uppercase tracking-wide text-text-subtle">
+              <span>
+                {t("settings:manageCharacters.compare.fieldColumn", {
+                  defaultValue: "Field"
+                })}
+              </span>
+              <span>
+                {t("settings:manageCharacters.compare.leftColumn", {
+                  defaultValue: "Left"
+                })}
+              </span>
+              <span>
+                {t("settings:manageCharacters.compare.rightColumn", {
+                  defaultValue: "Right"
+                })}
+              </span>
+            </div>
+
+            <div className="max-h-[55vh] overflow-y-auto rounded-md border border-border">
+              {comparisonRows.map((row) => (
+                <div
+                  key={row.field}
+                  className={`grid grid-cols-[140px_1fr_1fr] gap-2 border-b border-border p-2 text-sm last:border-b-0 ${
+                    row.different ? "bg-primary/5" : "bg-surface"
+                  }`}>
+                  <div className="font-medium text-text-muted">{row.label}</div>
+                  <pre className="whitespace-pre-wrap break-words font-sans text-text">
+                    {row.leftValue}
+                  </pre>
+                  <pre className="whitespace-pre-wrap break-words font-sans text-text">
+                    {row.rightValue}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal

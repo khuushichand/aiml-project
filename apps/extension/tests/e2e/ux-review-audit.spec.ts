@@ -8,6 +8,7 @@
  * Usage: bun run test:e2e ux-review-audit
  */
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -459,7 +460,7 @@ test.afterAll(async () => {
 test.describe('Options Page Screenshots', () => {
   for (const route of OPTIONS_ROUTES) {
     test(`capture ${route.name}`, async () => {
-      const { context, page, optionsUrl } = await launchWithExtension('', {
+      const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
         seedConfig: withAllFeaturesEnabled({
           serverUrl: LIVE_SERVER_URL,
           authMode: 'single-user',
@@ -501,7 +502,7 @@ test.describe('Options Page Screenshots', () => {
 test.describe('Sidepanel Screenshots', () => {
   for (const route of SIDEPANEL_ROUTES) {
     test(`capture ${route.name}`, async () => {
-      const { context, page, openSidepanel } = await launchWithExtension('', {
+      const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
         seedConfig: withAllFeaturesEnabled({
           serverUrl: LIVE_SERVER_URL,
           authMode: 'single-user',
@@ -548,7 +549,7 @@ test.describe('Sidepanel Screenshots', () => {
 
 test.describe('State Captures', () => {
   test('capture unconfigured state', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled()
       // No serverUrl = unconfigured
     })
@@ -586,7 +587,7 @@ test.describe('State Captures', () => {
   })
 
   test('capture error state (unreachable server)', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: 'http://localhost:9999', // Non-existent
         authMode: 'single-user',
@@ -643,7 +644,7 @@ test.describe('State Captures', () => {
   })
 
   test('capture connected state', async () => {
-    const { context, page } = await launchWithExtension('', {
+    const { context, page } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -676,7 +677,7 @@ test.describe('State Captures', () => {
 
 test.describe('Interaction Flows', () => {
   test('onboarding wizard flow', async () => {
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled()
     })
 
@@ -708,7 +709,7 @@ test.describe('Interaction Flows', () => {
   })
 
   test('chat message flow', async () => {
-    const { context, page, openSidepanel } = await launchWithExtension('', {
+    const { context, page, openSidepanel } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -764,7 +765,7 @@ test.describe('Interaction Flows', () => {
   })
 
   test('settings navigation flow', async () => {
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -813,7 +814,7 @@ test.describe('Interaction Flows', () => {
   })
 
   test('mode switching via header', async () => {
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -856,7 +857,7 @@ test.describe('Interaction Flows', () => {
   })
 
   test('keyboard shortcuts', async () => {
-    const { context, page, optionsUrl } = await launchWithExtension('', {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
       seedConfig: withAllFeaturesEnabled({
         serverUrl: LIVE_SERVER_URL,
         authMode: 'single-user',
@@ -919,7 +920,7 @@ test.describe('Empty States', () => {
 
   for (const route of emptyStateRoutes) {
     test(`capture ${route.name} empty state`, async () => {
-      const { context, page, optionsUrl } = await launchWithExtension('', {
+      const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, '', {
         seedConfig: withAllFeaturesEnabled({
           serverUrl: LIVE_SERVER_URL,
           authMode: 'single-user',

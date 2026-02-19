@@ -7,17 +7,32 @@ import type { Flashcard } from "@/services/flashcards"
 import {
   useDecksQuery,
   useManageQuery,
+  useTagSuggestionsQuery,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
   useCardsKeyboardNav,
-  useDebouncedFormField
+  useDebouncedFormField,
+  getManageServerOrderBy
 } from "../../hooks"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../../constants"
+import { FLASHCARDS_LAYOUT_GUARDRAILS } from "../../constants/layout-guardrails"
 import { getFlashcard, updateFlashcard } from "@/services/flashcards"
 
 const showUndoNotificationMock = vi.fn()
 const updateMutationMock = vi.fn()
+const { trackErrorRecoveryTelemetryMock } = vi.hoisted(() => ({
+  trackErrorRecoveryTelemetryMock: vi.fn().mockResolvedValue(undefined)
+}))
+const messageSpies = {
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warning: vi.fn(),
+  loading: vi.fn(),
+  open: vi.fn(),
+  destroy: vi.fn()
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -42,6 +57,10 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("@/utils/flashcards-error-recovery-telemetry", () => ({
+  trackFlashcardsErrorRecoveryTelemetry: trackErrorRecoveryTelemetryMock
+}))
+
 vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query")
   return {
@@ -53,15 +72,7 @@ vi.mock("@tanstack/react-query", async () => {
 })
 
 vi.mock("@/hooks/useAntdMessage", () => ({
-  useAntdMessage: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    loading: vi.fn(),
-    open: vi.fn(),
-    destroy: vi.fn()
-  })
+  useAntdMessage: () => messageSpies
 }))
 
 vi.mock("@/hooks/useUndoNotification", () => ({
@@ -77,11 +88,13 @@ vi.mock("@/components/Common/confirm-danger", () => ({
 vi.mock("../../hooks", () => ({
   useDecksQuery: vi.fn(),
   useManageQuery: vi.fn(),
+  useTagSuggestionsQuery: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
   useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
   useCardsKeyboardNav: vi.fn(),
-  useDebouncedFormField: vi.fn(() => undefined)
+  useDebouncedFormField: vi.fn(() => undefined),
+  getManageServerOrderBy: vi.fn(() => "due_at")
 }))
 
 vi.mock("../../components", async () => {
@@ -166,6 +179,8 @@ const sampleCard: Flashcard = {
 describe("ManageTab stage3 undo controls", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
+    trackErrorRecoveryTelemetryMock.mockClear()
+    Object.values(messageSpies).forEach((spy) => spy.mockReset())
     await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
 
     vi.mocked(useDecksQuery).mockReturnValue({
@@ -197,6 +212,10 @@ describe("ManageTab stage3 undo controls", () => {
       },
       isFetching: false
     } as any)
+    vi.mocked(useTagSuggestionsQuery).mockReturnValue({
+      data: ["biology", "chemistry"],
+      isLoading: false
+    } as any)
     vi.mocked(useUpdateFlashcardMutation).mockReturnValue({
       mutateAsync: updateMutationMock,
       isPending: false
@@ -211,6 +230,37 @@ describe("ManageTab stage3 undo controls", () => {
     } as any)
     vi.mocked(useCardsKeyboardNav).mockImplementation(() => undefined)
     vi.mocked(useDebouncedFormField).mockReturnValue(undefined as any)
+    vi.mocked(getManageServerOrderBy).mockReturnValue("due_at")
+  })
+
+  it("keeps the top bar free of primary CTAs while managing cards", () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    const topbarPrimaryButtons = screen
+      .getByTestId("flashcards-manage-topbar")
+      .querySelectorAll(".ant-btn-primary")
+    expect(topbarPrimaryButtons).toHaveLength(
+      FLASHCARDS_LAYOUT_GUARDRAILS.manage.maxTopbarPrimaryCtas.active
+    )
+  })
+
+  it("matches baseline snapshot for cards view with active selection", () => {
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId(`flashcard-item-${sampleCard.uuid}-select`))
+    expect(screen.getByTestId("flashcards-manage-selection-summary")).toMatchSnapshot()
   })
 
   it("offers undo for single-card edits", async () => {
@@ -246,6 +296,47 @@ describe("ManageTab stage3 undo controls", () => {
     expect(undoCall.update.deck_id).toBe(1)
     expect(undoCall.update.front).toBe("Front prompt")
     expect(undoCall.update.expected_version).toBe(5)
+  }, 15000)
+
+  it("shows explicit conflict guidance when an edit hits version mismatch", async () => {
+    vi.mocked(getFlashcard)
+      .mockResolvedValueOnce({ ...sampleCard })
+      .mockResolvedValueOnce({
+        ...sampleCard,
+        version: 5,
+        front: "Remote updated front"
+      })
+    updateMutationMock.mockRejectedValueOnce({
+      status: 409,
+      message: "Version mismatch: expected 4 got 5"
+    })
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    fireEvent.click(screen.getByText("Action Edit"))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(messageSpies.warning).toHaveBeenCalled()
+    })
+    expect(getFlashcard).toHaveBeenCalledTimes(2)
+    const warningMessage = String(messageSpies.warning.mock.calls.at(-1)?.[0] || "")
+    expect(warningMessage).toContain("FLASHCARDS_VERSION_CONFLICT")
+    expect(warningMessage).toContain("Reloaded")
+    expect(messageSpies.error).not.toHaveBeenCalled()
+    expect(trackErrorRecoveryTelemetryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "flashcards_recovered_by_reload",
+        surface: "cards",
+        error_code: "FLASHCARDS_VERSION_CONFLICT"
+      })
+    )
   }, 15000)
 
   it("offers undo for move operations", async () => {
@@ -288,6 +379,74 @@ describe("ManageTab stage3 undo controls", () => {
     expect(vi.mocked(updateFlashcard).mock.calls[1][1]).toMatchObject({
       deck_id: 1,
       expected_version: 9
+    })
+  }, 15000)
+
+  it("applies bulk add tag to selected cards", async () => {
+    vi.mocked(getFlashcard).mockResolvedValueOnce({
+      ...sampleCard,
+      version: 11,
+      tags: ["biology"]
+    })
+    vi.mocked(updateFlashcard).mockResolvedValue(undefined as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId(`flashcard-item-${sampleCard.uuid}-select`))
+    fireEvent.click(screen.getByRole("button", { name: "Add tag" }))
+    fireEvent.change(screen.getByTestId("flashcards-bulk-tag-input"), {
+      target: { value: "chemistry chapter-1" }
+    })
+    const addTagButtons = screen.getAllByRole("button", { name: "Add tag" })
+    fireEvent.click(addTagButtons[addTagButtons.length - 1])
+
+    await waitFor(() => {
+      expect(updateFlashcard).toHaveBeenCalledTimes(1)
+    })
+    expect(vi.mocked(updateFlashcard).mock.calls[0][0]).toBe(sampleCard.uuid)
+    expect(vi.mocked(updateFlashcard).mock.calls[0][1]).toMatchObject({
+      tags: ["biology", "chemistry", "chapter-1"],
+      expected_version: 11
+    })
+  }, 15000)
+
+  it("applies bulk remove tag to selected cards case-insensitively", async () => {
+    vi.mocked(getFlashcard).mockResolvedValueOnce({
+      ...sampleCard,
+      version: 14,
+      tags: ["biology", "Chemistry", "review"]
+    })
+    vi.mocked(updateFlashcard).mockResolvedValue(undefined as any)
+
+    render(
+      <ManageTab
+        onNavigateToImport={() => {}}
+        onReviewCard={() => {}}
+        isActive={false}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId(`flashcard-item-${sampleCard.uuid}-select`))
+    fireEvent.click(screen.getByRole("button", { name: "Remove tag" }))
+    fireEvent.change(screen.getByTestId("flashcards-bulk-tag-input"), {
+      target: { value: "chemistry, REVIEW" }
+    })
+    const removeTagButtons = screen.getAllByRole("button", { name: "Remove tag" })
+    fireEvent.click(removeTagButtons[removeTagButtons.length - 1])
+
+    await waitFor(() => {
+      expect(updateFlashcard).toHaveBeenCalledTimes(1)
+    })
+    expect(vi.mocked(updateFlashcard).mock.calls[0][0]).toBe(sampleCard.uuid)
+    expect(vi.mocked(updateFlashcard).mock.calls[0][1]).toMatchObject({
+      tags: ["biology"],
+      expected_version: 14
     })
   }, 15000)
 })

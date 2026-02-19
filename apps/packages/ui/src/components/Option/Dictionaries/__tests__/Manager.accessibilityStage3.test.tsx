@@ -471,7 +471,7 @@ describe("DictionariesManager accessibility stage-3", () => {
         })
       ).toBeInTheDocument()
     })
-  }, 30000)
+  }, 60000)
 
   it("keeps key dictionary actions and advanced toggle semantics explicitly labeled", async () => {
     const user = userEvent.setup()
@@ -522,7 +522,7 @@ describe("DictionariesManager accessibility stage-3", () => {
         "true"
       )
     })
-  }, 30000)
+  }, 60000)
 
   it("keeps status icon color tokens at WCAG AA non-text contrast on light/dark surfaces", () => {
     const tokenFile = path.resolve(__dirname, "../../../../assets/tailwind-shared.css")

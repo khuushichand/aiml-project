@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import {
+  Alert,
   Button,
+  Dropdown,
   Progress,
   Select,
   Space,
@@ -9,11 +11,12 @@ import {
   message
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import { Eye, RefreshCw } from "lucide-react"
+import { ChevronDown, Eye, RefreshCw } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
   fetchJobRuns,
+  cancelWatchlistRun,
   exportRunsCsv,
   fetchWatchlistJobs,
   fetchWatchlistRuns
@@ -22,12 +25,14 @@ import type { WatchlistJob, WatchlistRun } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
 import { RunDetailDrawer } from "./RunDetailDrawer"
-import { Download } from "lucide-react"
+import { Download, Square } from "lucide-react"
+import { mapWatchlistsError } from "../shared/watchlists-error"
 
 const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
 const RUNS_API_PAGE_SIZE = 200
 const RUNS_CSV_SERVER_PAGE_SIZE = 1000
+const RUNS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:runs:advanced-filters:v1"
 type RunsCsvTalliesMode = "none" | "per_run" | "aggregate"
 
 const resolveRunsCsvServerThreshold = (): number => {
@@ -58,6 +63,27 @@ const downloadCsv = (content: string, filename: string): void => {
   URL.revokeObjectURL(url)
 }
 
+const readStoredDisclosureState = (key: string): boolean | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw === "1") return true
+    if (raw === "0") return false
+  } catch {
+    // Ignore storage access errors and fall back to defaults.
+  }
+  return null
+}
+
+const persistDisclosureState = (key: string, value: boolean): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0")
+  } catch {
+    // Ignore storage access errors; disclosure defaults still work.
+  }
+}
+
 export const RunsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
 
@@ -76,6 +102,14 @@ export const RunsTab: React.FC = () => {
   const [exportingRunsCsv, setExportingRunsCsv] = useState(false)
   const [runsCsvTalliesMode, setRunsCsvTalliesMode] = useState<RunsCsvTalliesMode>("none")
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null)
+  const [cancellingRunIds, setCancellingRunIds] = useState<number[]>([])
+  const [failedCancelRunIds, setFailedCancelRunIds] = useState<number[]>([])
+  const [runsLoadError, setRunsLoadError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
+  const hasActiveRunsFilters = Boolean(runsJobFilter || runsStatusFilter)
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
+    const stored = readStoredDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY)
+    return stored ?? hasActiveRunsFilters
+  })
 
   // Store actions
   const setRuns = useWatchlistsStore((s) => s.setRuns)
@@ -87,6 +121,7 @@ export const RunsTab: React.FC = () => {
   const setPollingActive = useWatchlistsStore((s) => s.setPollingActive)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const closeRunDetail = useWatchlistsStore((s) => s.closeRunDetail)
+  const updateRunInList = useWatchlistsStore((s) => s.updateRunInList)
 
   // Refs for polling
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -121,6 +156,7 @@ export const RunsTab: React.FC = () => {
         : items
 
       setRuns(pagedItems, total)
+      setRunsLoadError(null)
 
       // Check if any runs are still running
       const hasRunning = items.some((r) => r.status === "running" || r.status === "pending")
@@ -128,9 +164,13 @@ export const RunsTab: React.FC = () => {
       setLastRefreshedAt(new Date().toISOString())
     } catch (err) {
       console.error("Failed to fetch runs:", err)
-      if (showLoading) {
-        message.error(t("watchlists:runs.fetchError", "Failed to load runs"))
-      }
+      setRunsLoadError(
+        mapWatchlistsError(err, {
+          t,
+          context: t("watchlists:runs.title", "Activity"),
+          fallbackMessage: t("watchlists:runs.fetchError", "Failed to load runs")
+        })
+      )
     } finally {
       if (showLoading) setRunsLoading(false)
     }
@@ -167,6 +207,16 @@ export const RunsTab: React.FC = () => {
     }
   }, [runsJobFilter, runsCsvTalliesMode])
 
+  useEffect(() => {
+    if (hasActiveRunsFilters && !showAdvancedFilters) {
+      setShowAdvancedFilters(true)
+    }
+  }, [hasActiveRunsFilters, showAdvancedFilters])
+
+  useEffect(() => {
+    persistDisclosureState(RUNS_ADVANCED_FILTERS_STORAGE_KEY, showAdvancedFilters)
+  }, [showAdvancedFilters])
+
   // Polling for active runs
   useEffect(() => {
     if (pollingActive) {
@@ -189,7 +239,7 @@ export const RunsTab: React.FC = () => {
   const getJobName = useCallback(
     (jobId: number) => {
       const job = jobs.find((j) => j.id === jobId)
-      return job?.name || `Job #${jobId}`
+      return job?.name || `Monitor #${jobId}`
     },
     [jobs]
   )
@@ -284,13 +334,13 @@ export const RunsTab: React.FC = () => {
     return `${rows.join("\n")}\n`
   }, [])
 
-  const fetchServerRunsCsvMerged = useCallback(async (): Promise<string> => {
+  const fetchServerRunsCsvMerged = useCallback(async (mode: RunsCsvTalliesMode): Promise<string> => {
     const scope: "global" | "job" = runsJobFilter ? "job" : "global"
     const q = !runsJobFilter && runsStatusFilter ? runsStatusFilter : undefined
     const talliesMode: RunsCsvTalliesMode =
-      runsJobFilter && runsCsvTalliesMode === "aggregate"
+      runsJobFilter && mode === "aggregate"
         ? "per_run"
-        : runsCsvTalliesMode
+        : mode
     if (scope === "global" && talliesMode === "aggregate") {
       return exportRunsCsv({
         scope,
@@ -335,20 +385,21 @@ export const RunsTab: React.FC = () => {
     }
     if (!header) return ""
     return `${[header, ...dataRows].join("\n")}\n`
-  }, [runsCsvTalliesMode, runsJobFilter, runsStatusFilter])
+  }, [runsJobFilter, runsStatusFilter])
 
-  const handleExportRunsCsv = useCallback(async () => {
+  const handleExportRunsCsv = useCallback(async (modeOverride?: RunsCsvTalliesMode) => {
     try {
       setExportingRunsCsv(true)
       const threshold = resolveRunsCsvServerThreshold()
       const rowEstimate = Math.max(Number(runsTotal || 0), Array.isArray(runs) ? runs.length : 0)
+      const selectedMode = modeOverride ?? runsCsvTalliesMode
       const talliesMode: RunsCsvTalliesMode =
-        runsJobFilter && runsCsvTalliesMode === "aggregate"
+        runsJobFilter && selectedMode === "aggregate"
           ? "per_run"
-          : runsCsvTalliesMode
+          : selectedMode
       const preferServerCsv = talliesMode !== "none" || rowEstimate >= threshold
       const csv = preferServerCsv
-        ? await fetchServerRunsCsvMerged()
+        ? await fetchServerRunsCsvMerged(selectedMode)
         : toRunsCsv(await fetchAllRunsForClientCsv())
       if (!csv || !csv.trim()) {
         message.warning(t("watchlists:runs.exportEmpty", "No runs available to export"))
@@ -380,10 +431,29 @@ export const RunsTab: React.FC = () => {
     toRunsCsv
   ])
 
-  // Table columns
-  const columns: ColumnsType<WatchlistRun> = [
+  const exportModeOptions: Array<{
+    value: RunsCsvTalliesMode
+    label: string
+    disabled?: boolean
+  }> = [
+    { value: "none", label: t("watchlists:runs.exportMode.standard", "Standard CSV") },
+    { value: "per_run", label: t("watchlists:runs.exportMode.perRun", "Per-run tallies") },
     {
-      title: t("watchlists:runs.columns.job", "Job"),
+      value: "aggregate",
+      label: t("watchlists:runs.exportMode.aggregate", "Global tallies summary"),
+      disabled: Boolean(runsJobFilter)
+    }
+  ]
+
+  const activeExportModeLabel = (
+    exportModeOptions.find((option) => option.value === runsCsvTalliesMode && !option.disabled)?.label ||
+    exportModeOptions[0].label
+  )
+
+  // Table columns
+  const allColumns: ColumnsType<WatchlistRun> = [
+    {
+      title: t("watchlists:runs.columns.job", "Monitor"),
       key: "job",
       width: 200,
       ellipsis: true,
@@ -485,20 +555,91 @@ export const RunsTab: React.FC = () => {
     {
       title: t("watchlists:runs.columns.actions", "Actions"),
       key: "actions",
-      width: 80,
+      width: 140,
       align: "center",
-      render: (_, record) => (
-        <Tooltip title={t("watchlists:runs.viewDetails", "View Details")}>
-          <Button
-            type="text"
-            size="small"
-            icon={<Eye className="h-4 w-4" />}
-            onClick={() => openRunDetail(record.id)}
-          />
-        </Tooltip>
-      )
+      render: (_, record) => {
+        const status = String(record.status || "").toLowerCase()
+        const isCancellable = status === "running" || status === "pending" || status === "queued"
+        const cancelling = cancellingRunIds.includes(record.id)
+        const cancelFailed = failedCancelRunIds.includes(record.id)
+        return (
+          <Space size={4}>
+          <Tooltip title={t("watchlists:runs.viewDetails", "View Details")}>
+            <Button
+              type="text"
+              size="small"
+              aria-label={t("watchlists:runs.viewDetails", "View Details")}
+              icon={<Eye className="h-4 w-4" />}
+              onClick={() => openRunDetail(record.id)}
+            />
+          </Tooltip>
+            {isCancellable && (
+              <Tooltip
+                title={
+                  cancelling
+                    ? t("watchlists:runs.cancelling", "Cancelling...")
+                    : cancelFailed
+                      ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
+                      : t("watchlists:runs.cancelRun", "Cancel run")
+                }
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  loading={cancelling}
+                  aria-label={
+                    cancelling
+                      ? t("watchlists:runs.cancelling", "Cancelling...")
+                      : cancelFailed
+                        ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
+                        : t("watchlists:runs.cancelRun", "Cancel run")
+                  }
+                  icon={!cancelling ? <Square className="h-4 w-4" /> : undefined}
+                  data-testid={`watchlists-run-cancel-${record.id}`}
+                  onClick={async () => {
+                    if (cancelling) return
+                    setCancellingRunIds((prev) => (prev.includes(record.id) ? prev : [...prev, record.id]))
+                    setFailedCancelRunIds((prev) => prev.filter((id) => id !== record.id))
+                    try {
+                      const result = await cancelWatchlistRun(record.id)
+                      if (!result?.cancelled) {
+                        setFailedCancelRunIds((prev) => (prev.includes(record.id) ? prev : [...prev, record.id]))
+                        message.error(
+                          t("watchlists:runs.cancelRunError", "Failed to cancel run")
+                        )
+                        return
+                      }
+                      updateRunInList(record.id, {
+                        status: "cancelled" as any,
+                        finished_at: new Date().toISOString(),
+                        error_msg: "cancelled_by_user"
+                      })
+                      message.success(
+                        t("watchlists:runs.cancelRunSuccess", "Run cancelled")
+                      )
+                    } catch (err) {
+                      console.error("Failed to cancel run:", err)
+                      setFailedCancelRunIds((prev) => (prev.includes(record.id) ? prev : [...prev, record.id]))
+                      message.error(
+                        t("watchlists:runs.cancelRunError", "Failed to cancel run")
+                      )
+                    } finally {
+                      setCancellingRunIds((prev) => prev.filter((id) => id !== record.id))
+                    }
+                  }}
+                />
+              </Tooltip>
+            )}
+          </Space>
+        )
+      }
     }
   ]
+  const defaultColumnKeys = new Set(["job", "status", "started_at", "actions"])
+  const columns = showAdvancedFilters
+    ? allColumns
+    : allColumns.filter((column) => defaultColumnKeys.has(String(column.key || column.dataIndex || "")))
 
   // Status options for filter
   const statusOptions = [
@@ -508,31 +649,84 @@ export const RunsTab: React.FC = () => {
     { value: "failed", label: "Failed" },
     { value: "cancelled", label: "Cancelled" }
   ]
+  const activeStatusLabel = statusOptions.find((option) => option.value === runsStatusFilter)?.label
+  const activeRunsFilterSummary = [
+    runsJobFilter
+      ? t("watchlists:runs.activeFiltersJob", "Monitor: {{name}}", {
+          name: getJobName(Number(runsJobFilter))
+        })
+      : null,
+    activeStatusLabel
+      ? t("watchlists:runs.activeFiltersStatus", "Status: {{status}}", {
+          status: activeStatusLabel
+        })
+      : null
+  ]
+    .filter(Boolean)
+    .join(" • ")
 
   return (
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Select
-            placeholder={t("watchlists:runs.filterByJob", "Filter by job")}
-            value={runsJobFilter}
-            onChange={setRunsJobFilter}
-            allowClear
-            className="w-48"
-            options={jobs.map((j) => ({
-              label: j.name,
-              value: j.id
-            }))}
-          />
-          <Select
-            placeholder={t("watchlists:runs.filterByStatus", "Filter by status")}
-            value={runsStatusFilter}
-            onChange={setRunsStatusFilter}
-            allowClear
-            className="w-36"
-            options={statusOptions}
-          />
+          <Button
+            type={showAdvancedFilters ? "default" : "dashed"}
+            size="small"
+            data-testid="watchlists-runs-advanced-toggle"
+            onClick={() => setShowAdvancedFilters((prev) => !prev)}
+          >
+            {showAdvancedFilters
+              ? t("watchlists:runs.hideAdvancedFilters", "Hide advanced filters")
+              : t("watchlists:runs.showAdvancedFilters", "Show advanced filters")}
+          </Button>
+          {!showAdvancedFilters && hasActiveRunsFilters && (
+            <>
+              <span className="text-sm text-text-muted" data-testid="watchlists-runs-active-filters-summary">
+                {t("watchlists:runs.activeFilters", "Active filters")}: {activeRunsFilterSummary}
+              </span>
+              <Button
+                size="small"
+                type="text"
+                onClick={() => {
+                  setRunsJobFilter(null)
+                  setRunsStatusFilter(null)
+                }}
+              >
+                {t("common:clear", "Clear")}
+              </Button>
+            </>
+          )}
+          {showAdvancedFilters && (
+            <>
+              <Select
+                data-testid="watchlists-runs-job-filter"
+                placeholder={t("watchlists:runs.filterByJob", "Filter by monitor")}
+                value={runsJobFilter}
+                onChange={setRunsJobFilter}
+                allowClear
+                className="w-48"
+                options={jobs.map((j) => ({
+                  label: j.name,
+                  value: j.id
+                }))}
+              />
+              <Select
+                data-testid="watchlists-runs-status-filter"
+                placeholder={t("watchlists:runs.filterByStatus", "Filter by status")}
+                value={runsStatusFilter}
+                onChange={setRunsStatusFilter}
+                allowClear
+                className="w-36"
+                options={statusOptions}
+              />
+            </>
+          )}
+          {!showAdvancedFilters && (
+            <span className="text-xs text-text-subtle">
+              {t("watchlists:runs.metricsHint", "Showing core columns. Use advanced mode for run metrics.")}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {lastRefreshedAt && (
@@ -560,35 +754,63 @@ export const RunsTab: React.FC = () => {
           >
             {t("common:refresh", "Refresh")}
           </Button>
-          <Select
-            value={runsCsvTalliesMode}
-            onChange={(value) => setRunsCsvTalliesMode(value as RunsCsvTalliesMode)}
-            className="w-56"
-            data-testid="runs-csv-tallies-mode"
-            options={[
-              { value: "none", label: t("watchlists:runs.exportMode.standard", "Standard CSV") },
-              { value: "per_run", label: t("watchlists:runs.exportMode.perRun", "Per-run tallies") },
-              {
-                value: "aggregate",
-                label: t("watchlists:runs.exportMode.aggregate", "Global tallies summary"),
-                disabled: Boolean(runsJobFilter)
-              }
-            ]}
-          />
-          <Button
-            icon={<Download className="h-4 w-4" />}
-            onClick={handleExportRunsCsv}
-            loading={exportingRunsCsv}
-          >
-            {t("watchlists:runs.exportCsv", "Export CSV")}
-          </Button>
+          <div className="inline-flex items-center">
+            <Button
+              icon={<Download className="h-4 w-4" />}
+              onClick={() => void handleExportRunsCsv()}
+              loading={exportingRunsCsv}
+              data-testid="runs-csv-export-button"
+            >
+              {t("watchlists:runs.exportCsv", "Export CSV")} ({activeExportModeLabel})
+            </Button>
+            <Dropdown
+              menu={{
+                items: exportModeOptions.map((option) => ({
+                  key: option.value,
+                  label: option.label,
+                  disabled: option.disabled
+                })),
+                onClick: ({ key }) => {
+                  const nextMode = String(key) as RunsCsvTalliesMode
+                  setRunsCsvTalliesMode(nextMode)
+                  void handleExportRunsCsv(nextMode)
+                }
+              }}
+              trigger={["click"]}
+            >
+              <Button
+                aria-label={t("watchlists:runs.exportOptions", "Export options")}
+                icon={<ChevronDown className="h-4 w-4" />}
+                loading={exportingRunsCsv}
+                data-testid="runs-csv-export-options"
+              />
+            </Dropdown>
+          </div>
         </div>
       </div>
 
       {/* Description */}
       <div className="text-sm text-text-muted">
-        {t("watchlists:runs.description", "View execution history and logs for your watchlist jobs.")}
+        {t("watchlists:runs.description", "View execution history and logs for your watchlist monitors.")}
       </div>
+
+      {runsLoadError && (
+        <Alert
+          type={runsLoadError.severity}
+          showIcon
+          title={runsLoadError.title}
+          description={runsLoadError.description}
+          action={(
+            <Button
+              size="small"
+              onClick={() => void loadRuns()}
+              loading={runsLoading}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        />
+      )}
 
       {/* Table */}
       <Table

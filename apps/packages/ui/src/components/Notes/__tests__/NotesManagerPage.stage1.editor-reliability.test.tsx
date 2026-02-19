@@ -81,7 +81,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 }))
 
 vi.mock("@/services/note-keywords", () => ({
-  getAllNoteKeywords: vi.fn(async () => []),
+  getAllNoteKeywordStats: vi.fn(async () => []),
   searchNoteKeywords: vi.fn(async () => [])
 }))
 
@@ -197,6 +197,42 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
   it("saves with Ctrl+S and Cmd+S keyboard shortcuts", async () => {
     renderPage()
 
+    const titleInput = screen.getByPlaceholderText("Title")
+    const contentInput = screen.getByPlaceholderText(
+      "Write your note here... (Markdown supported)"
+    )
+
+    fireEvent.change(titleInput, {
+      target: { value: "Shortcut note" }
+    })
+    fireEvent.change(contentInput, {
+      target: { value: "Saved from keyboard" }
+    })
+
+    fireEvent.focus(contentInput)
+    fireEvent.keyDown(contentInput, { key: "s", ctrlKey: true })
+
+    await waitFor(() => {
+      expect(createCalls()).toHaveLength(1)
+    })
+
+    expect(mockMessageSuccess).toHaveBeenCalledWith("Note created")
+
+    fireEvent.change(contentInput, {
+      target: { value: "Updated via cmd shortcut" }
+    })
+
+    fireEvent.focus(titleInput)
+    fireEvent.keyDown(titleInput, { key: "s", metaKey: true })
+
+    await waitFor(() => {
+      expect(updateCalls()).toHaveLength(1)
+    })
+  })
+
+  it("does not save when Ctrl/Cmd+S is pressed outside the editor region", async () => {
+    renderPage()
+
     fireEvent.change(screen.getByPlaceholderText("Title"), {
       target: { value: "Shortcut note" }
     })
@@ -207,25 +243,13 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
       }
     )
 
-    fireEvent.keyDown(window, { key: "s", ctrlKey: true })
+    const searchInput = screen.getByPlaceholderText("Search titles & content...")
+    fireEvent.focus(searchInput)
+    fireEvent.keyDown(searchInput, { key: "s", ctrlKey: true })
+    fireEvent.keyDown(searchInput, { key: "s", metaKey: true })
 
     await waitFor(() => {
-      expect(createCalls()).toHaveLength(1)
-    })
-
-    expect(mockMessageSuccess).toHaveBeenCalledWith("Note created")
-
-    fireEvent.change(
-      screen.getByPlaceholderText("Write your note here... (Markdown supported)"),
-      {
-        target: { value: "Updated via cmd shortcut" }
-      }
-    )
-
-    fireEvent.keyDown(window, { key: "s", metaKey: true })
-
-    await waitFor(() => {
-      expect(updateCalls()).toHaveLength(1)
+      expect(createCalls()).toHaveLength(0)
     })
   })
 

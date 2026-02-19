@@ -21,7 +21,16 @@ Finding IDs: `H10-1` through `H10-3`
 - Component tests for first-run onboarding visibility and dismiss persistence.
 - E2E tests for each first-run branch completing successfully.
 - Accessibility tests for onboarding focus order and screen-reader copy.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added first-run onboarding guidance card to the Study tab empty state with concise spaced-repetition workflow copy.
+- Added explicit first-run action CTAs for create, import, and generate-from-text pathways.
+- Added persisted onboarding dismissal preference with an inline "Show study guide" reopen entry point.
+
+**Validation (2026-02-18)**:
+- `source .venv/bin/activate && cd apps/packages/ui && bunx vitest run src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx`
+- `source .venv/bin/activate && cd apps/packages/ui && bunx vitest run src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.analytics-summary.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.cram-mode.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.edit-in-review.test.tsx`
 
 ## Stage 2: Contextual Authoring and Import Help
 **Goal**: Deliver help exactly where users need it during card creation and data transfer.
@@ -33,7 +42,16 @@ Finding IDs: `H10-1` through `H10-3`
 - Component tests for conditional help visibility by model/import mode.
 - Integration tests for help links from validation/import errors.
 - Regression tests ensuring help UI does not block normal workflows.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Verified existing inline cloze syntax helper + validation coverage in both create and edit drawers.
+- Added an expandable import help accordion with dedicated sections for accepted columns, delimiter troubleshooting, cloze syntax, and JSON field mapping.
+- Added contextual "View format help" links from import error guidance to jump users directly to the relevant help section.
+
+**Validation (2026-02-18)**:
+- `source .venv/bin/activate && cd apps/packages/ui && bunx vitest run src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx -u`
+- `source .venv/bin/activate && cd apps/packages/ui && bunx vitest run src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx`
 
 ## Stage 3: Durable Documentation and Support Loop
 **Goal**: Keep in-app guidance and docs synchronized as flashcards features expand.
@@ -45,7 +63,16 @@ Finding IDs: `H10-1` through `H10-3`
 - Link integrity tests for all in-app documentation anchors.
 - Docs smoke test to verify examples align with current accepted payload fields.
 - Process test/checklist validation in CI or PR template.
-**Status**: Not Started
+**Status**: Complete
+
+**Implementation Notes (2026-02-18)**:
+- Added dedicated user guide: `Docs/User_Guides/Flashcards_Study_Guide.md` (study loop, ratings/scheduling, cloze syntax, import/export, troubleshooting).
+- Added centralized versioned help URLs + section anchors in `apps/packages/ui/src/components/Flashcards/constants/help-links.ts`.
+- Wired in-app doc links from Study onboarding and Transfer import help surfaces to section-specific anchors.
+- Added flashcards docs-sync checklist item to `.github/pull_request_template.md`.
+
+**Validation (2026-02-18)**:
+- `source .venv/bin/activate && cd apps/packages/ui && bunx vitest run src/components/Flashcards/constants/__tests__/help-links.test.ts src/components/Flashcards/tabs/__tests__/ImportExportTab.import-results.test.tsx src/components/Flashcards/tabs/__tests__/ReviewTab.create-cta.test.tsx`
 
 ## Dependencies
 

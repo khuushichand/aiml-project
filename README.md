@@ -181,7 +181,7 @@ For now, use this repository checkout with the Makefile targets below.
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
-# make quickstart-install PYTHON=python3.12
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 
 # Docker: API only
 make quickstart-docker
@@ -198,7 +198,7 @@ make quickstart-docker-webui
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 make quickstart-install
 # If `python3` is older than 3.10 on your machine:
-# make quickstart-install PYTHON=python3.12
+# make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 ```
 
 This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts the server. Verify with:
@@ -206,7 +206,7 @@ This creates `tldw_Server_API/Config_Files/.env`, initializes auth, and starts t
 curl http://localhost:8000/health  # No auth needed!
 ```
 
-Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 ### Manual Setup
 
@@ -230,14 +230,18 @@ sudo apt install -y ffmpeg portaudio19-dev python3-pyaudio
 sudo dnf install -y ffmpeg portaudio-devel python3-pyaudio
 ```
 
+Windows prerequisites:
+- Install ffmpeg (for example with `winget` or Chocolatey).
+- Install PyAudio inside the activated venv with `pip install pyaudio`; if wheel/build fails, install Microsoft C++ Build Tools and retry.
+
 1) **Install**
 ```bash
 # macOS/Linux: choose a supported interpreter explicitly (3.12 recommended)
-python3.12 -m venv .venv  # or python3.11 / python3.10
+python3.12 -m venv .venv  # or python3.13 / python3.11 / python3.10
 source .venv/bin/activate
 
 # Windows (PowerShell)
-py -3.12 -m venv .venv
+py -3.12 -m venv .venv  # or -3.13 / -3.11 / -3.10
 .venv\Scripts\Activate.ps1
 
 # Confirm venv interpreter version
@@ -393,6 +397,18 @@ make quickstart-docker-webui
 ```
 
 Local WebUI development (API should already be running, for example via `make quickstart`):
+
+If Bun is not installed yet, install it first:
+```bash
+# macOS/Linux
+curl -fsSL https://bun.sh/install | bash
+
+# Windows (PowerShell)
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# Open a new terminal and verify:
+bun --version
+```
 
 1) From the repo root:
 ```bash

@@ -3,6 +3,7 @@ import { Tooltip, type TooltipProps } from "antd"
 import { StickyNote } from "lucide-react"
 import { useNotesDockStore } from "@/store/notes-dock"
 import { classNames } from "@/libs/class-name"
+import { useMobile } from "@/hooks/useMediaQuery"
 
 type NotesDockButtonProps = {
   className?: string
@@ -17,10 +18,15 @@ export const NotesDockButton: React.FC<NotesDockButtonProps> = ({
   ariaLabel = "Open Notes Dock",
   appearance = "ghost"
 }) => {
+  const shortcutHint = "Ctrl/Cmd+Shift+N"
+  const desktopHint = "Desktop only"
+  const isMobile = useMobile()
   const { isOpen, setOpen } = useNotesDockStore((state) => ({
     isOpen: state.isOpen,
     setOpen: state.setOpen
   }))
+
+  if (isMobile) return null
 
   const handleClick = () => {
     if (isOpen) {
@@ -52,11 +58,12 @@ export const NotesDockButton: React.FC<NotesDockButtonProps> = ({
         )
 
   return (
-    <Tooltip title={ariaLabel} placement={tooltipPlacement}>
+    <Tooltip title={`${ariaLabel} (${desktopHint} · ${shortcutHint})`} placement={tooltipPlacement}>
       <button
         type="button"
         onClick={handleClick}
         aria-label={ariaLabel}
+        aria-keyshortcuts="Control+Shift+N Meta+Shift+N"
         aria-pressed={isOpen}
         aria-haspopup="dialog"
         aria-expanded={isOpen}

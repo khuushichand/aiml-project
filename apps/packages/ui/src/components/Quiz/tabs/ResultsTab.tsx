@@ -2,36 +2,134 @@ import React from "react"
 import {
   Button,
   Card,
+  Checkbox,
   Select,
   Descriptions,
   Empty,
+  Input,
   List,
   Modal,
   Progress,
-  Spin,
+  Skeleton,
   Statistic,
   Tag,
-  Typography
+  Typography,
+  message
 } from "antd"
 import { useTranslation } from "react-i18next"
 import {
   CheckCircleOutlined,
+  BookOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
   EyeOutlined,
   RedoOutlined,
   TrophyOutlined
 } from "@ant-design/icons"
+import { useNavigate } from "react-router-dom"
 import { useAllAttemptsQuery, useAttemptQuery, useQuizzesQuery } from "../hooks"
+import {
+  useCreateDeckMutation,
+  useCreateFlashcardMutation,
+  useDecksQuery
+} from "@/components/Flashcards/hooks/useFlashcardQueries"
 import type { AnswerValue, QuestionPublic, QuizAnswer } from "@/services/quizzes"
+import { buildFlashcardsStudyRouteFromQuiz } from "@/services/tldw/quiz-flashcards-handoff"
 import type { TakeTabNavigationIntent } from "../navigation"
 import { RESULTS_FILTER_PREFS_KEY } from "../stateKeys"
+import { QuizMarkdown } from "../components/QuizMarkdown"
+import { SourceCitations } from "../components/SourceCitations"
+import { formatFillBlankAcceptedAnswers } from "../utils/fillBlankAnswer"
+import { formatMatchingAnswer } from "../utils/matchingAnswer"
 
 const { Text } = Typography
 
 const DEFAULT_PASSING_SCORE = 70
+const MISSED_FLASHCARD_CONVERSION_KEY = "quiz-results-missed-flashcards-v1"
+const ATTEMPT_FLASHCARD_DECK_MAP_KEY = "quiz-results-flashcard-deck-map-v1"
 type PassFilterKey = "all" | "pass" | "fail"
 type DateRangeFilterKey = "all" | "7d" | "30d" | "90d"
+type DeckTargetValue = number | "__new__" | null
+
+const normalizeMultiSelectAnswer = (value: unknown): number[] => {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(
+      value
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isFinite(entry) && entry >= 0)
+    )).sort((a, b) => a - b)
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) return normalizeMultiSelectAnswer(parsed)
+    } catch {
+      // Fall through to comma-separated parsing.
+    }
+    return normalizeMultiSelectAnswer(trimmed.split(","))
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return [Math.floor(value)]
+  }
+  return []
+}
+
+type ConvertedMissedFlashcards = Record<string, true>
+type AttemptFlashcardDeckMap = Record<string, number>
+
+const toMissedFlashcardKey = (attemptId: number, questionId: number) =>
+  `${attemptId}:${questionId}`
+
+const readConvertedMissedFlashcards = (): ConvertedMissedFlashcards => {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = window.sessionStorage.getItem(MISSED_FLASHCARD_CONVERSION_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object") return {}
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => value === true)
+    ) as ConvertedMissedFlashcards
+  } catch {
+    return {}
+  }
+}
+
+const writeConvertedMissedFlashcards = (value: ConvertedMissedFlashcards) => {
+  if (typeof window === "undefined") return
+  try {
+    window.sessionStorage.setItem(MISSED_FLASHCARD_CONVERSION_KEY, JSON.stringify(value))
+  } catch {
+    // Ignore session-storage write failures.
+  }
+}
+
+const readAttemptFlashcardDeckMap = (): AttemptFlashcardDeckMap => {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = window.sessionStorage.getItem(ATTEMPT_FLASHCARD_DECK_MAP_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object") return {}
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === "number" && value > 0)
+    ) as AttemptFlashcardDeckMap
+  } catch {
+    return {}
+  }
+}
+
+const writeAttemptFlashcardDeckMap = (value: AttemptFlashcardDeckMap) => {
+  if (typeof window === "undefined") return
+  try {
+    window.sessionStorage.setItem(ATTEMPT_FLASHCARD_DECK_MAP_KEY, JSON.stringify(value))
+  } catch {
+    // Ignore session-storage write failures.
+  }
+}
 
 type ResultsFilterPrefs = {
   page: number
@@ -86,6 +184,8 @@ interface ResultsTabProps {
 
 export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
   const { t } = useTranslation(["option", "common"])
+  const navigate = useNavigate()
+  const [messageApi, contextHolder] = message.useMessage()
 
   const [page, setPage] = React.useState(() => readStoredResultsFilterPrefs().page)
   const [pageSize, setPageSize] = React.useState(() => readStoredResultsFilterPrefs().pageSize)
@@ -99,6 +199,24 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     () => readStoredResultsFilterPrefs().dateRangeFilter
   )
   const [selectedAttemptId, setSelectedAttemptId] = React.useState<number | null>(null)
+  const [flashcardModalOpen, setFlashcardModalOpen] = React.useState(false)
+  const [selectedMissedQuestions, setSelectedMissedQuestions] = React.useState<Record<number, boolean>>({})
+  const [deckTarget, setDeckTarget] = React.useState<DeckTargetValue>(null)
+  const [newDeckName, setNewDeckName] = React.useState("")
+  const [convertedMissedFlashcards, setConvertedMissedFlashcards] = React.useState<ConvertedMissedFlashcards>(
+    () => readConvertedMissedFlashcards()
+  )
+  const [attemptFlashcardDeckMap, setAttemptFlashcardDeckMap] = React.useState<AttemptFlashcardDeckMap>(
+    () => readAttemptFlashcardDeckMap()
+  )
+
+  const { data: decksData, isLoading: decksLoading } = useDecksQuery({
+    enabled: selectedAttemptId != null
+  })
+  const createDeckMutation = useCreateDeckMutation()
+  const createFlashcardMutation = useCreateFlashcardMutation()
+  const flashcardMutationPending = createDeckMutation.isPending || createFlashcardMutation.isPending
+
   const attemptsQueryParams = React.useMemo(() => ({
     limit: 200,
     offset: 0,
@@ -120,12 +238,40 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     }
   }, [page, pageSize, quizFilterId, passFilter, dateRangeFilter])
 
+  React.useEffect(() => {
+    if (selectedAttemptId == null) {
+      setFlashcardModalOpen(false)
+    }
+  }, [selectedAttemptId])
+
+  const handleNavigateToFlashcardsStudy = React.useCallback(
+    (params: { quizId: number; attemptId: number }) => {
+      const route = buildFlashcardsStudyRouteFromQuiz({
+        quizId: params.quizId,
+        attemptId: params.attemptId,
+        deckId: attemptFlashcardDeckMap[String(params.attemptId)]
+      })
+      navigate(route)
+    },
+    [attemptFlashcardDeckMap, navigate]
+  )
+
   const { data: attemptsData, isLoading: attemptsLoading } = useAllAttemptsQuery({
     quiz_id: attemptsQueryParams.quiz_id
   })
+  const attemptedQuizIds = React.useMemo(() => {
+    const ids = new Set((attemptsData?.items ?? []).map((attempt) => attempt.quiz_id))
+    return Array.from(ids)
+  }, [attemptsData?.items])
+  const quizLookupLimit = React.useMemo(() => {
+    if (attemptedQuizIds.length === 0) return 20
+    return Math.min(100, Math.max(20, attemptedQuizIds.length * 3))
+  }, [attemptedQuizIds.length])
   const { data: quizzesData, isLoading: quizzesLoading } = useQuizzesQuery({
-    limit: 200,
+    limit: quizLookupLimit,
     offset: 0
+  }, {
+    enabled: !attemptsLoading
   })
   const {
     data: selectedAttemptDetails,
@@ -137,22 +283,45 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     { enabled: selectedAttemptId != null }
   )
 
+  const decks = decksData ?? []
+
   const attempts = attemptsData?.items ?? []
   const quizzes = quizzesData?.items ?? []
 
   const quizMap = React.useMemo(() => {
-    const map = new Map<number, { name: string; passingScore: number | null }>()
+    const map = new Map<number, { name: string; passingScore: number | null; mediaId: number | null }>()
     quizzes.forEach((q) => {
       map.set(q.id, {
         name: q.name,
-        passingScore: typeof q.passing_score === "number" ? q.passing_score : null
+        passingScore: typeof q.passing_score === "number" ? q.passing_score : null,
+        mediaId: typeof q.media_id === "number" ? q.media_id : null
+      })
+    })
+    attemptedQuizIds.forEach((id) => {
+      if (map.has(id)) return
+      map.set(id, {
+        name: `Quiz #${id}`,
+        passingScore: null,
+        mediaId: null
       })
     })
     return map
-  }, [quizzes])
+  }, [attemptedQuizIds, quizzes])
   const getPassingScoreForQuiz = React.useCallback((quizId: number) => {
     return quizMap.get(quizId)?.passingScore ?? DEFAULT_PASSING_SCORE
   }, [quizMap])
+  const quizFilterOptions = React.useMemo(() => ([
+    {
+      value: "all" as const,
+      label: t("option:quiz.filterAllQuizzes", { defaultValue: "All quizzes" })
+    },
+    ...[...attemptedQuizIds]
+      .sort((left, right) => left - right)
+      .map((quizId) => ({
+        value: quizId,
+        label: quizMap.get(quizId)?.name ?? `Quiz #${quizId}`
+      }))
+  ]), [attemptedQuizIds, quizMap, t])
 
   const filteredAttempts = React.useMemo(() => {
     const nowMs = Date.now()
@@ -387,12 +556,25 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
     window.URL.revokeObjectURL(url)
   }
 
-  const formatAnswerValue = (
+  const formatAnswerValue = React.useCallback((
     value: AnswerValue | null | undefined,
     question?: QuestionPublic
   ) => {
     if (value === null || value === undefined) {
       return t("option:quiz.noAnswer", { defaultValue: "No answer" })
+    }
+    if (question?.question_type === "fill_blank") {
+      const accepted = formatFillBlankAcceptedAnswers(value)
+      if (accepted.length > 1) {
+        return accepted.join(" / ")
+      }
+      return accepted[0] ?? String(value)
+    }
+    if (question?.question_type === "multi_select") {
+      const indices = normalizeMultiSelectAnswer(value)
+      if (indices.length === 0) return String(value)
+      const labels = indices.map((index) => question.options?.[index] ?? String(index))
+      return labels.join(" / ")
     }
     if (question?.question_type === "multiple_choice") {
       const index = Number(value)
@@ -401,13 +583,19 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       }
       return String(value)
     }
+    if (question?.question_type === "matching") {
+      return formatMatchingAnswer(value)
+    }
+    if (Array.isArray(value)) {
+      return value.join(" / ")
+    }
     if (question?.question_type === "true_false") {
       const normalized = String(value).trim().toLowerCase()
       if (normalized === "true") return t("option:quiz.true", { defaultValue: "True" })
       if (normalized === "false") return t("option:quiz.false", { defaultValue: "False" })
     }
     return String(value)
-  }
+  }, [t])
 
   const detailRows = React.useMemo(() => {
     if (!selectedAttemptDetails) return []
@@ -440,23 +628,376 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
       answer
     }))
   }, [selectedAttemptDetails, t])
+  const selectedAttemptMediaId = React.useMemo(() => {
+    if (!selectedAttemptDetails) return null
+    return quizMap.get(selectedAttemptDetails.quiz_id)?.mediaId ?? null
+  }, [quizMap, selectedAttemptDetails])
+
+  const missedQuestionEntries = React.useMemo(() => {
+    if (!selectedAttemptDetails) return []
+    const questionMap = new Map(
+      (selectedAttemptDetails.questions ?? []).map((question) => [question.id, question])
+    )
+
+    return (selectedAttemptDetails.answers ?? [])
+      .filter((answer) => answer.is_correct === false)
+      .map((answer) => {
+        const question = questionMap.get(answer.question_id)
+        const conversionKey = toMissedFlashcardKey(selectedAttemptDetails.id, answer.question_id)
+        return {
+          questionId: answer.question_id,
+          conversionKey,
+          questionText:
+            question?.question_text ||
+            t("option:quiz.questionFallbackLabel", {
+              defaultValue: "Question #{{id}}",
+              id: answer.question_id
+            }),
+          correctAnswerText: formatAnswerValue(answer.correct_answer, question),
+          userAnswerText: formatAnswerValue(answer.user_answer, question),
+          explanation: answer.explanation ?? null,
+          alreadyConverted: Boolean(convertedMissedFlashcards[conversionKey])
+        }
+      })
+  }, [convertedMissedFlashcards, formatAnswerValue, selectedAttemptDetails, t])
+
+  const hasMissedQuestions = missedQuestionEntries.length > 0
+  const selectedMissedQuestionCount = React.useMemo(() => {
+    return missedQuestionEntries.filter((entry) => selectedMissedQuestions[entry.questionId]).length
+  }, [missedQuestionEntries, selectedMissedQuestions])
+
+  React.useEffect(() => {
+    if (!flashcardModalOpen) return
+    if (deckTarget === null) {
+      setDeckTarget(decks[0]?.id ?? "__new__")
+    }
+  }, [deckTarget, decks, flashcardModalOpen])
+
+  const openFlashcardModal = React.useCallback(() => {
+    if (!selectedAttemptDetails) return
+    if (missedQuestionEntries.length === 0) {
+      messageApi.info(
+        t("option:quiz.noMissedQuestionsToConvert", {
+          defaultValue: "No missed questions to convert for this attempt."
+        })
+      )
+      return
+    }
+
+    const nextSelection = missedQuestionEntries.reduce<Record<number, boolean>>((acc, entry) => {
+      acc[entry.questionId] = !entry.alreadyConverted
+      return acc
+    }, {})
+
+    setSelectedMissedQuestions(nextSelection)
+    setDeckTarget(decks[0]?.id ?? "__new__")
+
+    const quizName =
+      quizMap.get(selectedAttemptDetails.quiz_id)?.name ?? `Quiz #${selectedAttemptDetails.quiz_id}`
+    setNewDeckName(`${quizName} - Missed Questions`)
+    setFlashcardModalOpen(true)
+  }, [decks, messageApi, missedQuestionEntries, quizMap, selectedAttemptDetails, t])
+
+  const handleCreateFlashcardsFromMissedQuestions = React.useCallback(async () => {
+    if (!selectedAttemptDetails) return
+
+    const selectedEntries = missedQuestionEntries.filter(
+      (entry) => selectedMissedQuestions[entry.questionId]
+    )
+
+    if (selectedEntries.length === 0) {
+      messageApi.warning(
+        t("option:quiz.selectAtLeastOneMissedQuestion", {
+          defaultValue: "Select at least one missed question."
+        })
+      )
+      return
+    }
+
+    const pendingEntries = selectedEntries.filter((entry) => !entry.alreadyConverted)
+    if (pendingEntries.length === 0) {
+      messageApi.info(
+        t("option:quiz.missedQuestionsAlreadyConverted", {
+          defaultValue: "Selected questions were already converted for this attempt."
+        })
+      )
+      return
+    }
+
+    let targetDeckId: number | null = null
+
+    if (deckTarget === "__new__" || deckTarget == null) {
+      const trimmedDeckName = newDeckName.trim()
+      if (!trimmedDeckName) {
+        messageApi.warning(
+          t("option:quiz.deckNameRequired", {
+            defaultValue: "Enter a deck name."
+          })
+        )
+        return
+      }
+      const createdDeck = await createDeckMutation.mutateAsync({
+        name: trimmedDeckName
+      })
+      targetDeckId = createdDeck.id
+    } else {
+      targetDeckId = deckTarget
+    }
+
+    const dedupedEntries = Array.from(
+      pendingEntries.reduce<Map<string, (typeof pendingEntries)[number]>>((acc, entry) => {
+        const dedupeKey = `${entry.questionText.trim().toLowerCase()}::${entry.correctAnswerText
+          .trim()
+          .toLowerCase()}`
+        if (!acc.has(dedupeKey)) {
+          acc.set(dedupeKey, entry)
+        }
+        return acc
+      }, new Map()).values()
+    )
+
+    const quizName =
+      quizMap.get(selectedAttemptDetails.quiz_id)?.name ?? `Quiz #${selectedAttemptDetails.quiz_id}`
+
+    try {
+      await Promise.all(
+        dedupedEntries.map((entry) =>
+          createFlashcardMutation.mutateAsync({
+            deck_id: targetDeckId,
+            front: entry.questionText,
+            back: `Correct answer: ${entry.correctAnswerText}${
+              entry.explanation ? `\n\nExplanation: ${entry.explanation}` : ""
+            }`,
+            notes: `Created from quiz "${quizName}" (attempt #${selectedAttemptDetails.id}). Your answer: ${entry.userAnswerText}`,
+            tags: ["quiz-missed", "quiz-review"],
+            source_ref_type: "manual",
+            source_ref_id: `quiz-attempt:${selectedAttemptDetails.id}:question:${entry.questionId}`
+          })
+        )
+      )
+
+      const updatedConversions = { ...convertedMissedFlashcards }
+      pendingEntries.forEach((entry) => {
+        updatedConversions[entry.conversionKey] = true
+      })
+      setConvertedMissedFlashcards(updatedConversions)
+      writeConvertedMissedFlashcards(updatedConversions)
+      const updatedAttemptDeckMap: AttemptFlashcardDeckMap = {
+        ...attemptFlashcardDeckMap
+      }
+      if (targetDeckId != null && targetDeckId > 0) {
+        updatedAttemptDeckMap[String(selectedAttemptDetails.id)] = targetDeckId
+      }
+      setAttemptFlashcardDeckMap(updatedAttemptDeckMap)
+      writeAttemptFlashcardDeckMap(updatedAttemptDeckMap)
+      setFlashcardModalOpen(false)
+
+      messageApi.success(
+        t("option:quiz.flashcardsCreatedFromMissed", {
+          defaultValue: "Created {{count}} flashcards from missed questions.",
+          count: dedupedEntries.length
+        })
+      )
+    } catch (error) {
+      messageApi.error(
+        t("option:quiz.flashcardsCreateFromMissedError", {
+          defaultValue: "Failed to create flashcards from missed questions."
+        })
+      )
+      if (error instanceof Error && error.message) {
+        console.error("[ResultsTab] Failed converting missed questions to flashcards:", error.message)
+      }
+    }
+  }, [
+    convertedMissedFlashcards,
+    createDeckMutation,
+    createFlashcardMutation,
+    deckTarget,
+    messageApi,
+    missedQuestionEntries,
+    newDeckName,
+    attemptFlashcardDeckMap,
+    quizMap,
+    selectedAttemptDetails,
+    selectedMissedQuestions,
+    t
+  ])
+
+  const renderFlashcardConversionModal = () => (
+    <Modal
+      title={t("option:quiz.createFlashcardsFromMissed", {
+        defaultValue: "Create Flashcards from Missed Questions"
+      })}
+      open={flashcardModalOpen}
+      onCancel={() => setFlashcardModalOpen(false)}
+      onOk={() => {
+        void handleCreateFlashcardsFromMissedQuestions()
+      }}
+      okText={t("option:quiz.createFlashcards", { defaultValue: "Create Flashcards" })}
+      okButtonProps={{
+        loading: flashcardMutationPending
+      }}
+      destroyOnHidden
+    >
+      {missedQuestionEntries.length === 0 ? (
+        <Empty
+          description={t("option:quiz.noMissedQuestionsToConvert", {
+            defaultValue: "No missed questions to convert for this attempt."
+          })}
+        />
+      ) : (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-text">
+              {t("option:quiz.flashcardDestination", {
+                defaultValue: "Destination deck"
+              })}
+            </div>
+            <Select<number | "__new__">
+              value={deckTarget ?? undefined}
+              onChange={(value) => setDeckTarget(value)}
+              loading={decksLoading}
+              options={[
+                ...decks.map((deck) => ({
+                  value: deck.id,
+                  label: deck.name
+                })),
+                {
+                  value: "__new__" as const,
+                  label: t("option:quiz.createNewDeck", {
+                    defaultValue: "Create new deck"
+                  })
+                }
+              ]}
+            />
+            {deckTarget === "__new__" && (
+              <Input
+                value={newDeckName}
+                onChange={(event) => setNewDeckName(event.target.value)}
+                placeholder={t("option:quiz.newDeckNamePlaceholder", {
+                  defaultValue: "e.g. Biology Basics - Missed Questions"
+                })}
+              />
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Checkbox
+              checked={
+                missedQuestionEntries.length > 0 &&
+                selectedMissedQuestionCount === missedQuestionEntries.length
+              }
+              indeterminate={
+                selectedMissedQuestionCount > 0 &&
+                selectedMissedQuestionCount < missedQuestionEntries.length
+              }
+              onChange={(event) => {
+                const checked = event.target.checked
+                const next = missedQuestionEntries.reduce<Record<number, boolean>>((acc, entry) => {
+                  acc[entry.questionId] = checked
+                  return acc
+                }, {})
+                setSelectedMissedQuestions(next)
+              }}
+            >
+              {t("option:quiz.selectAllMissedQuestions", {
+                defaultValue: "Select all missed questions"
+              })}
+            </Checkbox>
+
+            <List
+              dataSource={missedQuestionEntries}
+              renderItem={(entry) => (
+                <List.Item>
+                  <div className="w-full space-y-1">
+                    <Checkbox
+                      checked={Boolean(selectedMissedQuestions[entry.questionId])}
+                      onChange={(event) => {
+                        setSelectedMissedQuestions((previous) => ({
+                          ...previous,
+                          [entry.questionId]: event.target.checked
+                        }))
+                      }}
+                    >
+                      <span className="font-medium">{entry.questionText}</span>
+                    </Checkbox>
+                    <div className="pl-6 text-xs text-text-muted">
+                      {t("option:quiz.correctAnswerLabel", { defaultValue: "Correct answer" })}:{" "}
+                      {entry.correctAnswerText}
+                    </div>
+                    <div className="pl-6 text-xs text-text-subtle">
+                      {t("option:quiz.yourAnswer", { defaultValue: "Your answer" })}:{" "}
+                      {entry.userAnswerText}
+                    </div>
+                    {entry.alreadyConverted && (
+                      <div className="pl-6 text-xs text-text-subtle">
+                        {t("option:quiz.alreadyConverted", {
+                          defaultValue: "Already converted in this session."
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </List.Item>
+              )}
+            />
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
 
   const renderAttemptDetailsModal = () => (
     <Modal
       title={t("option:quiz.attemptDetails", { defaultValue: "Attempt Details" })}
       open={selectedAttemptId != null}
-      onCancel={() => setSelectedAttemptId(null)}
+      onCancel={() => {
+        setFlashcardModalOpen(false)
+        setSelectedAttemptId(null)
+      }}
       footer={(
-        <Button onClick={() => setSelectedAttemptId(null)}>
-          {t("common:close", { defaultValue: "Close" })}
-        </Button>
+        <div className="flex w-full flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              icon={<BookOutlined />}
+              disabled={selectedAttemptDetails == null}
+              onClick={() => {
+                if (!selectedAttemptDetails) return
+                handleNavigateToFlashcardsStudy({
+                  quizId: selectedAttemptDetails.quiz_id,
+                  attemptId: selectedAttemptDetails.id
+                })
+              }}
+            >
+              {t("option:quiz.studyWithFlashcards", {
+                defaultValue: "Study with Flashcards"
+              })}
+            </Button>
+            <Button
+              type="primary"
+              disabled={!hasMissedQuestions}
+              onClick={openFlashcardModal}
+            >
+              {t("option:quiz.createFlashcardsFromMissed", {
+                defaultValue: "Create Flashcards from Missed Questions"
+              })}
+            </Button>
+          </div>
+          <Button
+            onClick={() => {
+              setFlashcardModalOpen(false)
+              setSelectedAttemptId(null)
+            }}
+          >
+            {t("common:close", { defaultValue: "Close" })}
+          </Button>
+        </div>
       )}
       width={920}
       destroyOnHidden
     >
       {selectedAttemptLoading || selectedAttemptFetching ? (
-        <div className="flex justify-center py-12">
-          <Spin size="large" />
+        <div className="py-4" data-testid="results-detail-loading-skeleton">
+          <Skeleton active paragraph={{ rows: 8 }} />
         </div>
       ) : !selectedAttemptDetails ? (
         <Empty
@@ -495,13 +1036,27 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
             renderItem={(entry) => {
               const wasAnswered = entry.answer != null
               const isCorrect = Boolean(entry.answer?.is_correct)
+              const citations = Array.isArray(entry.answer?.source_citations)
+                ? entry.answer?.source_citations
+                : Array.isArray(entry.question?.source_citations)
+                  ? entry.question?.source_citations
+                  : null
 
               return (
                 <List.Item>
                   <div className="w-full space-y-2">
                     <div className="flex items-start justify-between gap-3">
                       <div className="font-medium">
-                        {entry.order}. {entry.questionText}
+                        <span className="block text-xs text-text-muted">
+                          {t("option:quiz.questionNumberLabel", {
+                            defaultValue: "Question {{number}}",
+                            number: entry.order
+                          })}
+                        </span>
+                        <QuizMarkdown
+                          content={entry.questionText}
+                          className="[&>p]:my-1"
+                        />
                       </div>
                       {!wasAnswered ? (
                         <Tag>{t("option:quiz.unanswered", { defaultValue: "Unanswered" })}</Tag>
@@ -531,11 +1086,39 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
                       </span>
                     </div>
 
-                    {entry.answer?.explanation && (
-                      <Typography.Paragraph className="text-sm text-text-subtle mb-0">
-                        {entry.answer.explanation}
-                      </Typography.Paragraph>
+                    {entry.answer && (
+                      <div className="text-sm text-text-muted">
+                        {t("option:quiz.points", { defaultValue: "Points" })}:{" "}
+                        <span className="font-medium">
+                          {Number(entry.answer.points_awarded ?? 0)}
+                          {entry.question ? ` / ${entry.question.points}` : ""}
+                        </span>
+                      </div>
                     )}
+
+                    {entry.answer?.hint_used && (
+                      <Typography.Text className="block text-xs text-text-muted">
+                        {Number(entry.answer.hint_penalty_points ?? 0) > 0
+                          ? t("option:quiz.hintPenaltyResult", {
+                            defaultValue: "Hint used (-{{points}} point(s)).",
+                            points: Number(entry.answer.hint_penalty_points ?? 0)
+                          })
+                          : t("option:quiz.hintUsedNoPenalty", {
+                            defaultValue: "Hint used."
+                          })}
+                      </Typography.Text>
+                    )}
+
+                    {entry.answer?.explanation && (
+                      <QuizMarkdown
+                        content={entry.answer.explanation}
+                        className="text-sm text-text-subtle"
+                      />
+                    )}
+                    <SourceCitations
+                      citations={citations}
+                      fallbackMediaId={selectedAttemptMediaId}
+                    />
                   </div>
                 </List.Item>
               )
@@ -548,116 +1131,135 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-12">
-        <Spin size="large" />
-      </div>
+      <>
+        {contextHolder}
+        <div className="space-y-4 py-2" data-testid="results-loading-skeleton">
+          <Card size="small">
+            <Skeleton active paragraph={{ rows: 2 }} />
+          </Card>
+          <Card size="small">
+            <Skeleton active paragraph={{ rows: 3 }} />
+          </Card>
+          <Card size="small">
+            <Skeleton active paragraph={{ rows: 6 }} />
+          </Card>
+        </div>
+      </>
     )
   }
 
   if (attempts.length === 0 && !hasActiveFilters) {
     return (
-      <Empty
-        description={
-          <div className="space-y-2">
-            <p className="text-text-muted">
-              {t("option:quiz.noAttempts", { defaultValue: "No quiz attempts yet" })}
-            </p>
-            <p className="text-sm text-text-subtle">
-              {t("option:quiz.noAttemptsHint", {
-                defaultValue: "Complete a quiz to see your results here"
-              })}
-            </p>
-          </div>
-        }
-      />
+      <>
+        {contextHolder}
+        <Empty
+          description={
+            <div className="space-y-2">
+              <p className="text-text-muted">
+                {t("option:quiz.noAttempts", { defaultValue: "No quiz attempts yet" })}
+              </p>
+              <p className="text-sm text-text-subtle">
+                {t("option:quiz.noAttemptsHint", {
+                  defaultValue: "Complete a quiz to see your results here"
+                })}
+              </p>
+            </div>
+          }
+        />
+      </>
     )
   }
 
   return (
-    <div className="space-y-6">
-      {renderAttemptDetailsModal()}
-      {/* Stats summary */}
-      {stats && (
-        <Card size="small">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Statistic
-              title={t("option:quiz.totalAttempts", { defaultValue: "Total Attempts" })}
-              value={stats.totalAttempts}
-              prefix={<TrophyOutlined />}
-            />
-            <Statistic
-              title={t("option:quiz.avgScore", { defaultValue: "Average Score" })}
-              value={stats.avgScore}
-              suffix="%"
-              valueStyle={{
-                color:
-                  stats.avgScore >= 70
-                    ? "var(--color-success)"
-                    : stats.avgScore >= 50
-                      ? "var(--color-warn)"
-                      : "var(--color-danger)"
-              }}
-            />
-            <Statistic
-              title={t("option:quiz.avgTime", { defaultValue: "Average Time" })}
-              value={formatTime(stats.avgTime)}
-              prefix={<ClockCircleOutlined />}
-            />
-            <Statistic
-              title={t("option:quiz.uniqueQuizzes", { defaultValue: "Quizzes Taken" })}
-              value={stats.uniqueQuizzes}
-            />
-          </div>
-        </Card>
-      )}
-
-      <Card size="small" title={t("option:quiz.scoreTrend", { defaultValue: "Score Trend" })}>
-        {scoreTrendPolylinePoints ? (
-          <div className="space-y-4">
-            <div className="overflow-x-auto">
-              <svg
-                viewBox="0 0 360 84"
-                role="img"
-                aria-label={t("option:quiz.scoreTrendAria", {
-                  defaultValue: "Score percentage trend over recent attempts"
-                })}
-                className="w-full min-w-[280px] h-24"
-              >
-                <line x1="8" y1="76" x2="352" y2="76" stroke="var(--color-border)" strokeWidth="1" />
-                <polyline
-                  fill="none"
-                  stroke="var(--color-primary)"
-                  strokeWidth="2"
-                  points={scoreTrendPolylinePoints}
-                />
-              </svg>
+    <>
+      {contextHolder}
+      <div className="space-y-6">
+        {renderAttemptDetailsModal()}
+        {renderFlashcardConversionModal()}
+        {/* Stats summary */}
+        {stats && (
+          <Card size="small">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Statistic
+                title={t("option:quiz.totalAttempts", { defaultValue: "Total Attempts" })}
+                value={stats.totalAttempts}
+                prefix={<TrophyOutlined />}
+              />
+              <Statistic
+                title={t("option:quiz.avgScore", { defaultValue: "Average Score" })}
+                value={stats.avgScore}
+                suffix="%"
+                styles={{
+                  content: {
+                    color:
+                      stats.avgScore >= 70
+                        ? "var(--color-success)"
+                        : stats.avgScore >= 50
+                          ? "var(--color-warn)"
+                          : "var(--color-danger)"
+                  }
+                }}
+              />
+              <Statistic
+                title={t("option:quiz.avgTime", { defaultValue: "Average Time" })}
+                value={formatTime(stats.avgTime)}
+                prefix={<ClockCircleOutlined />}
+              />
+              <Statistic
+                title={t("option:quiz.uniqueQuizzes", { defaultValue: "Quizzes Taken" })}
+                value={stats.uniqueQuizzes}
+              />
             </div>
-            <div className="grid gap-2">
-              {scoreDistribution.map((bucket) => (
-                <div key={bucket.label} className="flex items-center gap-3">
-                  <span className="w-16 text-xs text-text-muted">{bucket.label}</span>
-                  <div className="h-2 flex-1 rounded bg-surface2 overflow-hidden">
-                    <div
-                      className="h-full bg-primary"
-                      style={{ width: `${(bucket.count / scoreDistributionMaxCount) * 100}%` }}
-                    />
-                  </div>
-                  <span className="w-8 text-right text-xs text-text-subtle">{bucket.count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <Text type="secondary">
-            {t("option:quiz.scoreTrendNotEnoughData", {
-              defaultValue: "Complete at least two attempts to see a trend."
-            })}
-          </Text>
+          </Card>
         )}
-      </Card>
 
-      {/* Attempt history */}
-      <div>
+        <Card size="small" title={t("option:quiz.scoreTrend", { defaultValue: "Score Trend" })}>
+          {scoreTrendPolylinePoints ? (
+            <div className="space-y-4">
+              <div className="overflow-x-auto">
+                <svg
+                  viewBox="0 0 360 84"
+                  role="img"
+                  aria-label={t("option:quiz.scoreTrendAria", {
+                    defaultValue: "Score percentage trend over recent attempts"
+                  })}
+                  className="w-full min-w-[280px] h-24"
+                >
+                  <line x1="8" y1="76" x2="352" y2="76" stroke="var(--color-border)" strokeWidth="1" />
+                  <polyline
+                    fill="none"
+                    stroke="var(--color-primary)"
+                    strokeWidth="2"
+                    points={scoreTrendPolylinePoints}
+                  />
+                </svg>
+              </div>
+              <div className="grid gap-2">
+                {scoreDistribution.map((bucket) => (
+                  <div key={bucket.label} className="flex items-center gap-3">
+                    <span className="w-16 text-xs text-text-muted">{bucket.label}</span>
+                    <div className="h-2 flex-1 rounded bg-surface2 overflow-hidden">
+                      <div
+                        className="h-full bg-primary"
+                        style={{ width: `${(bucket.count / scoreDistributionMaxCount) * 100}%` }}
+                      />
+                    </div>
+                    <span className="w-8 text-right text-xs text-text-subtle">{bucket.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <Text type="secondary">
+              {t("option:quiz.scoreTrendNotEnoughData", {
+                defaultValue: "Complete at least two attempts to see a trend."
+              })}
+            </Text>
+          )}
+        </Card>
+
+        {/* Attempt history */}
+        <div>
         <h3 className="text-lg font-medium mb-4">
           {t("option:quiz.attemptHistory", { defaultValue: "Attempt History" })}
         </h3>
@@ -670,16 +1272,7 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
               setPage(1)
             }}
             style={{ minWidth: 220 }}
-            options={[
-              {
-                value: "all",
-                label: t("option:quiz.filterAllQuizzes", { defaultValue: "All quizzes" })
-              },
-              ...quizzes.map((quiz) => ({
-                value: quiz.id,
-                label: quiz.name
-              }))
-            ]}
+            options={quizFilterOptions}
           />
 
           <Select<PassFilterKey>
@@ -802,6 +1395,21 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
                             >
                               {t("option:quiz.viewDetails", { defaultValue: "View Details" })}
                             </Button>
+                            <Button
+                              type="link"
+                              size="small"
+                              icon={<BookOutlined />}
+                              onClick={() =>
+                                handleNavigateToFlashcardsStudy({
+                                  quizId: attempt.quiz_id,
+                                  attemptId: attempt.id
+                                })
+                              }
+                            >
+                              {t("option:quiz.studyWithFlashcards", {
+                                defaultValue: "Study with Flashcards"
+                              })}
+                            </Button>
                             {onRetakeQuiz && (
                               <Button
                                 type="link"
@@ -857,8 +1465,9 @@ export const ResultsTab: React.FC<ResultsTabProps> = ({ onRetakeQuiz }) => {
             )
           }}
         />
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 

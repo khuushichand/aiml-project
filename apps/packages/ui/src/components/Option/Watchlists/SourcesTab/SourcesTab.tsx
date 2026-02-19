@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {
+  Alert,
   Button,
   Empty,
   Input,
   Modal,
-  Popconfirm,
   Select,
   Space,
   Switch,
@@ -23,13 +23,15 @@ import {
   createWatchlistSource,
   deleteWatchlistSource,
   exportOpml,
+  fetchWatchlistJobs,
   getSourceSeenStats,
   fetchWatchlistSources,
   fetchWatchlistGroups,
   fetchWatchlistTags,
+  restoreWatchlistSource,
   updateWatchlistSource
 } from "@/services/watchlists"
-import type { SourceSeenStats, WatchlistSource, SourceType } from "@/types/watchlists"
+import type { SourceSeenStats, WatchlistJob, WatchlistSource, SourceType } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { SourceFormModal } from "./SourceFormModal"
 import { GroupsTree } from "./GroupsTree"
@@ -48,9 +50,11 @@ import { countToggleImpact, summarizeSourceSelection } from "./bulk-action-summa
 import {
   restoreDeletedSources,
   SOURCE_DELETE_UNDO_WINDOW_SECONDS,
-  toSourceCreatePayload
+  toSourceRestoreId
 } from "./source-undo"
 import { getSourceStatusVisual } from "./sourceStatus"
+import { findActiveSourceUsage, mapActiveSourceUsage } from "./source-usage"
+import { mapWatchlistsError } from "../shared/watchlists-error"
 
 const { Search } = Input
 
@@ -62,6 +66,18 @@ const SOURCE_TYPE_COLORS: Record<SourceType, string> = {
 type SourceHealthSnapshot = Pick<SourceSeenStats, "defer_until" | "consec_not_modified">
 const CLIENT_FILTER_PAGE_SIZE = 200
 const CLIENT_FILTER_MAX_ITEMS = 1000
+const SOURCE_USAGE_LOOKUP_PAGE_SIZE = 200
+const SOURCE_USAGE_LOOKUP_MAX_PAGES = 10
+const BULK_MOVE_NO_GROUP_VALUE = "__none__"
+
+type BulkMoveTargetValue = number | typeof BULK_MOVE_NO_GROUP_VALUE | null
+
+const toNormalizedGroupIds = (source: WatchlistSource): number[] => {
+  if (!Array.isArray(source.group_ids)) return []
+  return source.group_ids
+    .map((groupId) => Number(groupId))
+    .filter((groupId) => Number.isFinite(groupId))
+}
 
 export const SourcesTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -106,10 +122,12 @@ export const SourcesTab: React.FC = () => {
   )
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [bulkWorking, setBulkWorking] = useState(false)
+  const [bulkMoveTargetValue, setBulkMoveTargetValue] = useState<BulkMoveTargetValue>(null)
   const [checkingSourceIds, setCheckingSourceIds] = useState<number[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [seenDrawerSourceId, setSeenDrawerSourceId] = useState<number | null>(null)
   const [sourceHealthById, setSourceHealthById] = useState<Record<number, SourceHealthSnapshot>>({})
+  const [sourcesLoadError, setSourcesLoadError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
 
   const selectedSources = useMemo(
     () => sources.filter((source) => selectedRowKeys.includes(source.id)),
@@ -228,10 +246,17 @@ export const SourcesTab: React.FC = () => {
         : items
 
       setSources(pagedItems, total)
+      setSourcesLoadError(null)
       void loadSourceHealth(pagedItems)
     } catch (err) {
       console.error("Failed to fetch sources:", err)
-      message.error(t("watchlists:sources.fetchError", "Failed to load sources"))
+      setSourcesLoadError(
+        mapWatchlistsError(err, {
+          t,
+          context: t("watchlists:sources.title", "Feeds"),
+          fallbackMessage: t("watchlists:sources.fetchError", "Failed to load feeds")
+        })
+      )
     } finally {
       setSourcesLoading(false)
     }
@@ -279,6 +304,12 @@ export const SourcesTab: React.FC = () => {
     loadGroups()
   }, [loadSources, loadTags, loadGroups])
 
+  useEffect(() => {
+    if (selectedRowKeys.length === 0 && bulkMoveTargetValue !== null) {
+      setBulkMoveTargetValue(null)
+    }
+  }, [bulkMoveTargetValue, selectedRowKeys.length])
+
   // Handle toggle active
   const handleToggleActive = async (source: WatchlistSource) => {
     try {
@@ -297,27 +328,57 @@ export const SourcesTab: React.FC = () => {
     }
   }
 
+  const loadJobsForSourceUsageCheck = useCallback(async () => {
+    const allJobs: WatchlistJob[] = []
+    let page = 1
+
+    while (page <= SOURCE_USAGE_LOOKUP_MAX_PAGES) {
+      const response = await fetchWatchlistJobs({
+        page,
+        size: SOURCE_USAGE_LOOKUP_PAGE_SIZE
+      })
+      const pageItems = Array.isArray(response.items) ? response.items : []
+      allJobs.push(...pageItems)
+      if (
+        pageItems.length < SOURCE_USAGE_LOOKUP_PAGE_SIZE ||
+        allJobs.length >= Number(response.total || 0)
+      ) {
+        break
+      }
+      page += 1
+    }
+
+    return allJobs
+  }, [])
+
   // Handle delete
   const handleDelete = async (sourceId: number) => {
     const deletedSource = sources.find((source) => source.id === sourceId)
     try {
-      await deleteWatchlistSource(sourceId)
+      const deleteResult = await deleteWatchlistSource(sourceId)
       removeSource(sourceId)
       if (!deletedSource) {
         message.success(t("watchlists:sources.deleted", "Feed deleted"))
         return
       }
+      const undoWindowSeconds =
+        Number(deleteResult?.restore_window_seconds) > 0
+          ? Number(deleteResult.restore_window_seconds)
+          : SOURCE_DELETE_UNDO_WINDOW_SECONDS
 
       showUndoNotification({
         title: t("watchlists:sources.undoDeleteTitle", "Feed deleted"),
         description: t(
           "watchlists:sources.undoDeleteDescription",
           "Undo restores this feed for {{seconds}} seconds.",
-          { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          { seconds: undoWindowSeconds }
         ),
-        duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+        duration: undoWindowSeconds,
+        onDismiss: () => {
+          void loadSources()
+        },
         onUndo: async () => {
-          await createWatchlistSource(toSourceCreatePayload(deletedSource))
+          await restoreWatchlistSource(toSourceRestoreId(deletedSource))
           await loadSources()
         }
       })
@@ -326,6 +387,68 @@ export const SourcesTab: React.FC = () => {
       message.error(t("watchlists:sources.deleteError", "Failed to delete source"))
     }
   }
+
+  const requestDeleteConfirmation = useCallback(async (source: WatchlistSource) => {
+    let activeUsage: Array<{ id: number; name: string }> = []
+    try {
+      const jobs = await loadJobsForSourceUsageCheck()
+      activeUsage = findActiveSourceUsage(jobs, source.id)
+    } catch (err) {
+      console.error("Failed to check source usage:", err)
+      message.warning(
+        t(
+          "watchlists:sources.deleteUsageLookupError",
+          "Could not verify active monitor usage before deletion."
+        )
+      )
+    }
+
+    const usageCount = activeUsage.length
+    Modal.confirm({
+      title: usageCount > 0
+        ? t("watchlists:sources.deleteConfirmInUseTitle", "Feed is used by active monitors")
+        : t("watchlists:sources.deleteConfirm", "Delete this feed?"),
+      content: usageCount > 0 ? (
+        <div className="space-y-2">
+          <p>
+            {t(
+              "watchlists:sources.deleteConfirmInUseDescription",
+              "This feed is referenced by {{count}} active monitor{{plural}}. Deleting it may break scheduled runs.",
+              {
+                count: usageCount,
+                plural: usageCount === 1 ? "" : "s"
+              }
+            )}
+          </p>
+          <ul className="list-disc pl-5">
+            {activeUsage.slice(0, 5).map((job) => (
+              <li key={job.id}>{job.name}</li>
+            ))}
+          </ul>
+          {usageCount > 5 && (
+            <p className="text-xs text-text-muted">
+              {t(
+                "watchlists:sources.deleteConfirmInUseMore",
+                "+{{count}} more active monitor{{plural}}",
+                {
+                  count: usageCount - 5,
+                  plural: usageCount - 5 === 1 ? "" : "s"
+                }
+              )}
+            </p>
+          )}
+        </div>
+      ) : (
+        t("watchlists:sources.deleteConfirmDescription", "This action cannot be undone.")
+      ),
+      okText: usageCount > 0
+        ? t("watchlists:sources.deleteConfirmForce", "Delete anyway")
+        : t("watchlists:sources.delete", "Delete"),
+      cancelText: t("common:cancel", "Cancel"),
+      okButtonProps: { danger: true },
+      onOk: () => handleDelete(source.id)
+    })
+  }, [handleDelete, loadJobsForSourceUsageCheck, t])
 
   const handleBulkToggle = async (active: boolean) => {
     if (selectedSources.length === 0) return
@@ -362,6 +485,9 @@ export const SourcesTab: React.FC = () => {
             { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
           ),
           duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onDismiss: () => {
+            void loadSources()
+          },
           onUndo: async () => {
             const restoreResults = await Promise.allSettled(
               previouslyToggledSources.map((source) =>
@@ -414,6 +540,7 @@ export const SourcesTab: React.FC = () => {
     } finally {
       setBulkWorking(false)
       setSelectedRowKeys([])
+      setBulkMoveTargetValue(null)
     }
   }
 
@@ -450,10 +577,13 @@ export const SourcesTab: React.FC = () => {
             { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
           ),
           duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onDismiss: () => {
+            void loadSources()
+          },
           onUndo: async () => {
             const restoreSummary = await restoreDeletedSources(
               removedSources,
-              createWatchlistSource
+              restoreWatchlistSource
             )
             await loadSources()
             if (restoreSummary.failed > 0) {
@@ -491,6 +621,7 @@ export const SourcesTab: React.FC = () => {
     } finally {
       setBulkWorking(false)
       setSelectedRowKeys([])
+      setBulkMoveTargetValue(null)
     }
   }
 
@@ -519,29 +650,232 @@ export const SourcesTab: React.FC = () => {
     })
   }, [selectedSourceSummary, selectedSources, t])
 
-  const requestBulkDelete = useCallback(() => {
+  const requestBulkDelete = useCallback(async () => {
     if (selectedSources.length === 0) return
+
+    const selectedIds = selectedSources.map((source) => source.id)
+    let usageMap = new Map<number, Array<{ id: number; name: string }>>()
+
+    try {
+      const jobs = await loadJobsForSourceUsageCheck()
+      usageMap = mapActiveSourceUsage(jobs, selectedIds)
+    } catch (err) {
+      console.error("Failed to check selected source usage:", err)
+      message.warning(
+        t(
+          "watchlists:sources.deleteUsageLookupError",
+          "Could not verify active monitor usage before deletion."
+        )
+      )
+    }
+
+    const impactedSourcesCount = selectedIds.filter((id) => (usageMap.get(id)?.length ?? 0) > 0).length
+    const impactedJobs = Array.from(
+      new Map(
+        selectedIds.flatMap((id) => (usageMap.get(id) || []).map((job) => [job.id, job]))
+      ).values()
+    )
+
     Modal.confirm({
       title: t(
         "watchlists:sources.bulkDeleteConfirmTitle",
         "Delete {{count}} selected feeds?",
         { count: selectedSourceSummary.total }
       ),
-      content: t(
-        "watchlists:sources.bulkDeleteConfirmDescription",
-        "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
-        {
-          count: selectedSourceSummary.total,
-          active: selectedSourceSummary.active,
-          inactive: selectedSourceSummary.inactive
-        }
+      content: (
+        <div className="space-y-2">
+          <p>
+            {t(
+              "watchlists:sources.bulkDeleteConfirmDescription",
+              "This will delete {{count}} feeds ({{active}} active, {{inactive}} inactive).",
+              {
+                count: selectedSourceSummary.total,
+                active: selectedSourceSummary.active,
+                inactive: selectedSourceSummary.inactive
+              }
+            )}
+          </p>
+          {impactedSourcesCount > 0 && (
+            <>
+              <p>
+                {t(
+                  "watchlists:sources.bulkDeleteConfirmInUseSummary",
+                  "{{sources}} selected feed{{sourcesPlural}} are referenced by {{jobs}} active monitor{{jobsPlural}}.",
+                  {
+                    sources: impactedSourcesCount,
+                    sourcesPlural: impactedSourcesCount === 1 ? "" : "s",
+                    jobs: impactedJobs.length,
+                    jobsPlural: impactedJobs.length === 1 ? "" : "s"
+                  }
+                )}
+              </p>
+              <ul className="list-disc pl-5">
+                {impactedJobs.slice(0, 5).map((job) => (
+                  <li key={job.id}>{job.name}</li>
+                ))}
+              </ul>
+              {impactedJobs.length > 5 && (
+                <p className="text-xs text-text-muted">
+                  {t(
+                    "watchlists:sources.bulkDeleteConfirmInUseMore",
+                    "+{{count}} more active monitor{{plural}}",
+                    {
+                      count: impactedJobs.length - 5,
+                      plural: impactedJobs.length - 5 === 1 ? "" : "s"
+                    }
+                  )}
+                </p>
+              )}
+            </>
+          )}
+        </div>
       ),
       okText: t("watchlists:sources.bulkDelete", "Delete"),
       cancelText: t("common:cancel", "Cancel"),
       okButtonProps: { danger: true },
       onOk: () => handleBulkDelete()
     })
-  }, [selectedSourceSummary, selectedSources.length, t])
+  }, [handleBulkDelete, loadJobsForSourceUsageCheck, selectedSourceSummary, selectedSources, t])
+
+  const handleBulkMoveToGroup = useCallback(async (targetGroupId: number | null) => {
+    if (selectedSources.length === 0) return
+    const movedSources = [...selectedSources]
+    const previousGroupIdsBySourceId = new Map<number, number[]>()
+    movedSources.forEach((source) => {
+      previousGroupIdsBySourceId.set(source.id, toNormalizedGroupIds(source))
+    })
+
+    setBulkWorking(true)
+    try {
+      const results = await Promise.allSettled(
+        movedSources.map((source) =>
+          updateWatchlistSource(source.id, {
+            group_ids: targetGroupId == null ? [] : [targetGroupId]
+          })
+        )
+      )
+
+      const updatedSources: WatchlistSource[] = []
+      let successCount = 0
+      results.forEach((result, idx) => {
+        if (result.status !== "fulfilled") return
+        const source = movedSources[idx]
+        updateSourceInList(source.id, result.value)
+        updatedSources.push(source)
+        successCount += 1
+      })
+      const failedCount = movedSources.length - successCount
+
+      if (successCount > 0) {
+        showUndoNotification({
+          title: t("watchlists:sources.undoBulkMoveTitle", "Moved {{count}} feeds", {
+            count: successCount
+          }),
+          description: t(
+            "watchlists:sources.undoBulkMoveDescription",
+            "Undo restores previous group assignments for {{seconds}} seconds.",
+            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
+          ),
+          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          onDismiss: () => {
+            void loadSources()
+          },
+          onUndo: async () => {
+            const restoreResults = await Promise.allSettled(
+              updatedSources.map((source) =>
+                updateWatchlistSource(source.id, {
+                  group_ids: previousGroupIdsBySourceId.get(source.id) || []
+                })
+              )
+            )
+            let restoredCount = 0
+            let restoreFailures = 0
+            restoreResults.forEach((result, idx) => {
+              if (result.status === "fulfilled") {
+                updateSourceInList(updatedSources[idx].id, result.value)
+                restoredCount += 1
+              } else {
+                restoreFailures += 1
+              }
+            })
+            if (restoreFailures > 0) {
+              throw new Error(
+                t(
+                  "watchlists:sources.undoBulkMovePartialError",
+                  "{{restored}} restored, {{failed}} failed to restore",
+                  {
+                    restored: restoredCount,
+                    failed: restoreFailures
+                  }
+                )
+              )
+            }
+          }
+        })
+      }
+
+      if (failedCount > 0) {
+        message.warning(
+          t(
+            "watchlists:sources.bulkMovePartial",
+            "Moved {{success}} feeds, {{failed}} failed",
+            { success: successCount, failed: failedCount }
+          )
+        )
+      }
+
+      if (successCount === 0) {
+        message.error(t("watchlists:sources.bulkMoveError", "Bulk move failed"))
+      }
+    } catch (err) {
+      console.error("Failed to bulk move sources:", err)
+      message.error(t("watchlists:sources.bulkMoveError", "Bulk move failed"))
+    } finally {
+      setBulkWorking(false)
+      setSelectedRowKeys([])
+      setBulkMoveTargetValue(null)
+    }
+  }, [loadSources, selectedSources, showUndoNotification, t, updateSourceInList])
+
+  const requestBulkMoveToGroup = useCallback(() => {
+    if (selectedSources.length === 0 || bulkMoveTargetValue == null) return
+    const parsedTargetGroupId = bulkMoveTargetValue === BULK_MOVE_NO_GROUP_VALUE
+      ? null
+      : Number(bulkMoveTargetValue)
+
+    if (parsedTargetGroupId !== null && !Number.isFinite(parsedTargetGroupId)) {
+      message.error(t("watchlists:sources.bulkMoveError", "Bulk move failed"))
+      return
+    }
+
+    const targetGroupName = parsedTargetGroupId == null
+      ? t("watchlists:sources.moveTargetNone", "No group")
+      : groups.find((group) => group.id === parsedTargetGroupId)?.name ||
+        t("watchlists:sources.moveUnknownGroup", "Selected group")
+
+    Modal.confirm({
+      title: t(
+        "watchlists:sources.bulkMoveConfirmTitle",
+        "Move {{count}} selected feeds?",
+        { count: selectedSourceSummary.total }
+      ),
+      content: t(
+        "watchlists:sources.bulkMoveConfirmDescription",
+        "Feeds will be assigned to {{group}}.",
+        { group: targetGroupName }
+      ),
+      okText: t("watchlists:sources.bulkMove", "Move"),
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => handleBulkMoveToGroup(parsedTargetGroupId)
+    })
+  }, [
+    bulkMoveTargetValue,
+    groups,
+    handleBulkMoveToGroup,
+    selectedSourceSummary.total,
+    selectedSources.length,
+    t
+  ])
 
   const executeCheckNow = useCallback(async (sourceIds: number[]) => {
     const normalizedIds = normalizeSourceIds(sourceIds)
@@ -851,6 +1185,7 @@ export const SourcesTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("common:edit", "Edit")}
               icon={<Edit2 className="h-4 w-4" />}
               onClick={() => openSourceForm(record.id)}
             />
@@ -859,25 +1194,21 @@ export const SourcesTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:sources.seenInfo", "Source Health & Dedup Stats")}
               icon={<Eye className="h-4 w-4" />}
               onClick={() => setSeenDrawerSourceId(record.id)}
             />
           </Tooltip>
-          <Popconfirm
-            title={t("watchlists:sources.deleteConfirm", "Delete this source?")}
-            onConfirm={() => handleDelete(record.id)}
-            okText={t("common:yes", "Yes")}
-            cancelText={t("common:no", "No")}
-          >
-            <Tooltip title={t("common:delete", "Delete")}>
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<Trash2 className="h-4 w-4" />}
-              />
-            </Tooltip>
-          </Popconfirm>
+          <Tooltip title={t("common:delete", "Delete")}>
+            <Button
+              type="text"
+              size="small"
+              danger
+              aria-label={t("common:delete", "Delete")}
+              icon={<Trash2 className="h-4 w-4" />}
+              onClick={() => void requestDeleteConfirmation(record)}
+            />
+          </Tooltip>
         </Space>
       )
     }
@@ -953,6 +1284,24 @@ export const SourcesTab: React.FC = () => {
         </div>
       </div>
 
+      {sourcesLoadError && (
+        <Alert
+          type={sourcesLoadError.severity}
+          showIcon
+          title={sourcesLoadError.title}
+          description={sourcesLoadError.description}
+          action={(
+            <Button
+              size="small"
+              onClick={() => void loadSources()}
+              loading={sourcesLoading}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        />
+      )}
+
       {selectedRowKeys.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border p-3 text-sm">
           <span className="text-text-muted">
@@ -973,7 +1322,34 @@ export const SourcesTab: React.FC = () => {
           <Button size="small" onClick={() => requestBulkToggle(false)} loading={bulkWorking}>
             {t("watchlists:sources.bulkDisable", "Disable")}
           </Button>
-          <Button size="small" danger loading={bulkWorking} onClick={requestBulkDelete}>
+          <Select
+            size="small"
+            allowClear
+            className="w-52"
+            placeholder={t("watchlists:sources.moveSelectGroup", "Move to group")}
+            value={bulkMoveTargetValue}
+            onChange={(value) => setBulkMoveTargetValue((value as BulkMoveTargetValue) ?? null)}
+            options={[
+              {
+                value: BULK_MOVE_NO_GROUP_VALUE,
+                label: t("watchlists:sources.moveTargetNone", "No group")
+              },
+              ...(Array.isArray(groups) ? groups : []).map((group) => ({
+                value: group.id,
+                label: group.name
+              }))
+            ]}
+            disabled={bulkWorking}
+          />
+          <Button
+            size="small"
+            onClick={requestBulkMoveToGroup}
+            loading={bulkWorking}
+            disabled={bulkMoveTargetValue == null}
+          >
+            {t("watchlists:sources.bulkMove", "Move")}
+          </Button>
+          <Button size="small" danger loading={bulkWorking} onClick={() => void requestBulkDelete()}>
             {t("watchlists:sources.bulkDelete", "Delete")}
           </Button>
           <Button size="small" onClick={() => setSelectedRowKeys([])}>

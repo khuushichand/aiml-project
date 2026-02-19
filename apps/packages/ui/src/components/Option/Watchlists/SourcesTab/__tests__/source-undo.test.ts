@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { WatchlistSource } from "@/types/watchlists"
 import {
   restoreDeletedSources,
-  toSourceCreatePayload
+  toSourceRestoreId
 } from "../source-undo"
 
 const makeSource = (id: number): WatchlistSource => ({
@@ -18,16 +18,9 @@ const makeSource = (id: number): WatchlistSource => ({
 })
 
 describe("source undo helpers", () => {
-  it("converts a source into a create payload for restore", () => {
+  it("extracts source id for restore endpoint calls", () => {
     const source = makeSource(1)
-    expect(toSourceCreatePayload(source)).toEqual({
-      name: "Source 1",
-      url: "https://example.com/1.xml",
-      source_type: "rss",
-      active: false,
-      tags: ["tag-a", "tag-b"],
-      settings: { depth: 1 }
-    })
+    expect(toSourceRestoreId(source)).toBe(1)
   })
 
   it("counts restored and failed sources during bulk restore", async () => {
@@ -52,5 +45,13 @@ describe("source undo helpers", () => {
 
     expect(restore).not.toHaveBeenCalled()
     expect(summary).toEqual({ restored: 0, failed: 0 })
+  })
+
+  it("counts permission-denied restore attempts as failed without throwing", async () => {
+    const restore = vi.fn().mockRejectedValue(new Error("403 forbidden"))
+    const summary = await restoreDeletedSources([makeSource(1), makeSource(2)], restore)
+
+    expect(restore).toHaveBeenCalledTimes(2)
+    expect(summary).toEqual({ restored: 0, failed: 2 })
   })
 })

@@ -41,6 +41,16 @@ Return a JSON object in this exact format:
       "options": ["A", "B", "C", "D"],
       "correct_answer": 0 | 1 | 2 | 3 | "true" | "false" | "the answer",
       "explanation": "Brief explanation of why this is correct",
+      "hint": "Optional short hint shown on request",
+      "hint_penalty_points": 0,
+      "source_citations": [
+        {
+          "label": "Optional citation label",
+          "quote": "Supporting excerpt",
+          "chunk_id": "Optional source chunk id",
+          "timestamp_seconds": 0
+        }
+      ],
       "points": 1
     }}
   ]
@@ -50,6 +60,8 @@ Important:
 - For multiple_choice: options must be array of 4 strings, correct_answer is 0-based index (0-3)
 - For true_false: correct_answer must be exactly "true" or "false"
 - For fill_blank: question_text should contain ___ where answer goes, correct_answer is the word/phrase
+- hint_penalty_points must be a non-negative integer
+- source_citations should reference supporting source evidence for the explanation when available
 - Vary question difficulty according to the specified level
 - Make questions test understanding, not just memorization
 - Return ONLY valid JSON, no other text
@@ -148,6 +160,56 @@ def _normalize_tf_answer(raw: Any) -> str:
     return "true" if text in {"true", "1", "yes", "y"} else "false"
 
 
+def _coerce_source_citations(raw: Any, media_id: int) -> list[dict[str, Any]] | None:
+    entries: list[dict[str, Any]] = []
+    if isinstance(raw, list):
+        candidates = raw
+    elif isinstance(raw, dict):
+        candidates = [raw]
+    elif isinstance(raw, str) and raw.strip():
+        candidates = [{"quote": raw.strip()}]
+    else:
+        candidates = []
+
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        label = str(candidate.get("label") or "").strip() or None
+        quote = str(candidate.get("quote") or candidate.get("excerpt") or "").strip() or None
+        chunk_id = str(candidate.get("chunk_id") or candidate.get("chunkId") or "").strip() or None
+        source_url = str(candidate.get("source_url") or candidate.get("url") or "").strip() or None
+        timestamp_raw = candidate.get("timestamp_seconds", candidate.get("timestamp"))
+        timestamp_seconds: float | None = None
+        if isinstance(timestamp_raw, (int, float)):
+            timestamp_seconds = float(max(0, timestamp_raw))
+
+        media_ref = media_id
+        media_id_raw = candidate.get("media_id")
+        if isinstance(media_id_raw, (int, float)):
+            media_id_candidate = int(media_id_raw)
+            if media_id_candidate > 0:
+                media_ref = media_id_candidate
+
+        citation: dict[str, Any] = {
+            "media_id": media_ref
+        }
+        if label:
+            citation["label"] = label
+        elif quote:
+            citation["label"] = f"Source {index + 1}"
+        if quote:
+            citation["quote"] = quote
+        if chunk_id:
+            citation["chunk_id"] = chunk_id
+        if timestamp_seconds is not None:
+            citation["timestamp_seconds"] = timestamp_seconds
+        if source_url:
+            citation["source_url"] = source_url
+        entries.append(citation)
+
+    return entries or None
+
+
 def _extract_json_payload(raw: Any) -> Any:
     if isinstance(raw, (dict, list)):
         return raw
@@ -173,7 +235,7 @@ def _extract_json_payload(raw: Any) -> Any:
     raise ValueError("Failed to parse quiz JSON from LLM response")
 
 
-def _normalize_questions(raw_questions: Sequence[Any]) -> list[dict[str, Any]]:
+def _normalize_questions(raw_questions: Sequence[Any], media_id: int) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for raw in raw_questions:
         if not isinstance(raw, dict):
@@ -189,6 +251,13 @@ def _normalize_questions(raw_questions: Sequence[Any]) -> list[dict[str, Any]]:
             points_val = int(points)
         except (TypeError, ValueError):
             points_val = 1
+        hint_penalty_raw = raw.get("hint_penalty_points", 0)
+        try:
+            hint_penalty_points = max(0, int(hint_penalty_raw))
+        except (TypeError, ValueError):
+            hint_penalty_points = 0
+        hint = str(raw.get("hint") or "").strip() or None
+        source_citations = _coerce_source_citations(raw.get("source_citations"), media_id)
 
         options: list[str] | None = None
         correct_answer: int | str
@@ -207,6 +276,9 @@ def _normalize_questions(raw_questions: Sequence[Any]) -> list[dict[str, Any]]:
                 "options": options,
                 "correct_answer": correct_answer,
                 "explanation": str(raw.get("explanation") or "").strip() or None,
+                "hint": hint,
+                "hint_penalty_points": hint_penalty_points,
+                "source_citations": source_citations,
                 "points": points_val if points_val >= 0 else 1,
             }
         )
@@ -296,7 +368,7 @@ async def generate_quiz_from_media(
     if not isinstance(raw_questions, list):
         raise ValueError("LLM response did not include a questions list")
 
-    questions = _normalize_questions(raw_questions)
+    questions = _normalize_questions(raw_questions, media_id)
     if num_questions and len(questions) > num_questions:
         questions = questions[:num_questions]
     if not questions:
@@ -317,6 +389,9 @@ async def generate_quiz_from_media(
             correct_answer=question["correct_answer"],
             options=question.get("options"),
             explanation=question.get("explanation"),
+            hint=question.get("hint"),
+            hint_penalty_points=question.get("hint_penalty_points", 0),
+            source_citations=question.get("source_citations"),
             points=question.get("points", 1),
             order_index=idx,
         )

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import {
   waitForConnectionStore,
   forceConnectionState
@@ -11,7 +11,7 @@ import {
 test.describe('Composer readiness based on connection state', () => {
   test('sidepanel composer is disabled and shows connection helper when server is not configured', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, openSidepanel } = (await launchWithExtension(extPath)) as any
+    const { context, openSidepanel } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const page = await openSidepanel()
 
     // Composer placeholder should reflect disconnected state
@@ -49,7 +49,7 @@ test.describe('Composer readiness based on connection state', () => {
 
   test('options Playground composer shows connection chip when connection is not ready', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Force the shared connection state into a "connected phase but not ready" state
     await waitForConnectionStore(page, "composer-not-ready")
@@ -92,7 +92,7 @@ test.describe('Composer readiness based on connection state', () => {
 
     const extPath = path.resolve("build/chrome-mv3")
     const { context, openSidepanel, extensionId } =
-      (await launchWithExtension(extPath)) as any
+      (await launchWithExtensionOrSkip(test, extPath)) as any
 
     // Ensure host permission for the mock server is granted
     const granted = await grantHostPermission(

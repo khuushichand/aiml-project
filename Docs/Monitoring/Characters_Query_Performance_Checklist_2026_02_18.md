@@ -38,6 +38,7 @@ Operational checklist for validating `/api/v1/characters/query` scalability roll
 2. Confirm pagination, sort, and search all trigger `/api/v1/characters/query` requests.
 3. Confirm search debounce behavior sends updated query parameters without duplicate request bursts.
 4. Confirm avatar images are lazy-loaded (`loading="lazy"`) in table/gallery.
+5. With `ff_characters_server_query=true`, confirm no legacy list requests hit `GET /api/v1/characters` during normal list/search/sort interactions.
 
 ## Alerting Recommendations
 

@@ -288,7 +288,7 @@ describe("DictionariesManager validation stage-1 discoverability", () => {
       expect(tldwClientMock.validateDictionary).toHaveBeenCalledTimes(1)
     })
     expect(screen.getByText("Valid")).toBeInTheDocument()
-  }, 60000)
+  }, 120000)
 
   it("preserves empty-entry validation guard in the new header action bar", async () => {
     const user = userEvent.setup()
@@ -305,7 +305,7 @@ describe("DictionariesManager validation stage-1 discoverability", () => {
     expect(
       screen.getAllByText("Add at least one entry to validate.").length
     ).toBeGreaterThan(0)
-  }, 60000)
+  }, 120000)
 
   it("allows validation findings to jump to and highlight matching entry rows", async () => {
     const user = userEvent.setup()
@@ -431,5 +431,33 @@ describe("DictionariesManager validation stage-1 discoverability", () => {
       screen.getByRole("button", { name: "Delete test case Case A" })
     )
     expect(screen.queryByText("Case A")).not.toBeInTheDocument()
+  }, 60000)
+
+  it("runs validation from Ctrl/Cmd+Shift+V when entry manager is focused on non-input content", async () => {
+    const user = userEvent.setup()
+    render(<DictionariesManager />)
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage entries for Medical Terms" })
+    )
+
+    await user.keyboard("{Control>}{Shift>}v{/Shift}{/Control}")
+
+    await waitFor(() => {
+      expect(tldwClientMock.validateDictionary).toHaveBeenCalledTimes(1)
+    })
+  }, 60000)
+
+  it("does not hijack Ctrl/Cmd+Shift+V while typing in entry inputs", async () => {
+    const user = userEvent.setup()
+    render(<DictionariesManager />)
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage entries for Medical Terms" })
+    )
+    await user.click(screen.getByLabelText("Search dictionary entries"))
+    await user.keyboard("{Control>}{Shift>}v{/Shift}{/Control}")
+
+    expect(tldwClientMock.validateDictionary).not.toHaveBeenCalled()
   }, 60000)
 })

@@ -1,8 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import { waitForConnectionStore } from "./utils/connection"
 
 const normalizeServerUrl = (value: string) =>
@@ -141,7 +140,8 @@ test.describe("Writing Playground themes + templates", () => {
     }
 
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, extensionId, optionsUrl } = await launchWithExtension(
+    const { context, page, extensionId, optionsUrl } = await launchWithExtensionOrSkip(
+      test,
       extPath,
       {
         seedConfig: {
@@ -218,7 +218,8 @@ test.describe("Writing Playground themes + templates", () => {
     }
 
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, extensionId, optionsUrl } = await launchWithExtension(
+    const { context, page, extensionId, optionsUrl } = await launchWithExtensionOrSkip(
+      test,
       extPath,
       {
         seedConfig: {
@@ -307,7 +308,8 @@ test.describe("Writing Playground themes + templates", () => {
     }
 
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page, extensionId, optionsUrl } = await launchWithExtension(
+    const { context, page, extensionId, optionsUrl } = await launchWithExtensionOrSkip(
+      test,
       extPath,
       {
         seedConfig: {

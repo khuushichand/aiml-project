@@ -4,7 +4,7 @@ This guide helps new operators bring text-to-speech (TTS) online inside `tldw_se
 
 ## YAML Quick Start
 
-Minimal configuration to get going. Save to `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (or use one of the supported locations).
+Minimal configuration to get going. Save to `tldw_Server_API/Config_Files/tts_providers_config.yaml` (canonical location; alternate config roots are supported).
 
 ```yaml
 # Provider selection / fallback order
@@ -41,7 +41,7 @@ performance:
 
 Notes:
 - Local providers will not download model assets unless you explicitly set `auto_download: true` (or export `TTS_AUTO_DOWNLOAD=1` / `VIBEVOICE_AUTO_DOWNLOAD=1`).
-- You can override API keys and some settings via `Config_Files/config.txt` or environment variables.
+- You can override API keys and some settings via `tldw_Server_API/Config_Files/config.txt` or environment variables.
 
 ## One-Command Installers
 Run these from the project root to install a single TTS backend (deps + models where applicable):
@@ -71,7 +71,7 @@ Installer flags:
 
 ## Key Files & Paths
 - `tldw_Server_API/Config_Files/tts_providers_config.yaml` — canonical provider settings + priority list.
-- `Config_Files/config.txt` — optional INI overrides (e.g., `[TTS-Settings]` block).
+- `tldw_Server_API/Config_Files/config.txt` — optional INI overrides (e.g., `[TTS-Settings]` block).
 - `tldw_Server_API/app/core/TTS/adapters/` — implementation for each backend.
 - `tldw_Server_API/app/core/TTS/TTS-README.md` — deep dive on architecture + adapter matrix.
 
@@ -79,18 +79,18 @@ Installer flags:
 
 | Provider | Type | Install / Extras | Voice Cloning | Reference |
 | --- | --- | --- | --- | --- |
-| OpenAI `tts-1` | Hosted API | `OPENAI_API_KEY` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-a--openai-tts-hosted) |
+| OpenAI `tts-1` | Hosted API | `OPENAI_API_KEY` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-a-openai-tts-hosted) |
 | ElevenLabs | Hosted API | `ELEVENLABS_API_KEY` | Yes (via ElevenLabs voices) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#commercial-providers) |
-| Kokoro ONNX | Local ONNX | `pip install -e ".[TTS_kokoro_onnx]"` + `espeak-ng` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-b--kokoro-tts-local-onnx) |
+| Kokoro ONNX | Local ONNX | `pip install -e ".[TTS_kokoro_onnx]"` + `espeak-ng` | No | [Getting Started](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting-Started-STT_and_TTS.md#option-b-kokoro-tts-local-onnx) |
 | NeuTTS Air | Local hybrid | `pip install -e ".[TTS_neutts]"` + `espeak-ng` | **Required** (reference audio + text) | [NeuTTS Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/NEUTTS_TTS_SETUP.md) |
-| Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/Published/User_Guides/Chatterbox_TTS_Setup.md) |
+| Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/CHATTERBOX_SETUP.md) |
 | VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/microsoft/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
 | Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
 | Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
 | IndexTTS2 | Local PyTorch | Download checkpoints to `checkpoints/index_tts2/` | Yes (zero-shot, 12 GB+ VRAM) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) |
 | PocketTTS | Local ONNX | `pip install -e ".[TTS_pocket_tts]"` | **Required** (reference audio) | [TTS Setup Guide](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#pockettts-onnx-setup) |
-| LuxTTS | Local PyTorch | `pip install -e ".[TTS_luxtts]"` + clone repo | Yes (48kHz ZipVoice) | [LuxTTS Setup](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/LUXTTS_TTS_SETUP.md) |
-| Qwen3-TTS | Local PyTorch | `pip install -e ".[TTS_qwen3]"` | Yes (CustomVoice, multi-lang) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md) |
+| LuxTTS | Local PyTorch | Follow LuxTTS runbook (manual install + clone `LuxTTS` repo) | Yes (48kHz ZipVoice) | [LuxTTS Setup](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/LUXTTS_TTS_SETUP.md) |
+| Qwen3-TTS | Local PyTorch | Install `qwen-tts` + deps (see setup section) | Yes (CustomVoice, multi-lang) | [Qwen3-TTS Setup](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/TTS-SETUP-GUIDE.md#qwen3-tts-setup) |
 | Echo-TTS | Local PyTorch | `pip install -e ".[TTS_echo_tts]"` (CUDA only) | **Required** (reference audio) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#echotts-adapter) |
 
 > Tip: Keep cloud providers (`openai`, `elevenlabs`) high in `provider_priority` for instant results, and add local fallbacks underneath.
@@ -120,7 +120,7 @@ Installer flags:
    - Enable providers, point to local paths, and adjust `device`, `sample_rate`, etc.
    - Adjust `provider_priority` so preferred backends run first.
    - Note: Local providers will not download models unless you explicitly set `auto_download: true` per provider (or export `TTS_AUTO_DOWNLOAD=1`).
-4. **Optional overrides** in `Config_Files/config.txt` (`[TTS-Settings]`) if you need environment-specific toggles.
+4. **Optional overrides** in `tldw_Server_API/Config_Files/config.txt` (`[TTS-Settings]`) if you need environment-specific toggles.
    - Canonical keys: `default_provider`, `default_voice`, `default_speed`, `local_device`.
    - Legacy aliases (`default_tts_provider`, `default_tts_voice`, `default_tts_speed`, `local_tts_device`, `tts_device`) are deprecated and scheduled for removal after 2026-06-30.
 5. **Set secrets/env vars** (API keys, `TTS_AUTO_DOWNLOAD`, device hints).
@@ -249,7 +249,7 @@ Each section highlights installation, configuration, and a smoke test.
 - **Verify**: use the sample curl from [NeuTTS Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/NEUTTS_TTS_SETUP.md) and confirm the WAV plays back.
 
 ### Chatterbox
-- **Install**: `pip install -e ".[TTS_chatterbox]"`; add `.[TTS_chatterbox_lang]` if you plan to enable `use_multilingual`. The repo vendors a `chatterbox/` package, so no extra clone is needed.
+- **Install**: `pip install -e ".[TTS_chatterbox]"`; add `.[TTS_chatterbox_lang]` if you plan to enable `use_multilingual`. If the runtime still reports missing `chatterbox`, install upstream with `pip install chatterbox-tts` (or from source).
 - **Models**: cache `ResembleAI/chatterbox` locally with `huggingface-cli download ...`.
 - **Config**:
   ```yaml
@@ -262,7 +262,7 @@ Each section highlights installation, configuration, and a smoke test.
       target_latency_ms: 200
   ```
 - **Voice cloning**: send `voice_reference` (5–20 s, 24 kHz) and optional `emotion` + `emotion_intensity` to tune delivery.
-- **Reference**: see [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/Published/User_Guides/Chatterbox_TTS_Setup.md) for streaming examples and troubleshooting.
+- **Reference**: see [Chatterbox Runbook](https://github.com/rmusser01/tldw_server/blob/main/Docs/STT-TTS/CHATTERBOX_SETUP.md) for streaming examples and troubleshooting.
 
 ### VibeVoice
 - **Install**: `pip install -e ".[TTS_vibevoice]"`; clone the upstream repo into `libs/VibeVoice` and `pip install -e .` there. Optional: `bitsandbytes`, `flash-attn`, `ninja` for CUDA optimizations.
@@ -330,11 +330,18 @@ Each section highlights installation, configuration, and a smoke test.
 
 ## YAML Configuration Reference
 
-Location precedence (first found is used):
-- `tldw_Server_API/Config_Files/tts_providers_config.yaml` (project-level override)
-- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (in-repo default)
-- `./tts_providers_config.yaml` (current working directory)
-- `~/.config/tldw/tts_providers_config.yaml` (user config)
+Location resolution:
+- If `TTSConfigManager(yaml_path=...)` is used, that explicit path is loaded.
+- Otherwise, tldw resolves `tts_providers_config.yaml` from the shared config root (`resolve_config_root()`).
+
+Config root precedence:
+1. `TLDW_CONFIG_FILE` / `TLDW_CONFIG_PATH` / `TLDW_CONFIG_DIR` overrides
+2. `<repo>/Config_Files` when running from a source checkout
+3. User config directory when running outside a repo checkout:
+   - Linux: `~/.config/tldw`
+   - macOS: `~/Library/Application Support/tldw`
+   - Windows: `%APPDATA%\\tldw`
+4. Packaged fallback: `tldw_Server_API/Config_Files`
 
 Key sections:
 - `provider_priority`: ordered list used for fallback

@@ -260,13 +260,15 @@ describe("DictionariesManager stage-1 empty and error states", () => {
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
 
-    expect(screen.getByText("No entries yet")).toBeInTheDocument()
+    expect(await screen.findByText("No entries yet")).toBeInTheDocument()
     expect(
-      screen.getByText("Add a pattern/replacement pair to start transforming text.")
+      await screen.findByText("Add a pattern/replacement pair to start transforming text.")
     ).toBeInTheDocument()
-    expect(screen.getByText("Literal: BP -> blood pressure")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Add first entry" })).toBeInTheDocument()
-  }, 15000)
+    expect(await screen.findByText("Literal: BP -> blood pressure")).toBeInTheDocument()
+    expect(
+      await screen.findByRole("button", { name: "Add first entry" })
+    ).toBeInTheDocument()
+  }, 30000)
 
   it("renders entry loading error state with retry action", async () => {
     const user = userEvent.setup()
@@ -311,11 +313,11 @@ describe("DictionariesManager stage-1 empty and error states", () => {
       screen.getByRole("button", { name: "Manage entries for Medical Terms" })
     )
 
-    expect(screen.getByText("Unable to load entries")).toBeInTheDocument()
+    expect(await screen.findByText("Unable to load entries")).toBeInTheDocument()
     expect(
-      screen.getByText("Could not load entries: entries endpoint unavailable")
+      await screen.findByText("Could not load entries: entries endpoint unavailable")
     ).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Retry" }))
+    await user.click(await screen.findByRole("button", { name: "Retry" }))
     expect(refetchMock).toHaveBeenCalled()
   }, 15000)
 })

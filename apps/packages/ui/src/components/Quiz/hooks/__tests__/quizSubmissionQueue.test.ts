@@ -12,7 +12,7 @@ import {
 const validQueue: QueuedQuizSubmission = {
   attemptId: 101,
   quizId: 7,
-  answers: [{ question_id: 1, user_answer: "true" }],
+  answers: [{ question_id: 1, user_answer: "true", hint_used: true, time_spent_ms: 1200 }],
   allowPartial: false,
   queuedAt: Date.now(),
   retryCount: 0,
@@ -41,6 +41,26 @@ describe("quizSubmissionQueue", () => {
       queuedAt: Date.now() - (25 * 60 * 60 * 1000)
     })
     expect(deserializeQueuedQuizSubmission(staleRaw)).toBeNull()
+
+    const invalidAnswerShapeRaw = JSON.stringify({
+      ...validQueue,
+      answers: [{ question_id: 2, user_answer: { left: 1 } }]
+    })
+    expect(deserializeQueuedQuizSubmission(invalidAnswerShapeRaw)).toBeNull()
+  })
+
+  it("accepts array and map answer values in queued submissions", () => {
+    const withArrayAnswer = serializeQueuedQuizSubmission({
+      ...validQueue,
+      answers: [{ question_id: 2, user_answer: [2, 0] }]
+    })
+    expect(deserializeQueuedQuizSubmission(withArrayAnswer)).not.toBeNull()
+
+    const withMapAnswer = serializeQueuedQuizSubmission({
+      ...validQueue,
+      answers: [{ question_id: 3, user_answer: { CPU: "Processor", RAM: "Memory" } }]
+    })
+    expect(deserializeQueuedQuizSubmission(withMapAnswer)).not.toBeNull()
   })
 
   it("writes, reads, and clears queued submissions", async () => {

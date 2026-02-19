@@ -126,11 +126,13 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     GroupUpdateRequest,
     Job,
     JobCreateRequest,
+    JobDeleteResponse,
     JobsListResponse,
     JobUpdateRequest,
     PreviewItem,
     PreviewResponse,
     Run,
+    RunCancelResponse,
     RunDetail,
     RunsListResponse,
     ScrapedItem,
@@ -139,6 +141,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     Source,
     SourceCheckNowItem,
     SourceCreateRequest,
+    SourceDeleteResponse,
     SourcesCheckNowRequest,
     SourcesCheckNowResponse,
     SourcesBulkCreateItem,
@@ -149,11 +152,15 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E40
     SourcesImportItem,
     SourcesImportResponse,
     SourcesListResponse,
+    SourceTestRequest,
     SourceUpdateRequest,
     Tag,
     TagsListResponse,
     WatchlistFilter,
     WatchlistFiltersPayload,
+    WatchlistIaExperimentTelemetryIngestRequest,
+    WatchlistIaExperimentTelemetryIngestResponse,
+    WatchlistIaExperimentTelemetrySummaryResponse,
     WatchlistOutput,
     WatchlistOutputCreateRequest,
     WatchlistOutputsListResponse,
@@ -193,8 +200,15 @@ router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 DEFAULT_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0") or 0)
 TEMP_OUTPUT_TTL_SECONDS = int(os.getenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "86400") or 86400)
 DEFAULT_TTS_BRIEF_MAX_ITEMS = int(os.getenv("WATCHLIST_OUTPUT_TTS_BRIEF_MAX_ITEMS", "10") or 10)
+WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS = max(
+    1, int(os.getenv("WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS", "10") or 10)
+)
 
 _TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES = max(
+    1, int(os.getenv("WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES", "5") or 5)
+)
+_EMAIL_RECIPIENT_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def _utcnow_iso() -> str:
@@ -485,6 +499,183 @@ def _compute_next_run(cron: str | None, timezone: str | None) -> str | None:
         return nxt.isoformat() if nxt else None
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
         return None
+
+
+def _raise_watchlists_validation_error(
+    *,
+    rule: str,
+    message_key: str,
+    message: str,
+    remediation_key: str,
+    remediation: str,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    detail: dict[str, Any] = {
+        "code": "watchlists_validation_error",
+        "rule": rule,
+        "message_key": message_key,
+        "message": message,
+        "remediation_key": remediation_key,
+        "remediation": remediation,
+    }
+    if isinstance(meta, dict) and meta:
+        detail["meta"] = meta
+    raise HTTPException(status_code=422, detail=detail)
+
+
+def _scope_has_selection(scope: dict[str, Any] | None) -> bool:
+    if not isinstance(scope, dict):
+        return False
+    for key in ("sources", "groups", "tags"):
+        raw = scope.get(key)
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    return True
+                if isinstance(item, (int, float)) and int(item) > 0:
+                    return True
+                if item not in (None, ""):
+                    return True
+        elif isinstance(raw, str) and raw.strip():
+            return True
+        elif isinstance(raw, (int, float)) and int(raw) > 0:
+            return True
+    return False
+
+
+def _extract_job_email_recipients(output_prefs: dict[str, Any] | None) -> list[str]:
+    if not isinstance(output_prefs, dict):
+        return []
+
+    recipients: list[str] = []
+
+    deliveries = output_prefs.get("deliveries")
+    if isinstance(deliveries, dict):
+        email_cfg = deliveries.get("email")
+        if isinstance(email_cfg, dict):
+            raw = email_cfg.get("recipients")
+            if isinstance(raw, list):
+                for value in raw:
+                    if isinstance(value, str) and value.strip():
+                        recipients.append(value.strip())
+
+    if not recipients:
+        delivery_cfg = output_prefs.get("delivery_config")
+        if isinstance(delivery_cfg, dict):
+            raw = delivery_cfg.get("email_recipients")
+            if isinstance(raw, list):
+                for value in raw:
+                    if isinstance(value, str) and value.strip():
+                        recipients.append(value.strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in recipients:
+        normalized = value.strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(normalized)
+    return deduped
+
+
+def _find_invalid_email_recipients(recipients: list[str]) -> list[str]:
+    invalid: list[str] = []
+    for value in recipients:
+        normalized = value.strip().lower()
+        if not normalized:
+            continue
+        if not _EMAIL_RECIPIENT_PATTERN.match(normalized):
+            invalid.append(value.strip())
+    return invalid
+
+
+def _detect_schedule_interval_minutes(
+    schedule_expr: str | None, timezone: str | None
+) -> float | None:
+    expr = str(schedule_expr or "").strip()
+    if not expr:
+        return None
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+
+        tz = _normalize_tz(timezone) or "UTC"
+        trigger = CronTrigger.from_crontab(expr, timezone=tz)
+        now = datetime.now(trigger.timezone)
+        first = trigger.get_next_fire_time(None, now)
+        if first is None:
+            return None
+        second = trigger.get_next_fire_time(first, first + timedelta(seconds=1))
+        if second is None:
+            return None
+        delta_minutes = (second - first).total_seconds() / 60.0
+        if delta_minutes <= 0:
+            return None
+        return delta_minutes
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+def _validate_job_request(
+    *,
+    scope: dict[str, Any] | None,
+    schedule_expr: str | None,
+    timezone: str | None,
+    output_prefs: dict[str, Any] | None,
+    enforce_scope: bool = True,
+    enforce_schedule: bool = True,
+    enforce_email_recipients: bool = True,
+) -> None:
+    if enforce_scope and not _scope_has_selection(scope):
+        _raise_watchlists_validation_error(
+            rule="scope_required",
+            message_key="watchlists:jobs.form.scopeRequired",
+            message="Please select at least one feed, group, or tag.",
+            remediation_key="watchlists:jobs.form.scopeRemediation",
+            remediation="Select at least one feed, group, or tag before saving.",
+        )
+
+    if enforce_schedule:
+        detected_interval = _detect_schedule_interval_minutes(schedule_expr, timezone)
+        if (
+            detected_interval is not None
+            and detected_interval < _WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES
+        ):
+            _raise_watchlists_validation_error(
+                rule="schedule_too_frequent",
+                message_key="watchlists:jobs.form.scheduleTooFrequent",
+                message=(
+                    "Schedule is too frequent. "
+                    f"Minimum interval is every {_WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES} minutes."
+                ),
+                remediation_key="watchlists:schedule.tooFrequentRemediation",
+                remediation=(
+                    "Increase schedule interval to meet the minimum cadence."
+                ),
+                meta={
+                    "minimum_minutes": _WATCHLIST_MIN_SCHEDULE_INTERVAL_MINUTES,
+                    "detected_interval_minutes": round(detected_interval, 3),
+                },
+            )
+
+    if enforce_email_recipients:
+        recipients = _extract_job_email_recipients(output_prefs)
+        invalid = _find_invalid_email_recipients(recipients)
+        if invalid:
+            _raise_watchlists_validation_error(
+                rule="invalid_email_recipients",
+                message_key="watchlists:jobs.form.emailRecipientsInvalidSubmit",
+                message="Fix invalid email recipients before saving.",
+                remediation_key="watchlists:jobs.form.emailRecipientsRemediation",
+                remediation="Remove or correct invalid recipient addresses.",
+                meta={
+                    "count": len(invalid),
+                    "invalid_recipients": invalid[:10],
+                },
+            )
 
 
 def _row_to_scraped_item(row) -> ScrapedItem:
@@ -1548,25 +1739,31 @@ async def clear_source_seen_state(
     )
 
 
-@router.post("/sources/{source_id}/test", response_model=PreviewResponse, summary="Test source and preview items")
-async def test_source(
-    source_id: int = Path(..., ge=1),
-    limit: int = Query(20, ge=1, le=200),
-    current_user: User = Depends(get_request_user),
-    db = Depends(get_watchlists_db_for_user),
-):
-    try:
-        src = db.get_source(source_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found") from None
+def _normalize_source_test_url(source_url: str, source_type: str) -> str:
+    target_url = str(source_url)
+    if source_type.lower() == "rss" and _is_youtube_url(target_url) and not _is_youtube_feed_url(target_url):
+        normalized = _normalize_youtube_feed_url(target_url)
+        if normalized:
+            with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
+                logger.debug(f"watchlists.test_source: normalized YouTube URL {target_url} -> {normalized}")
+            return normalized
+        _validate_youtube_feed_or_raise(target_url, source_type)
+    return target_url
 
-    source_type = str(getattr(src, "source_type", ""))
+
+async def _build_source_preview_response(
+    *,
+    source_id: int,
+    source_url: str,
+    source_type: str,
+    settings: dict[str, Any] | None,
+    limit: int,
+    etag: str | None = None,
+    last_modified: str | None = None,
+) -> PreviewResponse:
     _raise_if_forum_disabled(source_type)
-    settings: dict[str, Any] = {}
-    try:
-        settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
-    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-        settings = {}
+    normalized_url = _normalize_source_test_url(source_url, source_type)
+    safe_settings = settings if isinstance(settings, dict) else {}
 
     items: list[dict[str, Any]] = []
     test_mode = _is_test_mode()
@@ -1574,9 +1771,9 @@ async def test_source(
     if source_type.lower() == "rss":
         try:
             res = await fetch_rss_feed(
-                str(src.url),
-                etag=getattr(src, "etag", None),
-                last_modified=getattr(src, "last_modified", None),
+                normalized_url,
+                etag=etag,
+                last_modified=last_modified,
                 tenant_id="default",
             )
             items = res.get("items", []) if isinstance(res, dict) else []
@@ -1584,11 +1781,15 @@ async def test_source(
             logger.debug(f"watchlists.test_source: rss fetch failed: {exc}")
             items = []
     elif source_type.lower() in {"site", "forum"}:
-        scrape_rules = settings.get("scrape_rules") if isinstance(settings.get("scrape_rules"), dict) else None
+        scrape_rules = (
+            safe_settings.get("scrape_rules")
+            if isinstance(safe_settings.get("scrape_rules"), dict)
+            else None
+        )
         if scrape_rules:
             try:
                 items = await fetch_site_items_with_rules(
-                    base_url=str(scrape_rules.get("list_url") or src.url),
+                    base_url=str(scrape_rules.get("list_url") or normalized_url),
                     rules=scrape_rules,
                     tenant_id="default",
                 )
@@ -1599,7 +1800,7 @@ async def test_source(
             items = [
                 {
                     "title": "Test scraped item 1",
-                    "url": f"{str(src.url).rstrip('/')}/test-item-1",
+                    "url": f"{normalized_url.rstrip('/')}/test-item-1",
                     "summary": "Test summary from source preview.",
                 }
             ]
@@ -1608,11 +1809,11 @@ async def test_source(
                 from tldw_Server_API.app.core.Watchlists.fetchers import fetch_site_top_links
 
                 default_top_n = _forum_default_top_n() if source_type.lower() == "forum" else 1
-                top_n = int(settings.get("top_n", default_top_n) or default_top_n)
-                discover_method = str(settings.get("discover_method", "auto")).lower()
-                urls = await fetch_site_top_links(str(src.url), top_n=top_n, method=discover_method)
+                top_n = int(safe_settings.get("top_n", default_top_n) or default_top_n)
+                discover_method = str(safe_settings.get("discover_method", "auto")).lower()
+                urls = await fetch_site_top_links(normalized_url, top_n=top_n, method=discover_method)
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                urls = [str(src.url)]
+                urls = [normalized_url]
             items = [{"url": url} for url in (urls or [])]
 
     if limit and limit > 0:
@@ -1639,6 +1840,52 @@ async def test_source(
 
     total = len(preview_items)
     return PreviewResponse(items=preview_items, total=total, ingestable=total, filtered=0)
+
+
+@router.post("/sources/test", response_model=PreviewResponse, summary="Test draft source and preview items")
+async def test_source_draft(
+    payload: SourceTestRequest = Body(...),
+    limit: int = Query(20, ge=1, le=200),
+    _current_user: User = Depends(get_request_user),
+    _db = Depends(get_watchlists_db_for_user),
+):
+    return await _build_source_preview_response(
+        source_id=0,
+        source_url=str(payload.url),
+        source_type=str(payload.source_type),
+        settings=payload.settings or {},
+        limit=limit,
+    )
+
+
+@router.post("/sources/{source_id}/test", response_model=PreviewResponse, summary="Test source and preview items")
+async def test_source(
+    source_id: int = Path(..., ge=1),
+    limit: int = Query(20, ge=1, le=200),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    _ = current_user
+    try:
+        src = db.get_source(source_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="source_not_found") from None
+
+    settings: dict[str, Any] = {}
+    try:
+        settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        settings = {}
+
+    return await _build_source_preview_response(
+        source_id=int(source_id),
+        source_url=str(src.url),
+        source_type=str(getattr(src, "source_type", "")),
+        settings=settings,
+        limit=limit,
+        etag=getattr(src, "etag", None),
+        last_modified=getattr(src, "last_modified", None),
+    )
 
 
 @router.patch("/sources/{source_id}", response_model=Source, summary="Update source")
@@ -1720,16 +1967,59 @@ async def update_source(
     )
 
 
-@router.delete("/sources/{source_id}", summary="Delete source")
+@router.delete(
+    "/sources/{source_id}",
+    response_model=SourceDeleteResponse,
+    summary="Delete source with reversible window",
+)
 async def delete_source(
     source_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
-    ok = db.delete_source(source_id)
-    if not ok:
+    ok, restore_expires_at = db.delete_source_reversible(
+        source_id,
+        undo_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
+    )
+    if not ok or not restore_expires_at:
         raise HTTPException(status_code=404, detail="source_not_found")
-    return {"success": True}
+    return SourceDeleteResponse(
+        success=True,
+        source_id=int(source_id),
+        restore_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
+        restore_expires_at=restore_expires_at,
+    )
+
+
+@router.post("/sources/{source_id}/restore", response_model=Source, summary="Restore recently deleted source")
+async def restore_source(
+    source_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        row = db.restore_source(source_id)
+    except KeyError as exc:
+        code = str(exc.args[0]) if exc.args else "source_restore_not_found"
+        if code == "source_restore_expired":
+            raise HTTPException(status_code=410, detail=code) from None
+        raise HTTPException(status_code=404, detail=code) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc) or "source_restore_conflict") from exc
+    return Source(
+        id=row.id,
+        name=row.name,
+        url=row.url,
+        source_type=row.source_type,  # type: ignore[assignment]
+        active=bool(row.active),
+        tags=row.tags,
+        group_ids=_get_group_ids(db, row.id),
+        settings=(json.loads(row.settings_json) if row.settings_json else None),
+        last_scraped_at=row.last_scraped_at,
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
 
 
 @router.post(
@@ -2010,12 +2300,67 @@ async def get_watchlist_settings(
     }
 
 
+@router.post(
+    "/telemetry/ia-experiment",
+    response_model=WatchlistIaExperimentTelemetryIngestResponse,
+    summary="Record watchlists IA experiment telemetry",
+)
+async def record_watchlists_ia_experiment_telemetry(
+    payload: WatchlistIaExperimentTelemetryIngestRequest,
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    accepted = False
+    try:
+        accepted = db.record_ia_experiment_event(
+            variant=payload.variant,
+            session_id=payload.session_id,
+            previous_tab=payload.previous_tab,
+            current_tab=payload.current_tab,
+            transitions=payload.transitions,
+            visited_tabs=payload.visited_tabs,
+            first_seen_at=payload.first_seen_at,
+            last_seen_at=payload.last_seen_at,
+        )
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("watchlists IA telemetry ingest failed for user {}: {}", current_user.id, exc)
+        accepted = False
+    return WatchlistIaExperimentTelemetryIngestResponse(accepted=bool(accepted))
+
+
+@router.get(
+    "/telemetry/ia-experiment/summary",
+    response_model=WatchlistIaExperimentTelemetrySummaryResponse,
+    summary="Summarize watchlists IA experiment telemetry",
+)
+async def get_watchlists_ia_experiment_telemetry_summary(
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        items = db.summarize_ia_experiment_events(since=since, until=until)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error("watchlists IA telemetry summary failed for user {}: {}", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="watchlists_ia_telemetry_summary_failed") from exc
+    return WatchlistIaExperimentTelemetrySummaryResponse(items=items, since=since, until=until)
+
+
 @router.post("/jobs", response_model=Job, summary="Create job")
 async def create_job(
     payload: JobCreateRequest,
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    ingest_prefs = payload.ingest_prefs.model_dump(exclude_none=True) if payload.ingest_prefs else None
+    output_prefs = _merge_output_prefs(payload.output_prefs or {}, ingest_prefs)
+    _validate_job_request(
+        scope=payload.scope or {},
+        schedule_expr=payload.schedule_expr,
+        timezone=payload.timezone,
+        output_prefs=output_prefs,
+    )
     try:
         jf_json = None
         try:
@@ -2023,8 +2368,6 @@ async def create_job(
                 jf_json = json.dumps(payload.job_filters.model_dump())
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
             jf_json = None
-        ingest_prefs = payload.ingest_prefs.model_dump(exclude_none=True) if payload.ingest_prefs else None
-        output_prefs = _merge_output_prefs(payload.output_prefs or {}, ingest_prefs)
         row = db.create_job(
             name=payload.name,
             description=payload.description,
@@ -2414,25 +2757,59 @@ async def update_job(
     db = Depends(get_watchlists_db_for_user),
 ):
     patch = payload.model_dump(exclude_unset=True)
+    try:
+        current = db.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job_not_found") from None
     ingest_prefs = patch.pop("ingest_prefs", None)
     output_prefs = patch.pop("output_prefs", None) if "output_prefs" in patch else None
+    if "timezone" in patch:
+        patch["schedule_timezone"] = patch.pop("timezone")
     if "scope" in patch:
         patch["scope_json"] = json.dumps(patch.pop("scope") or {})
     if "retry_policy" in patch:
         patch["retry_policy_json"] = json.dumps(patch.pop("retry_policy") or {})
     if "job_filters" in patch:
         patch["job_filters_json"] = json.dumps(patch.pop("job_filters") or {})
+    current_output_prefs = _normalize_output_prefs(getattr(current, "output_prefs_json", None))
     if ingest_prefs is not None:
         if output_prefs is None:
-            try:
-                current = db.get_job(job_id)
-                output_prefs = _normalize_output_prefs(getattr(current, "output_prefs_json", None))
-            except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-                output_prefs = {}
+            output_prefs = current_output_prefs
         output_prefs = _merge_output_prefs(output_prefs, ingest_prefs)
         patch["output_prefs_json"] = json.dumps(output_prefs)
     elif output_prefs is not None:
         patch["output_prefs_json"] = json.dumps(output_prefs or {})
+    current_scope = {}
+    try:
+        current_scope = json.loads(current.scope_json or "{}") if current.scope_json else {}
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        current_scope = {}
+    effective_scope = current_scope
+    if "scope_json" in patch:
+        try:
+            effective_scope = json.loads(patch.get("scope_json") or "{}")
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+            effective_scope = {}
+
+    effective_schedule_expr = patch.get("schedule_expr", current.schedule_expr)
+    effective_timezone = patch.get("schedule_timezone", current.schedule_timezone)
+
+    effective_output_prefs = current_output_prefs
+    if "output_prefs_json" in patch:
+        try:
+            effective_output_prefs = _normalize_output_prefs(patch.get("output_prefs_json"))
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+            effective_output_prefs = {}
+
+    _validate_job_request(
+        scope=effective_scope if "scope_json" in patch else None,
+        schedule_expr=effective_schedule_expr,
+        timezone=effective_timezone,
+        output_prefs=effective_output_prefs if "output_prefs_json" in patch else None,
+        enforce_scope="scope_json" in patch,
+        enforce_schedule=("schedule_expr" in patch or "schedule_timezone" in patch),
+        enforce_email_recipients="output_prefs_json" in patch,
+    )
     try:
         r = db.update_job(job_id, patch)
     except KeyError:
@@ -2577,7 +2954,11 @@ async def remove_watchlist_cluster(
     return {"status": "removed", "watchlist_id": int(watchlist_id), "cluster_id": int(cluster_id)}
 
 
-@router.delete("/jobs/{job_id}", summary="Delete job")
+@router.delete(
+    "/jobs/{job_id}",
+    response_model=JobDeleteResponse,
+    summary="Delete job with reversible window",
+)
 async def delete_job(
     job_id: int = Path(..., ge=1),
     current_user: User = Depends(get_request_user),
@@ -2589,12 +2970,120 @@ async def delete_job(
         if getattr(r, "wf_schedule_id", None):
             from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
             get_workflows_scheduler().delete(r.wf_schedule_id)  # type: ignore[arg-type]
+            with contextlib.suppress(_WATCHLISTS_NONCRITICAL_EXCEPTIONS):
+                db.set_job_schedule_id(job_id, None)
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
         pass
-    ok = db.delete_job(job_id)
-    if not ok:
+    ok, restore_expires_at = db.delete_job_reversible(
+        job_id,
+        undo_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
+    )
+    if not ok or not restore_expires_at:
         raise HTTPException(status_code=404, detail="job_not_found")
-    return {"success": True}
+    return JobDeleteResponse(
+        success=True,
+        job_id=int(job_id),
+        restore_window_seconds=WATCHLISTS_DELETE_RESTORE_WINDOW_SECONDS,
+        restore_expires_at=restore_expires_at,
+    )
+
+
+@router.post("/jobs/{job_id}/restore", response_model=Job, summary="Restore recently deleted job")
+async def restore_job(
+    job_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        row = db.restore_job(job_id)
+    except KeyError as exc:
+        code = str(exc.args[0]) if exc.args else "job_restore_not_found"
+        if code == "job_restore_expired":
+            raise HTTPException(status_code=410, detail=code) from None
+        raise HTTPException(status_code=404, detail=code) from None
+
+    # Recompute next_run_at and re-register scheduler linkage for restored jobs.
+    try:
+        next_run = _compute_next_run(row.schedule_expr, row.schedule_timezone)
+        db.set_job_history(row.id, next_run_at=next_run)
+        row = db.get_job(row.id)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
+        if row.schedule_expr:
+            from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
+
+            svc = get_workflows_scheduler()
+            sid = svc.create(
+                tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                user_id=str(current_user.id),
+                workflow_id=None,
+                name=f"watchlist:{row.id}:{row.name}",
+                cron=row.schedule_expr,
+                timezone=_normalize_tz(row.schedule_timezone) or "UTC",
+                inputs={"watchlist_job_id": row.id},
+                run_mode="async",
+                validation_mode="block",
+                enabled=bool(row.active),
+                concurrency_mode="queue",
+                misfire_grace_sec=300,
+                coalesce=True,
+            )
+            db.set_job_schedule_id(row.id, sid)
+            row = db.get_job(row.id)
+    except Exception as e:
+        logger.debug(f"Watchlists: schedule registration during restore failed, fallback: {e}")
+        try:
+            if row.schedule_expr:
+                from uuid import uuid4
+
+                from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import WorkflowsSchedulerDB
+
+                sid = uuid4().hex
+                wfdb = WorkflowsSchedulerDB(user_id=int(current_user.id))
+                wfdb.create_schedule(
+                    id=sid,
+                    tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                    user_id=str(current_user.id),
+                    workflow_id=None,
+                    name=f"watchlist:{row.id}:{row.name}",
+                    cron=row.schedule_expr,
+                    timezone=_normalize_tz(row.schedule_timezone) or "UTC",
+                    inputs={"watchlist_job_id": row.id},
+                    run_mode="async",
+                    validation_mode="block",
+                    enabled=bool(row.active),
+                    concurrency_mode="queue",
+                    misfire_grace_sec=300,
+                    coalesce=True,
+                )
+                db.set_job_schedule_id(row.id, sid)
+                row = db.get_job(row.id)
+        except Exception as fallback_exc:
+            logger.debug(f"Watchlists: schedule DB fallback during restore failed: {fallback_exc}")
+
+    output_prefs = _normalize_output_prefs(getattr(row, "output_prefs_json", None))
+    ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
+    return Job(
+        id=row.id,
+        name=row.name,
+        description=row.description,
+        scope=(json.loads(row.scope_json or "{}")),
+        schedule_expr=row.schedule_expr,
+        timezone=row.schedule_timezone,
+        active=bool(row.active),
+        max_concurrency=row.max_concurrency,
+        per_host_delay_ms=row.per_host_delay_ms,
+        retry_policy=(json.loads(row.retry_policy_json or "{}")),
+        output_prefs=output_prefs,
+        ingest_prefs=ingest_prefs,
+        job_filters=_normalize_filters_payload(getattr(row, "job_filters_json", None)),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        last_run_at=row.last_run_at,
+        next_run_at=row.next_run_at,
+    )
 
 
 @router.patch("/jobs/{job_id}/filters", response_model=WatchlistFiltersPayload, summary="Replace job filters")
@@ -2916,6 +3405,70 @@ async def get_run(
     except KeyError:
         raise HTTPException(status_code=404, detail="run_not_found") from None
     return Run(id=r.id, job_id=r.job_id, status=r.status, started_at=r.started_at, finished_at=r.finished_at, stats=(json.loads(r.stats_json or "{}") if r.stats_json else None), error_msg=r.error_msg)
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunCancelResponse, summary="Cancel a run")
+async def cancel_run(
+    run_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: cancel a run for another user ID.",
+    ),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    _enforce_runs_admin_if_configured(current_user)
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
+    try:
+        run = target_db.get_run(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="run_not_found") from None
+
+    status_now = str(run.status or "").strip().lower()
+    terminal_statuses = {"completed", "succeeded", "failed", "cancelled"}
+    cancellable_statuses = {"queued", "pending", "running"}
+
+    if status_now == "cancelled":
+        return RunCancelResponse(
+            run_id=int(run.id),
+            status="cancelled",
+            cancelled=True,
+            message="already_cancelled",
+        )
+
+    if status_now in terminal_statuses and status_now != "cancelled":
+        return RunCancelResponse(
+            run_id=int(run.id),
+            status=str(run.status),
+            cancelled=False,
+            message="run_not_cancellable",
+        )
+
+    if status_now not in cancellable_statuses:
+        return RunCancelResponse(
+            run_id=int(run.id),
+            status=str(run.status),
+            cancelled=False,
+            message="run_not_cancellable",
+        )
+
+    updated = target_db.update_run(
+        run_id,
+        status="cancelled",
+        finished_at=_utcnow_iso(),
+        error_msg=(run.error_msg or "cancelled_by_user"),
+    )
+    return RunCancelResponse(
+        run_id=int(updated.id),
+        status=str(updated.status),
+        cancelled=True,
+        message="cancel_requested",
+    )
 
 
 @router.get("/runs/{run_id}/details", response_model=RunDetail, summary="Get run details with stats and logs")

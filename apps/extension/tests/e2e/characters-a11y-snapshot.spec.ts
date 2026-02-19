@@ -2,9 +2,11 @@ import { test } from "@playwright/test"
 import fs from "node:fs"
 import path from "node:path"
 
-import { launchWithBuiltExtension } from "./utils/extension-build"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import {
+  requireRealServerConfig,
+  launchWithBuiltExtensionOrSkip
+} from "./utils/real-server"
 
 const seedConfig = (page: any, serverUrl: string, apiKey: string) =>
   page.evaluate(
@@ -21,7 +23,7 @@ test.describe('Characters workspace snapshots', () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const { context, page, extensionId, optionsUrl } =
-      await launchWithBuiltExtension()
+      await launchWithBuiltExtensionOrSkip(test)
 
     const consoleMessages: string[] = []
     page.on('console', (msg) => {

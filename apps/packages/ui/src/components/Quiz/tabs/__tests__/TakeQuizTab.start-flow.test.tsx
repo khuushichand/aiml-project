@@ -10,6 +10,7 @@ import {
 } from "../../hooks"
 import { useQuizAutoSave } from "../../hooks/useQuizAutoSave"
 import { useQuizTimer } from "../../hooks/useQuizTimer"
+import { buildShuffledOptionEntries } from "../../utils/optionShuffle"
 
 const interpolate = (template: string, values: Record<string, unknown> | undefined) => {
   return template.replace(/\{\{\s*([^\s}]+)\s*\}\}/g, (_, key: string) => {
@@ -249,6 +250,31 @@ describe("TakeQuizTab start flow", () => {
     ).toBeInTheDocument()
   }, 15000)
 
+  it("renders shared-assignment context with due date and note", () => {
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+        startQuizId={7}
+        highlightQuizId={7}
+        navigationSource="assignment"
+        assignmentMode="shared"
+        assignmentDueAt="2026-03-01T14:30:00.000Z"
+        assignmentNote="Complete before the lab session."
+        assignedByRole="lead"
+      />
+    )
+
+    expect(
+      screen.getByText("This quiz was opened from a shared assignment link.")
+    ).toBeInTheDocument()
+    expect(screen.getAllByText("Note: Complete before the lab session.").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Assigned by role: lead").length).toBeGreaterThan(0)
+    expect(
+      screen.getByText("Shared assignment ready: Biology Basics.")
+    ).toBeInTheDocument()
+  }, 15000)
+
   it("does not enter attempt mode when the quiz has zero questions", async () => {
     vi.mocked(useStartAttemptMutation).mockReturnValue({
       mutateAsync: vi.fn(async () => ({
@@ -317,5 +343,213 @@ describe("TakeQuizTab start flow", () => {
 
     const liveRegion = await screen.findByText("58 seconds remaining")
     expect(liveRegion).toHaveAttribute("aria-live", "assertive")
+  }, 15000)
+
+  it("shuffles multiple-choice option order per graded attempt while preserving answer mapping", async () => {
+    const optionLabels = ["Alpha", "Beta", "Gamma", "Delta"]
+    const questionId = 11
+
+    const firstAttemptId = 200
+    let secondAttemptId = 201
+    const firstOrder = buildShuffledOptionEntries(optionLabels, questionId, firstAttemptId).map((entry) => entry.originalIndex)
+    let secondOrder = buildShuffledOptionEntries(optionLabels, questionId, secondAttemptId).map((entry) => entry.originalIndex)
+    while (secondOrder.join(",") === firstOrder.join(",")) {
+      secondAttemptId += 1
+      secondOrder = buildShuffledOptionEntries(optionLabels, questionId, secondAttemptId).map((entry) => entry.originalIndex)
+    }
+
+    const startMutate = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: firstAttemptId,
+        quiz_id: 7,
+        started_at: "2026-02-18T10:00:00Z",
+        total_possible: 1,
+        answers: [],
+        questions: [
+          {
+            id: questionId,
+            quiz_id: 7,
+            question_type: "multiple_choice",
+            question_text: "Pick the second Greek letter.",
+            options: optionLabels,
+            points: 1,
+            order_index: 0,
+            tags: null,
+            deleted: false,
+            client_id: "test",
+            version: 1
+          }
+        ]
+      })
+      .mockResolvedValueOnce({
+        id: secondAttemptId,
+        quiz_id: 7,
+        started_at: "2026-02-18T10:02:00Z",
+        total_possible: 1,
+        answers: [],
+        questions: [
+          {
+            id: questionId,
+            quiz_id: 7,
+            question_type: "multiple_choice",
+            question_text: "Pick the second Greek letter.",
+            options: optionLabels,
+            points: 1,
+            order_index: 0,
+            tags: null,
+            deleted: false,
+            client_id: "test",
+            version: 1
+          }
+        ]
+      })
+
+    const submitMutate = vi.fn(async ({ attemptId, answers }: {
+      attemptId: number
+      answers: Array<{ question_id: number; user_answer: number; hint_used?: boolean }>
+    }) => ({
+      id: attemptId,
+      quiz_id: 7,
+      started_at: "2026-02-18T10:00:00Z",
+      completed_at: "2026-02-18T10:03:00Z",
+      score: 1,
+      total_possible: 1,
+      answers: [
+        {
+          question_id: questionId,
+          user_answer: answers[0]?.user_answer,
+          is_correct: true,
+          correct_answer: 1
+        }
+      ]
+    }))
+
+    vi.mocked(useStartAttemptMutation).mockReturnValue({
+      mutateAsync: startMutate
+    } as any)
+    vi.mocked(useSubmitAttemptMutation).mockReturnValue({
+      mutateAsync: submitMutate,
+      isPending: false
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
+
+    await screen.findByTestId(`quiz-question-${questionId}`)
+
+    const firstRenderOrder = screen.getAllByRole("radio").map((node) => Number((node as HTMLInputElement).value))
+    expect(firstRenderOrder).toEqual(firstOrder)
+
+    fireEvent.click(screen.getAllByRole("radio")[0])
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+    await waitFor(() => {
+      expect(submitMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attemptId: firstAttemptId,
+          answers: [{ question_id: questionId, user_answer: firstOrder[0], hint_used: false }]
+        })
+      )
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /Retake Quiz/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
+
+    await screen.findByTestId(`quiz-question-${questionId}`)
+    const secondRenderOrder = screen.getAllByRole("radio").map((node) => Number((node as HTMLInputElement).value))
+    expect(secondRenderOrder).toEqual(secondOrder)
+  }, 15000)
+
+  it("tracks hint usage in submit payload and reflects penalty in results", async () => {
+    const questionId = 19
+    const startMutate = vi.fn(async () => ({
+      id: 919,
+      quiz_id: 7,
+      started_at: "2026-02-18T10:00:00Z",
+      total_possible: 1,
+      answers: [],
+      questions: [
+        {
+          id: questionId,
+          quiz_id: 7,
+          question_type: "multiple_choice",
+          question_text: "Which city has the Eiffel Tower?",
+          options: ["Berlin", "Paris"],
+          hint: "It is known as the city of lights.",
+          hint_penalty_points: 1,
+          points: 1,
+          order_index: 0,
+          tags: null,
+          deleted: false,
+          client_id: "test",
+          version: 1
+        }
+      ]
+    }))
+
+    const submitMutate = vi.fn(async () => ({
+      id: 919,
+      quiz_id: 7,
+      started_at: "2026-02-18T10:00:00Z",
+      completed_at: "2026-02-18T10:01:00Z",
+      score: 0,
+      total_possible: 1,
+      answers: [
+        {
+          question_id: questionId,
+          user_answer: 1,
+          is_correct: true,
+          correct_answer: 1,
+          hint_used: true,
+          hint_penalty_points: 1,
+          points_awarded: 0
+        }
+      ]
+    }))
+
+    vi.mocked(useStartAttemptMutation).mockReturnValue({
+      mutateAsync: startMutate
+    } as any)
+    vi.mocked(useSubmitAttemptMutation).mockReturnValue({
+      mutateAsync: submitMutate,
+      isPending: false
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Start Quiz/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Begin Quiz" }))
+
+    await screen.findByTestId(`quiz-question-${questionId}`)
+    fireEvent.click(screen.getByRole("button", { name: "Show hint for question 19" }))
+    expect(screen.getByText("It is known as the city of lights.")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("radio", { name: "Paris" }))
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+    await waitFor(() => {
+      expect(submitMutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attemptId: 919,
+          answers: [{ question_id: questionId, user_answer: 1, hint_used: true }]
+        })
+      )
+    })
+
+    expect(screen.getByText("Hint used (-1 point(s)).")).toBeInTheDocument()
+    expect(screen.getByText("Points:")).toBeInTheDocument()
   }, 15000)
 })

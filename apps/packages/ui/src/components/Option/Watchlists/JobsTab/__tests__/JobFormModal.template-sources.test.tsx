@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { JobFormModal } from "../JobFormModal"
@@ -5,8 +7,11 @@ import { JobFormModal } from "../JobFormModal"
 const servicesMock = vi.hoisted(() => ({
   createWatchlistJob: vi.fn(),
   updateWatchlistJob: vi.fn(),
+  fetchWatchlistSources: vi.fn(),
+  fetchWatchlistGroups: vi.fn(),
   fetchJobOutputTemplates: vi.fn(),
-  fetchWatchlistTemplates: vi.fn()
+  fetchWatchlistTemplates: vi.fn(),
+  previewWatchlistJob: vi.fn()
 }))
 
 const translationMock = vi.hoisted(() => ({
@@ -45,8 +50,11 @@ vi.mock("react-i18next", () => ({
 vi.mock("@/services/watchlists", () => ({
   createWatchlistJob: (...args: unknown[]) => servicesMock.createWatchlistJob(...args),
   updateWatchlistJob: (...args: unknown[]) => servicesMock.updateWatchlistJob(...args),
+  fetchWatchlistSources: (...args: unknown[]) => servicesMock.fetchWatchlistSources(...args),
+  fetchWatchlistGroups: (...args: unknown[]) => servicesMock.fetchWatchlistGroups(...args),
   fetchJobOutputTemplates: (...args: unknown[]) => servicesMock.fetchJobOutputTemplates(...args),
-  fetchWatchlistTemplates: (...args: unknown[]) => servicesMock.fetchWatchlistTemplates(...args)
+  fetchWatchlistTemplates: (...args: unknown[]) => servicesMock.fetchWatchlistTemplates(...args),
+  previewWatchlistJob: (...args: unknown[]) => servicesMock.previewWatchlistJob(...args)
 }))
 
 vi.mock("../ScopeSelector", () => ({
@@ -91,6 +99,33 @@ describe("JobFormModal template source options", () => {
       ],
       total: 1
     })
+    servicesMock.fetchWatchlistSources.mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          name: "Tech Daily",
+          url: "https://example.com/rss.xml",
+          source_type: "rss",
+          active: true,
+          tags: ["tech"],
+          created_at: "2026-01-15T00:00:00Z",
+          updated_at: "2026-01-15T00:00:00Z",
+          last_scraped_at: null,
+          status: "healthy"
+        }
+      ],
+      total: 1,
+      page: 1,
+      size: 500,
+      has_more: false
+    })
+    servicesMock.fetchWatchlistGroups.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      size: 500,
+      has_more: false
+    })
     servicesMock.fetchWatchlistTemplates.mockResolvedValue({
       items: [
         {
@@ -104,6 +139,12 @@ describe("JobFormModal template source options", () => {
           content: "legacy unique"
         }
       ]
+    })
+    servicesMock.previewWatchlistJob.mockResolvedValue({
+      items: [],
+      total: 0,
+      ingestable: 0,
+      filtered: 0
     })
   })
 
@@ -124,6 +165,9 @@ describe("JobFormModal template source options", () => {
     fireEvent.click(screen.getByText("Output & Delivery"))
 
     await screen.findByText("Template name")
+    expect(screen.getByTestId("watchlists-help-jinja2")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-help-ttl")).toBeInTheDocument()
+
     const selectorPlaceholder = await screen.findByText("Select a template")
     fireEvent.mouseDown(selectorPlaceholder)
 

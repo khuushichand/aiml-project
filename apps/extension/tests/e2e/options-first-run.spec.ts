@@ -1,14 +1,16 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
 import { waitForConnectionStore, forceConnected } from "./utils/connection"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
+
+const normalizeServerUrl = (value: string) =>
+  value.match(/^https?:\/\//) ? value : `http://${value}`
 
 test.describe('Options first-run and connection panel', () => {
   test('shows connection card and inline Set up server link navigates to tldw settings', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath)
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath)
 
     // Seed default config so the card deterministically shows the connection error state.
     await page.evaluate(async (apiKey) => {
@@ -53,7 +55,7 @@ test.describe('Options first-run and connection panel', () => {
 
   test('Start chatting focuses the composer when connected', async () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
-    const serverBaseUrl = serverUrl
+    const serverBaseUrl = normalizeServerUrl(serverUrl)
     const hostPermissionOrigin = `${new URL(serverBaseUrl).origin}/*`
 
     const extPath = path.resolve('build/chrome-mv3')
@@ -64,7 +66,7 @@ test.describe('Options first-run and connection panel', () => {
         apiKey
       }
     }
-    const { context, page: initialPage, extensionId } = await launchWithExtension(extPath, {
+    const { context, page: initialPage, extensionId } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: seed
     })
     let page = initialPage

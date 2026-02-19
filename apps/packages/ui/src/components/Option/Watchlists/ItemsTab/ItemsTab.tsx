@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {
+  Checkbox,
   Button,
   Empty,
   Input,
+  Modal,
   Pagination,
+  Select,
   Segmented,
   Space,
   Spin,
@@ -12,7 +15,7 @@ import {
   message
 } from "antd"
 import DOMPurify from "dompurify"
-import { CheckCircle2, ExternalLink, RefreshCw, Rss, Sun } from "lucide-react"
+import { CheckCircle2, ExternalLink, HelpCircle, RefreshCw, Rss, Sun } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
 import {
@@ -21,12 +24,18 @@ import {
   updateScrapedItem
 } from "@/services/watchlists"
 import type { FetchItemsParams } from "@/services/watchlists"
+import { useWatchlistsStore } from "@/store/watchlists"
 import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import {
   extractImageUrl,
+  ITEM_PAGE_SIZE_OPTIONS,
   filterSourcesForReader,
-  ITEM_PAGE_SIZE,
+  loadPersistedItemPageSize,
+  loadPersistedItemsViewPresets,
+  type PersistedItemsViewPreset,
+  persistItemPageSize,
+  persistItemsViewPresets,
   resolveSelectedItemId,
   SOURCE_LOAD_MAX_ITEMS,
   SOURCE_LOAD_PAGE_SIZE,
@@ -37,6 +46,21 @@ const { Search } = Input
 
 type ReaderStatusFilter = "all" | "ingested" | "filtered"
 type SmartFeedFilter = "all" | "today" | "unread" | "reviewed"
+type BatchReviewScope = "selected" | "page" | "allFiltered"
+type ItemsViewPreset = Omit<PersistedItemsViewPreset, "smartFilter" | "statusFilter"> & {
+  smartFilter: SmartFeedFilter
+  statusFilter: ReaderStatusFilter
+}
+
+const normalizeSmartFilter = (value: string): SmartFeedFilter => {
+  if (value === "today" || value === "unread" || value === "reviewed") return value
+  return "all"
+}
+
+const normalizeStatusFilter = (value: string): ReaderStatusFilter => {
+  if (value === "ingested" || value === "filtered") return value
+  return "all"
+}
 
 const startOfTodayIso = (): string => {
   const now = new Date()
@@ -81,8 +105,22 @@ const getDomain = (url: string | null | undefined): string | null => {
   }
 }
 
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tagName = target.tagName.toLowerCase()
+  if (tagName === "input" || tagName === "textarea" || tagName === "select") {
+    return true
+  }
+  if (target.closest("[contenteditable='true']")) return true
+  if (target.closest(".ant-select-dropdown")) return true
+  return false
+}
+
 export const ItemsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
+  const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
   const [sources, setSources] = useState<WatchlistSource[]>([])
   const [sourcesLoading, setSourcesLoading] = useState(false)
   const [sourceSearch, setSourceSearch] = useState("")
@@ -95,7 +133,27 @@ export const ItemsTab: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<ReaderStatusFilter>("all")
   const [smartFilter, setSmartFilter] = useState<SmartFeedFilter>("all")
   const [itemsPage, setItemsPage] = useState(1)
+  const [itemsPageSize, setItemsPageSize] = useState<number>(() =>
+    loadPersistedItemPageSize(
+      typeof window !== "undefined" ? window.localStorage : undefined
+    )
+  )
   const [updatingItemId, setUpdatingItemId] = useState<number | null>(null)
+  const [selectedItemIds, setSelectedItemIds] = useState<number[]>([])
+  const [batchReviewScope, setBatchReviewScope] = useState<BatchReviewScope | null>(null)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [viewPresets, setViewPresets] = useState<ItemsViewPreset[]>(() =>
+    loadPersistedItemsViewPresets(
+      typeof window !== "undefined" ? window.localStorage : undefined
+    ).map((preset) => ({
+      ...preset,
+      smartFilter: normalizeSmartFilter(preset.smartFilter),
+      statusFilter: normalizeStatusFilter(preset.statusFilter)
+    }))
+  )
+  const [activePresetId, setActivePresetId] = useState<string | null>(null)
+  const [saveViewModalOpen, setSaveViewModalOpen] = useState(false)
+  const [newViewName, setNewViewName] = useState("")
   const [smartCounts, setSmartCounts] = useState<Record<SmartFeedFilter, number>>({
     all: 0,
     today: 0,
@@ -228,7 +286,7 @@ export const ItemsTab: React.FC = () => {
       const response = await fetchScrapedItems(
         buildBaseFilterParams({
           page: itemsPage,
-          size: ITEM_PAGE_SIZE
+          size: itemsPageSize
         })
       )
       const nextItems = Array.isArray(response.items) ? response.items : []
@@ -244,7 +302,7 @@ export const ItemsTab: React.FC = () => {
     } finally {
       setItemsLoading(false)
     }
-  }, [buildBaseFilterParams, itemsPage, t])
+  }, [buildBaseFilterParams, itemsPage, itemsPageSize, t])
 
   const loadSmartCounts = useCallback(async () => {
     try {
@@ -274,6 +332,12 @@ export const ItemsTab: React.FC = () => {
     }
   }, [searchQuery, selectedSourceId, statusFilter])
 
+  const refreshItemsView = useCallback(() => {
+    void loadSources()
+    void loadItems()
+    void loadSmartCounts()
+  }, [loadItems, loadSmartCounts, loadSources])
+
   useEffect(() => {
     void loadSources()
   }, [loadSources])
@@ -285,6 +349,45 @@ export const ItemsTab: React.FC = () => {
   useEffect(() => {
     void loadSmartCounts()
   }, [loadSmartCounts])
+
+  useEffect(() => {
+    persistItemPageSize(
+      typeof window !== "undefined" ? window.localStorage : undefined,
+      itemsPageSize
+    )
+  }, [itemsPageSize])
+
+  useEffect(() => {
+    persistItemsViewPresets(
+      typeof window !== "undefined" ? window.localStorage : undefined,
+      viewPresets
+    )
+  }, [viewPresets])
+
+  useEffect(() => {
+    const visibleIds = new Set(items.map((item) => item.id))
+    setSelectedItemIds((prev) => {
+      if (prev.length === 0) return prev
+      const filtered = prev.filter((id) => visibleIds.has(id))
+      return filtered.length === prev.length ? prev : filtered
+    })
+  }, [items])
+
+  useEffect(() => {
+    setSelectedItemIds((prev) => (prev.length === 0 ? prev : []))
+  }, [selectedSourceId, smartFilter, statusFilter, searchQuery, itemsPage])
+
+  useEffect(() => {
+    const matchingPreset = viewPresets.find(
+      (preset) =>
+        preset.sourceId === selectedSourceId &&
+        preset.smartFilter === smartFilter &&
+        preset.statusFilter === statusFilter &&
+        preset.searchQuery === searchQuery
+    )
+    const nextId = matchingPreset?.id ?? null
+    setActivePresetId((prev) => (prev === nextId ? prev : nextId))
+  }, [searchQuery, selectedSourceId, smartFilter, statusFilter, viewPresets])
 
   const handleSourceSelect = (sourceId: number | null) => {
     setSelectedSourceId(sourceId)
@@ -322,6 +425,466 @@ export const ItemsTab: React.FC = () => {
     }
   }
 
+  const pageItemIds = useMemo(() => items.map((item) => item.id), [items])
+
+  const pageUnreviewedItemIds = useMemo(
+    () => items.filter((item) => !item.reviewed).map((item) => item.id),
+    [items]
+  )
+
+  const selectedItemIdSet = useMemo(
+    () => new Set(selectedItemIds),
+    [selectedItemIds]
+  )
+
+  const selectedUnreviewedItemIds = useMemo(
+    () =>
+      items
+        .filter((item) => selectedItemIdSet.has(item.id) && !item.reviewed)
+        .map((item) => item.id),
+    [items, selectedItemIdSet]
+  )
+
+  const allPageItemsSelected = useMemo(
+    () => pageItemIds.length > 0 && pageItemIds.every((id) => selectedItemIdSet.has(id)),
+    [pageItemIds, selectedItemIdSet]
+  )
+
+  const somePageItemsSelected = useMemo(
+    () => !allPageItemsSelected && pageItemIds.some((id) => selectedItemIdSet.has(id)),
+    [allPageItemsSelected, pageItemIds, selectedItemIdSet]
+  )
+
+  const pageSizeOptions = useMemo(
+    () =>
+      ITEM_PAGE_SIZE_OPTIONS.map((value) => ({
+        label: t("common:pagination.itemsPerPage", "{{count}} / page", { count: value }),
+        value
+      })),
+    [t]
+  )
+
+  const viewPresetOptions = useMemo(
+    () =>
+      viewPresets.map((preset) => ({
+        label: preset.name,
+        value: preset.id
+      })),
+    [viewPresets]
+  )
+
+  const handleToggleItemSelected = useCallback((itemId: number, checked: boolean) => {
+    setSelectedItemIds((prev) => {
+      if (checked) return Array.from(new Set([...prev, itemId]))
+      return prev.filter((id) => id !== itemId)
+    })
+  }, [])
+
+  const handleToggleSelectPage = useCallback((checked: boolean) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        pageItemIds.forEach((id) => next.add(id))
+      } else {
+        pageItemIds.forEach((id) => next.delete(id))
+      }
+      return Array.from(next)
+    })
+  }, [pageItemIds])
+
+  const markItemsReviewed = useCallback(async (
+    itemIds: number[],
+    scope: BatchReviewScope
+  ): Promise<void> => {
+    const uniqueIds = Array.from(new Set(itemIds))
+    if (uniqueIds.length === 0) return
+
+    setBatchReviewScope(scope)
+    try {
+      const successfulIds: number[] = []
+      let failedCount = 0
+      const chunkSize = 20
+
+      for (let index = 0; index < uniqueIds.length; index += chunkSize) {
+        const chunk = uniqueIds.slice(index, index + chunkSize)
+        const results = await Promise.allSettled(
+          chunk.map((itemId) => updateScrapedItem(itemId, { reviewed: true }))
+        )
+
+        results.forEach((result, offset) => {
+          if (result.status === "fulfilled") {
+            const updatedId =
+              typeof result.value?.id === "number"
+                ? result.value.id
+                : chunk[offset]
+            successfulIds.push(updatedId)
+          } else {
+            failedCount += 1
+          }
+        })
+      }
+
+      if (successfulIds.length > 0) {
+        const successfulIdSet = new Set(successfulIds)
+        setItems((prev) =>
+          prev.map((item) =>
+            successfulIdSet.has(item.id)
+              ? { ...item, reviewed: true }
+              : item
+          )
+        )
+        setSelectedItemIds((prev) => prev.filter((id) => !successfulIdSet.has(id)))
+      }
+
+      if (successfulIds.length > 0 && failedCount === 0) {
+        message.success(
+          t("watchlists:items.batch.completed", "Marked {{count}} item{{plural}} as reviewed.", {
+            count: successfulIds.length,
+            plural: successfulIds.length === 1 ? "" : "s"
+          })
+        )
+      } else if (successfulIds.length > 0) {
+        message.warning(
+          t(
+            "watchlists:items.batch.partial",
+            "Marked {{success}} item{{successPlural}} as reviewed; {{failed}} failed.",
+            {
+              success: successfulIds.length,
+              successPlural: successfulIds.length === 1 ? "" : "s",
+              failed: failedCount
+            }
+          )
+        )
+      } else {
+        message.error(t("watchlists:items.batch.failed", "Failed to mark items as reviewed."))
+      }
+
+      await Promise.all([loadItems(), loadSmartCounts()])
+    } catch (error) {
+      console.error("Failed to apply batch reviewed update:", error)
+      message.error(t("watchlists:items.batch.failed", "Failed to mark items as reviewed."))
+    } finally {
+      setBatchReviewScope(null)
+    }
+  }, [loadItems, loadSmartCounts, t])
+
+  const openBatchConfirm = useCallback((
+    scope: BatchReviewScope,
+    itemIds: number[],
+    title: string
+  ) => {
+    if (itemIds.length === 0) return
+    Modal.confirm({
+      title,
+      content: t(
+        "watchlists:items.batch.confirmDescription",
+        "This will mark {{count}} item{{plural}} as reviewed.",
+        {
+          count: itemIds.length,
+          plural: itemIds.length === 1 ? "" : "s"
+        }
+      ),
+      okText: t("watchlists:items.markReviewed", "Mark as reviewed"),
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => markItemsReviewed(itemIds, scope)
+    })
+  }, [markItemsReviewed, t])
+
+  const handleMarkSelectedReviewed = useCallback(() => {
+    if (selectedUnreviewedItemIds.length === 0) {
+      message.info(
+        t("watchlists:items.batch.noSelected", "Select one or more items to review.")
+      )
+      return
+    }
+
+    openBatchConfirm(
+      "selected",
+      selectedUnreviewedItemIds,
+      t("watchlists:items.batch.confirmSelectedTitle", "Mark selected items as reviewed?")
+    )
+  }, [openBatchConfirm, selectedUnreviewedItemIds, t])
+
+  const handleMarkPageReviewed = useCallback(() => {
+    if (pageUnreviewedItemIds.length === 0) {
+      message.info(
+        t("watchlists:items.batch.noPage", "All items on this page are already reviewed.")
+      )
+      return
+    }
+
+    openBatchConfirm(
+      "page",
+      pageUnreviewedItemIds,
+      t("watchlists:items.batch.confirmPageTitle", "Mark this page as reviewed?")
+    )
+  }, [openBatchConfirm, pageUnreviewedItemIds, t])
+
+  const collectAllFilteredUnreadItemIds = useCallback(async (): Promise<number[]> => {
+    const allIds: number[] = []
+    const lookupPageSize = 200
+    let page = 1
+
+    while (true) {
+      const response = await fetchScrapedItems(
+        buildBaseFilterParams({
+          reviewed: false,
+          page,
+          size: lookupPageSize
+        })
+      )
+      const batch = Array.isArray(response.items) ? response.items : []
+      allIds.push(...batch.map((item) => item.id))
+      const total = response.total || allIds.length
+      if (batch.length < lookupPageSize || allIds.length >= total) {
+        break
+      }
+      page += 1
+    }
+
+    return allIds
+  }, [buildBaseFilterParams])
+
+  const handleMarkAllFilteredReviewed = useCallback(async () => {
+    try {
+      const candidateIds = await collectAllFilteredUnreadItemIds()
+      if (candidateIds.length === 0) {
+        message.info(
+          t(
+            "watchlists:items.batch.noFiltered",
+            "No matching unread items to review."
+          )
+        )
+        return
+      }
+
+      openBatchConfirm(
+        "allFiltered",
+        candidateIds,
+        t("watchlists:items.batch.confirmAllFilteredTitle", "Mark all filtered items as reviewed?")
+      )
+    } catch (error) {
+      console.error("Failed to collect filtered unread item ids:", error)
+      message.error(t("watchlists:items.batch.failed", "Failed to mark items as reviewed."))
+    }
+  }, [collectAllFilteredUnreadItemIds, openBatchConfirm, t])
+
+  const applyViewPreset = useCallback((presetId: string) => {
+    const preset = viewPresets.find((candidate) => candidate.id === presetId)
+    if (!preset) return
+    setSelectedSourceId(preset.sourceId)
+    setSmartFilter(preset.smartFilter)
+    setStatusFilter(preset.statusFilter)
+    setItemsSearch(preset.searchQuery)
+    setItemsPage(1)
+    setActivePresetId(preset.id)
+  }, [viewPresets])
+
+  const saveCurrentView = useCallback(() => {
+    if (activePresetId) {
+      setViewPresets((prev) =>
+        prev.map((preset) =>
+          preset.id === activePresetId
+            ? {
+                ...preset,
+                sourceId: selectedSourceId,
+                smartFilter,
+                statusFilter,
+                searchQuery
+              }
+            : preset
+        )
+      )
+      message.success(t("watchlists:items.savedViews.updated", "Saved view updated."))
+      return
+    }
+
+    setNewViewName(
+      t("watchlists:items.savedViews.defaultName", "My view")
+    )
+    setSaveViewModalOpen(true)
+  }, [activePresetId, searchQuery, selectedSourceId, smartFilter, statusFilter, t])
+
+  const createViewPreset = useCallback(() => {
+    const trimmedName = newViewName.trim()
+    if (!trimmedName) {
+      message.error(
+        t("watchlists:items.savedViews.nameRequired", "Saved view name is required.")
+      )
+      return
+    }
+    const newPreset: ItemsViewPreset = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      name: trimmedName,
+      sourceId: selectedSourceId,
+      smartFilter,
+      statusFilter,
+      searchQuery
+    }
+    setViewPresets((prev) => [newPreset, ...prev])
+    setActivePresetId(newPreset.id)
+    setSaveViewModalOpen(false)
+    setNewViewName("")
+    message.success(t("watchlists:items.savedViews.created", "Saved view created."))
+  }, [newViewName, searchQuery, selectedSourceId, smartFilter, statusFilter, t])
+
+  const deleteActiveView = useCallback(() => {
+    if (!activePresetId) return
+    const preset = viewPresets.find((candidate) => candidate.id === activePresetId)
+    if (!preset) return
+    Modal.confirm({
+      title: t("watchlists:items.savedViews.deleteTitle", "Delete saved view?"),
+      content: t(
+        "watchlists:items.savedViews.deleteDescription",
+        "Delete saved view \"{{name}}\"?",
+        { name: preset.name }
+      ),
+      okText: t("common:delete", "Delete"),
+      okButtonProps: { danger: true },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: () => {
+        setViewPresets((prev) => prev.filter((candidate) => candidate.id !== activePresetId))
+        setActivePresetId((prev) => (prev === activePresetId ? null : prev))
+        message.success(t("watchlists:items.savedViews.deleted", "Saved view deleted."))
+      }
+    })
+  }, [activePresetId, t, viewPresets])
+
+  const moveSelectionBy = useCallback((offset: number) => {
+    if (items.length === 0) return
+    const currentIndex = items.findIndex((item) => item.id === selectedItemId)
+    const baseIndex =
+      currentIndex === -1 ? (offset >= 0 ? 0 : items.length - 1) : currentIndex
+    const nextIndex = Math.max(0, Math.min(items.length - 1, baseIndex + offset))
+    setSelectedItemId(items[nextIndex]?.id ?? null)
+  }, [items, selectedItemId])
+
+  const openSelectedItemOriginal = useCallback(() => {
+    if (!selectedItem?.url) return
+    window.open(selectedItem.url, "_blank", "noopener,noreferrer")
+  }, [selectedItem])
+
+  const openQuickCreateFlow = useCallback(() => {
+    setActiveTab("sources")
+    openSourceForm()
+  }, [openSourceForm, setActiveTab])
+
+  const shortcutRows = useMemo(
+    () => [
+      {
+        keys: "j / k",
+        description: t(
+          "watchlists:items.shortcuts.nextPrevious",
+          "Move to next or previous article in the list."
+        )
+      },
+      {
+        keys: "space",
+        description: t(
+          "watchlists:items.shortcuts.toggleReviewed",
+          "Toggle reviewed state for the selected article."
+        )
+      },
+      {
+        keys: "o",
+        description: t(
+          "watchlists:items.shortcuts.openOriginal",
+          "Open the selected article in a new tab."
+        )
+      },
+      {
+        keys: "r",
+        description: t(
+          "watchlists:items.shortcuts.refresh",
+          "Refresh feeds, article list, and smart counts."
+        )
+      },
+      {
+        keys: "n",
+        description: t(
+          "watchlists:items.shortcuts.newFlow",
+          "Start a new feed flow by opening Add Source."
+        )
+      },
+      {
+        keys: "?",
+        description: t(
+          "watchlists:items.shortcuts.help",
+          "Open this shortcuts help panel."
+        )
+      }
+    ],
+    [t]
+  )
+
+  const handleShortcutKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented) return
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (isEditableTarget(event.target)) return
+    if (shortcutsOpen && event.key !== "Escape") return
+
+    const normalizedKey = event.key.toLowerCase()
+
+    if (normalizedKey === "j") {
+      event.preventDefault()
+      moveSelectionBy(1)
+      return
+    }
+
+    if (normalizedKey === "k") {
+      event.preventDefault()
+      moveSelectionBy(-1)
+      return
+    }
+
+    if (event.key === " ") {
+      if (!selectedItem || updatingItemId !== null || batchReviewScope !== null) return
+      event.preventDefault()
+      void handleToggleReviewed(selectedItem)
+      return
+    }
+
+    if (normalizedKey === "o") {
+      if (!selectedItem?.url) return
+      event.preventDefault()
+      openSelectedItemOriginal()
+      return
+    }
+
+    if (normalizedKey === "r") {
+      event.preventDefault()
+      refreshItemsView()
+      return
+    }
+
+    if (normalizedKey === "n") {
+      event.preventDefault()
+      openQuickCreateFlow()
+      return
+    }
+
+    const isQuestionMark = event.key === "?" || (event.key === "/" && event.shiftKey)
+    if (isQuestionMark) {
+      event.preventDefault()
+      setShortcutsOpen(true)
+    }
+  }, [
+    batchReviewScope,
+    handleToggleReviewed,
+    moveSelectionBy,
+    openQuickCreateFlow,
+    openSelectedItemOriginal,
+    refreshItemsView,
+    selectedItem,
+    shortcutsOpen,
+    updatingItemId
+  ])
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleShortcutKeyDown)
+    return () => document.removeEventListener("keydown", handleShortcutKeyDown)
+  }, [handleShortcutKeyDown])
+
   const smartFeedRows: Array<{ key: SmartFeedFilter; label: string; count: number; icon: React.ReactNode }> = [
     {
       key: "today",
@@ -358,17 +921,24 @@ export const ItemsTab: React.FC = () => {
             "Browse scraped feed items and open the selected source content."
           )}
         </p>
-        <Button
-          icon={<RefreshCw className="h-4 w-4" />}
-          onClick={() => {
-            void loadSources()
-            void loadItems()
-            void loadSmartCounts()
-          }}
-          loading={sourcesLoading || itemsLoading}
-        >
-          {t("common:refresh", "Refresh")}
-        </Button>
+        <Space>
+          <Tooltip title={t("watchlists:items.shortcuts.helpHint", "Keyboard shortcuts (?)")}>
+            <Button
+              icon={<HelpCircle className="h-4 w-4" />}
+              onClick={() => setShortcutsOpen(true)}
+              data-testid="watchlists-items-shortcuts-help"
+            >
+              {t("watchlists:items.shortcuts.button", "Shortcuts")}
+            </Button>
+          </Tooltip>
+          <Button
+            icon={<RefreshCw className="h-4 w-4" />}
+            onClick={refreshItemsView}
+            loading={sourcesLoading || itemsLoading}
+          >
+            {t("common:refresh", "Refresh")}
+          </Button>
+        </Space>
       </div>
 
       <div
@@ -512,6 +1082,104 @@ export const ItemsTab: React.FC = () => {
                   }
                 ]}
               />
+
+              <div className="rounded-lg border border-border bg-surface/70 p-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+                    {t("watchlists:items.savedViews.label", "Saved views")}
+                  </span>
+                  <Select
+                    size="small"
+                    allowClear
+                    value={activePresetId ?? undefined}
+                    placeholder={t("watchlists:items.savedViews.placeholder", "Select a saved view")}
+                    options={viewPresetOptions}
+                    onChange={(presetId) => {
+                      if (!presetId) {
+                        setActivePresetId(null)
+                        return
+                      }
+                      applyViewPreset(presetId)
+                    }}
+                    className="min-w-[220px]"
+                    data-testid="watchlists-items-view-presets-select"
+                  />
+                  <Button
+                    size="small"
+                    onClick={saveCurrentView}
+                    data-testid="watchlists-items-view-save"
+                  >
+                    {activePresetId
+                      ? t("watchlists:items.savedViews.update", "Update view")
+                      : t("watchlists:items.savedViews.save", "Save view")}
+                  </Button>
+                  <Button
+                    size="small"
+                    danger
+                    disabled={!activePresetId}
+                    onClick={deleteActiveView}
+                    data-testid="watchlists-items-view-delete"
+                  >
+                    {t("watchlists:items.savedViews.delete", "Delete view")}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border bg-surface/70 p-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Checkbox
+                    checked={allPageItemsSelected}
+                    indeterminate={somePageItemsSelected}
+                    onChange={(event) => handleToggleSelectPage(event.target.checked)}
+                    data-testid="watchlists-items-select-page"
+                  >
+                    {t("watchlists:items.batch.selectPage", "Select page")}
+                  </Checkbox>
+
+                  <span
+                    className="text-xs text-text-muted"
+                    data-testid="watchlists-items-selected-count"
+                  >
+                    {t("watchlists:items.batch.selectedCount", "{{count}} selected", {
+                      count: selectedItemIds.length
+                    })}
+                  </span>
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="small"
+                    onClick={handleMarkSelectedReviewed}
+                    disabled={selectedUnreviewedItemIds.length === 0}
+                    loading={batchReviewScope === "selected"}
+                    data-testid="watchlists-items-mark-selected"
+                  >
+                    {t("watchlists:items.batch.markSelected", "Mark selected as reviewed")}
+                  </Button>
+
+                  <Button
+                    size="small"
+                    onClick={handleMarkPageReviewed}
+                    disabled={pageUnreviewedItemIds.length === 0}
+                    loading={batchReviewScope === "page"}
+                    data-testid="watchlists-items-mark-page"
+                  >
+                    {t("watchlists:items.batch.markPage", "Mark page as reviewed")}
+                  </Button>
+
+                  <Button
+                    size="small"
+                    onClick={() => void handleMarkAllFilteredReviewed()}
+                    loading={batchReviewScope === "allFiltered"}
+                    data-testid="watchlists-items-mark-all-filtered"
+                  >
+                    {t(
+                      "watchlists:items.batch.markAllFiltered",
+                      "Mark all filtered as reviewed"
+                    )}
+                  </Button>
+                </div>
+              </div>
             </div>
 
             <div
@@ -549,6 +1217,17 @@ export const ItemsTab: React.FC = () => {
                       }`}
                       onClick={() => setSelectedItemId(item.id)}
                     >
+                      <div className="pt-0.5">
+                        <Checkbox
+                          checked={selectedItemIdSet.has(item.id)}
+                          onChange={(event) =>
+                            handleToggleItemSelected(item.id, event.target.checked)
+                          }
+                          onClick={(event) => event.stopPropagation()}
+                          data-testid={`watchlists-item-select-${item.id}`}
+                        />
+                      </div>
+
                       <div className="mt-1 shrink-0">
                         {!item.reviewed ? (
                           <span className="block h-2.5 w-2.5 rounded-full bg-primary" />
@@ -590,9 +1269,25 @@ export const ItemsTab: React.FC = () => {
             </div>
 
             <div className="mt-3">
+              <div className="mb-2 flex items-center justify-end gap-2">
+                <span className="text-xs text-text-muted">
+                  {t("watchlists:items.pageSizeLabel", "Items per page")}
+                </span>
+                <Select
+                  size="small"
+                  value={itemsPageSize}
+                  options={pageSizeOptions}
+                  onChange={(nextPageSize) => {
+                    setItemsPage(1)
+                    setItemsPageSize(nextPageSize)
+                  }}
+                  className="min-w-[132px]"
+                  data-testid="watchlists-items-page-size-select"
+                />
+              </div>
               <Pagination
                 current={itemsPage}
-                pageSize={ITEM_PAGE_SIZE}
+                pageSize={itemsPageSize}
                 total={itemsTotal}
                 onChange={(page) => setItemsPage(page)}
                 showSizeChanger={false}
@@ -660,13 +1355,7 @@ export const ItemsTab: React.FC = () => {
                           <Button
                             size="small"
                             icon={<ExternalLink className="h-3.5 w-3.5" />}
-                            onClick={() =>
-                              window.open(
-                                selectedItem.url || "",
-                                "_blank",
-                                "noopener,noreferrer"
-                              )
-                            }
+                            onClick={openSelectedItemOriginal}
                           >
                             {t("watchlists:items.openOriginal", "Open Original")}
                           </Button>
@@ -730,6 +1419,58 @@ export const ItemsTab: React.FC = () => {
           </section>
         </div>
       </div>
+
+      <Modal
+        title={t("watchlists:items.savedViews.saveTitle", "Save current view")}
+        open={saveViewModalOpen}
+        onCancel={() => {
+          setSaveViewModalOpen(false)
+          setNewViewName("")
+        }}
+        onOk={createViewPreset}
+        okText={t("watchlists:items.savedViews.save", "Save view")}
+        cancelText={t("common:cancel", "Cancel")}
+        destroyOnHidden
+      >
+        <div className="space-y-2" data-testid="watchlists-items-view-save-modal">
+          <p className="text-sm text-text-muted">
+            {t(
+              "watchlists:items.savedViews.saveDescription",
+              "Save the current source, smart feed, status, and search filters."
+            )}
+          </p>
+          <Input
+            value={newViewName}
+            onChange={(event) => setNewViewName(event.target.value)}
+            placeholder={t("watchlists:items.savedViews.namePlaceholder", "Daily triage")}
+            maxLength={64}
+            autoFocus
+            data-testid="watchlists-items-view-name-input"
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        title={t("watchlists:items.shortcuts.title", "Keyboard shortcuts")}
+        open={shortcutsOpen}
+        onCancel={() => setShortcutsOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <div className="space-y-2" data-testid="watchlists-items-shortcuts-modal">
+          {shortcutRows.map((shortcut) => (
+            <div
+              key={shortcut.keys}
+              className="flex items-start justify-between gap-3 rounded-lg border border-border bg-surface/70 px-3 py-2.5"
+            >
+              <kbd className="rounded-md border border-border bg-surface px-2 py-0.5 font-mono text-xs font-semibold text-text">
+                {shortcut.keys}
+              </kbd>
+              <p className="flex-1 text-sm text-text-muted">{shortcut.description}</p>
+            </div>
+          ))}
+        </div>
+      </Modal>
     </div>
   )
 }

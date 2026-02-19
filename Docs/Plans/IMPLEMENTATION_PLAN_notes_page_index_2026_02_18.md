@@ -35,10 +35,52 @@ This index maps the 15 notes-page category plans into one delivery sequence alig
   - Decision record: `DECISION_RECORD_notes_search_in_note_scope_stage3_2026_02_18.md`
 - `IMPLEMENTATION_PLAN_notes_page_01_notes_list_navigation_2026_02_18.md`
   - Stage 1: Complete
-  - Stage 2: Not Started
-  - Stage 3: Not Started
-  - Stage 4: Not Started
-  - Stage 5: Not Started
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+  - Stage 5: Complete
+  - Decision record: `DECISION_RECORD_notes_list_scalability_stage5_2026_02_18.md`
+- `IMPLEMENTATION_PLAN_notes_page_14_accessibility_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+- `IMPLEMENTATION_PLAN_notes_page_11_responsive_mobile_experience_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+- `IMPLEMENTATION_PLAN_notes_page_03_keywords_tagging_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+- `IMPLEMENTATION_PLAN_notes_page_05_conversation_source_backlinks_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+- `IMPLEMENTATION_PLAN_notes_page_09_floating_notes_dock_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+- `IMPLEMENTATION_PLAN_notes_page_12_performance_perceived_speed_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+- `IMPLEMENTATION_PLAN_notes_page_07_export_sharing_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Decision record: `DECISION_RECORD_notes_export_print_pdf_stage3_2026_02_18.md`
+- `IMPLEMENTATION_PLAN_notes_page_13_error_handling_edge_cases_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
+- `IMPLEMENTATION_PLAN_notes_page_15_information_gaps_missing_functionality_2026_02_18.md`
+  - Stage 1: Complete
+  - Stage 2: Complete
+  - Stage 3: Complete
+  - Stage 4: Complete
 
 ## Plan Catalog
 

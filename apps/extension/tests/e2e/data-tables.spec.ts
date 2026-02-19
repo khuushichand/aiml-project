@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from "path"
 
 import { launchWithExtension } from "./utils/extension"
@@ -6,7 +7,7 @@ import { launchWithExtension } from "./utils/extension"
 test.describe("Data Tables", () => {
   test("generates a table from documents and exports CSV", async () => {
     const extPath = path.resolve("build/chrome-mv3")
-    const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         __tldw_first_run_complete: true,
         __tldw_allow_offline: true

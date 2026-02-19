@@ -16,7 +16,6 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
 )
-from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts
 from tldw_Server_API.app.core.Audio.tokenizer_service import (
     _get_qwen3_tokenizer_settings,
     _load_qwen3_tokenizer,
@@ -40,7 +39,9 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
 )
 
 _AUDIO_MODULE_PATH = "tldw_Server_API.app.api.v1.endpoints.audio.audio"
+_AUDIO_TTS_MODULE_PATH = "tldw_Server_API.app.api.v1.endpoints.audio.audio_tts"
 _audio_module: _ModuleType | None = None
+_audio_tts_module: _ModuleType | None = None
 
 
 def _load_audio_module() -> _ModuleType:
@@ -48,6 +49,13 @@ def _load_audio_module() -> _ModuleType:
     if _audio_module is None:
         _audio_module = _import_module(_AUDIO_MODULE_PATH)
     return _audio_module
+
+
+def _load_audio_tts_module() -> _ModuleType:
+    global _audio_tts_module
+    if _audio_tts_module is None:
+        _audio_tts_module = _import_module(_AUDIO_TTS_MODULE_PATH)
+    return _audio_tts_module
 
 
 def __getattr__(name: str) -> _Any:
@@ -63,9 +71,17 @@ def _resolve_tts_byok(*args, **kwargs):
     return _load_audio_module()._resolve_tts_byok(*args, **kwargs)
 
 
+def _create_speech(*args, **kwargs):
+    return _load_audio_tts_module().create_speech(*args, **kwargs)
+
+
+def _get_tts_service(*args, **kwargs):
+    return _load_audio_tts_module().get_tts_service(*args, **kwargs)
+
+
 _EXPLICIT_REEXPORTS = {
-    "create_speech": audio_tts.create_speech,
-    "get_tts_service": audio_tts.get_tts_service,
+    "create_speech": _create_speech,
+    "get_tts_service": _get_tts_service,
     "check_rate_limit": check_rate_limit,
     "get_usage_event_logger": get_usage_event_logger,
     "save_and_register_tts_audio": save_and_register_tts_audio,

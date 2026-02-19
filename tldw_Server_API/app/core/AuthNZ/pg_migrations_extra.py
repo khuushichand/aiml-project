@@ -746,6 +746,49 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)", ()),
 ]
 
+_CREATE_BYOK_OAUTH_STATE = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS byok_oauth_state (
+            state TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            auth_session_id TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            pkce_verifier_encrypted TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            consumed_at TIMESTAMP WITH TIME ZONE,
+            return_path TEXT,
+            PRIMARY KEY (state, user_id)
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS provider TEXT", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS auth_session_id TEXT", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS redirect_uri TEXT", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS pkce_verifier_encrypted TEXT", ()),
+    (
+        "ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS created_at "
+        "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
+        (),
+    ),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMP WITH TIME ZONE", ()),
+    ("ALTER TABLE byok_oauth_state ADD COLUMN IF NOT EXISTS return_path TEXT", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_provider_expires "
+        "ON byok_oauth_state(provider, expires_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_oauth_state_user_provider_consumed "
+        "ON byok_oauth_state(user_id, provider, consumed_at)",
+        (),
+    ),
+]
+
 _CREATE_LLM_PROVIDER_OVERRIDES = [
     (
         """
@@ -1669,6 +1712,32 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
+        return False
+
+
+async def ensure_byok_oauth_state_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure byok_oauth_state table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        # Ensure users table exists before FK-backed BYOK OAuth state table.
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"ensure_byok_oauth_state_pg: core table ensure skipped/failed: {exc}")
+
+        for sql, params in _CREATE_BYOK_OAUTH_STATE:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure byok_oauth_state DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL byok_oauth_state table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL byok_oauth_state table: {exc}")
         return False
 
 

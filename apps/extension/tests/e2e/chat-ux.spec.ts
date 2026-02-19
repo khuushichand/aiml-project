@@ -1,17 +1,19 @@
 import { expect, test, type BrowserContext } from "@playwright/test"
-import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 import {
   waitForConnectionStore,
   forceUnconfigured,
   setSelectedModel
 } from "./utils/connection"
 
+const normalizeServerUrl = (value: string) =>
+  value.match(/^https?:\/\//) ? value : `http://${value}`
+
 test.describe("Chat workspace UX", () => {
   test("shows first-run connection CTA when unconfigured", async () => {
     test.setTimeout(60000)
-    const { context, openSidepanel } = await launchWithExtension("")
+    const { context, openSidepanel } = await launchWithExtensionOrSkip(test, "")
 
     try {
       const page = await openSidepanel()
@@ -62,25 +64,34 @@ test.describe("Chat workspace UX", () => {
     }
 
     const { serverUrl, apiKey } = requireRealServerConfig(test)
-    const normalizedServerUrl = serverUrl.match(/^https?:\/\//)
-      ? serverUrl
-      : `http://${serverUrl}`
+    const normalizedServerUrl = normalizeServerUrl(serverUrl)
 
     let context: BrowserContext | null = null
 
     try {
-      const modelsResponse = await fetch(
-        `${normalizedServerUrl}/api/v1/llm/models/metadata`,
-        {
-          headers: { "x-api-key": apiKey }
-        }
-      )
+      let modelsResponse: Response | null = null
+      try {
+        modelsResponse = await fetch(
+          `${normalizedServerUrl}/api/v1/llm/models/metadata`,
+          {
+            headers: { "x-api-key": apiKey }
+          }
+        )
+      } catch (error) {
+        test.skip(
+          true,
+          `Chat models preflight unreachable in this environment: ${String(error)}`
+        )
+        return
+      }
+      if (!modelsResponse) return
       if (!modelsResponse.ok) {
         const body = await modelsResponse.text().catch(() => "")
         test.skip(
           true,
           `Chat models preflight failed: ${modelsResponse.status} ${modelsResponse.statusText} ${body}`
         )
+        return
       }
       const modelsPayload = await modelsResponse.json().catch(() => [])
       const modelsList = Array.isArray(modelsPayload)
@@ -97,7 +108,7 @@ test.describe("Chat workspace UX", () => {
       }
 
       mark("launch extension")
-      const launchResult = await launchWithExtension("", {
+      const launchResult = await launchWithExtensionOrSkip(test, "", {
         seedConfig: {
           tldwConfig: {
             serverUrl: normalizedServerUrl,

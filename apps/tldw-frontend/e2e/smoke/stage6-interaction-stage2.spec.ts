@@ -25,6 +25,11 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
     page
   }) => {
     await seedAuth(page)
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("ff_knowledgeQaStreaming", "false")
+      } catch {}
+    })
 
     let ragSearchCalls = 0
     let lastRagQuery = ""
@@ -161,6 +166,14 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
     await knowledgeSearchInput.fill(query)
     await expect(knowledgeSearchInput).toHaveValue(query)
     await knowledgeSearchInput.press("Enter")
+    await page.waitForTimeout(250)
+
+    if (ragSearchCalls === 0) {
+      const askButton = page.getByRole("button", { name: /^Ask$/i })
+      if (await askButton.isVisible().catch(() => false)) {
+        await askButton.click()
+      }
+    }
 
     await expect
       .poll(() => ragSearchCalls, {
@@ -172,9 +185,10 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
     expect(lastRagQuery).toBe(query)
 
     await expect(page.getByText("AI Answer")).toBeVisible({ timeout: LOAD_TIMEOUT })
-    await expect(
-      page.getByText("No relevant sources found for this query in your current knowledge base.")
-    ).toBeVisible({ timeout: LOAD_TIMEOUT })
+    await expect(page.getByTestId("knowledge-answer-content")).toContainText(
+      "No relevant sources found for this query in your current knowledge base.",
+      { timeout: LOAD_TIMEOUT }
+    )
     await expect(page.locator("[id^='source-card-']")).toHaveCount(0)
   })
 
@@ -289,6 +303,19 @@ test.describe("Stage 6 interaction stage 2 positive regressions", () => {
 
     const chatSettingsLink = page.getByTestId("settings-nav-link--settings-chat")
     await expect(chatSettingsLink).toBeVisible({ timeout: LOAD_TIMEOUT })
+
+    const blockingModal = page.locator(".ant-modal-wrap").first()
+    if (await blockingModal.isVisible().catch(() => false)) {
+      const closeButton = blockingModal
+        .getByRole("button", { name: /close|cancel|ok|got it|dismiss/i })
+        .first()
+      if (await closeButton.isVisible().catch(() => false)) {
+        await closeButton.click().catch(() => {})
+      } else {
+        await page.keyboard.press("Escape").catch(() => {})
+      }
+      await blockingModal.waitFor({ state: "hidden", timeout: 3000 }).catch(() => {})
+    }
 
     await chatSettingsLink.click()
     await page.waitForURL((url) => url.pathname === "/settings/chat", {

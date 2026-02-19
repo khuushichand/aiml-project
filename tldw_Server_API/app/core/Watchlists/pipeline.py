@@ -153,6 +153,14 @@ def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
         return None
 
 
+def _run_is_cancelled(db: WatchlistsDatabase, run_id: int) -> bool:
+    try:
+        run = db.get_run(run_id)
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        return False
+    return str(getattr(run, "status", "") or "").strip().lower() == "cancelled"
+
+
 _truncate = truncate_text
 _hash_content = hash_text_sha256
 _word_count = word_count
@@ -696,6 +704,9 @@ async def run_watchlist_job(
     history_used = False
 
     for src in sources:
+            if _run_is_cancelled(db, run.id):
+                logger.info(f"watchlists.run_cancelled: stopping run {run.id} before source {getattr(src, 'id', '?')}")
+                break
             try:
                 src_type = (src.source_type or "").lower()
                 if src_type == "forum":
@@ -920,6 +931,9 @@ async def run_watchlist_job(
                         rss_items = rss_items[:rss_limit]
                     items_found += len(rss_items)
                     for it in rss_items:
+                        if _run_is_cancelled(db, run.id):
+                            logger.info(f"watchlists.run_cancelled: stopping run {run.id} during RSS item processing")
+                            break
                         link = it.get("url") or it.get("link")
                         if not link:
                             continue
@@ -1226,6 +1240,9 @@ async def run_watchlist_job(
 
                     items_found += len(urls_to_fetch)
                     for page_url in urls_to_fetch:
+                        if _run_is_cancelled(db, run.id):
+                            logger.info(f"watchlists.run_cancelled: stopping run {run.id} during site item processing")
+                            break
                         prefetch = prefetched_by_url.get(page_url)
                         item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else _normalize_url(page_url))
                         skip_dedup = test_mode and is_first_run
@@ -1497,6 +1514,25 @@ async def run_watchlist_job(
             }
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         pass
+
+    if _run_is_cancelled(db, run.id):
+        cancelled_error = "cancelled_by_user"
+        try:
+            cancelled_run = db.get_run(run.id)
+            if getattr(cancelled_run, "error_msg", None):
+                cancelled_error = str(cancelled_run.error_msg)
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+            pass
+        db.update_run(
+            run.id,
+            status="cancelled",
+            finished_at=_utcnow_iso(),
+            stats_json=json.dumps(stats),
+            error_msg=cancelled_error,
+        )
+        db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=_compute_next_run(job.schedule_expr, job.schedule_timezone))
+        return {"run_id": run.id, "status": "cancelled", **stats}
+
     db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
 
     # Update job history

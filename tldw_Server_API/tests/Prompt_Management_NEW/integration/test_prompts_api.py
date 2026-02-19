@@ -41,6 +41,25 @@ class TestPromptCRUDEndpoints:
         assert data['name'] == payload['name']
 
     @pytest.mark.integration
+    def test_legacy_create_prompt_endpoint_returns_created(self, test_client, auth_headers):
+        """Legacy /create route should behave like a create operation."""
+        response = test_client.post(
+            "/api/v1/prompts/create",
+            json={
+                "name": "Legacy Create Prompt",
+                "content": "Legacy content",
+                "author": "legacy_test",
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert "prompt_id" in data
+        assert isinstance(data["prompt_id"], int)
+        assert data["prompt_id"] > 0
+
+    @pytest.mark.integration
     def test_get_prompt_endpoint(self, test_client, auth_headers):
         """Test getting a prompt via API."""
         create_response = test_client.post(
@@ -454,6 +473,18 @@ class TestBulkOperationsEndpoints:
 
 class TestCollectionEndpoints:
     """Test collection management endpoints."""
+
+    @pytest.mark.integration
+    def test_list_collections_empty_endpoint(self, test_client, auth_headers):
+        """Listing collections should return an empty list when none exist."""
+        response = test_client.get(
+            "/api/v1/prompts/collections",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload == {"collections": []}
 
     @pytest.mark.integration
     def test_create_collection_endpoint(self, test_client, auth_headers):

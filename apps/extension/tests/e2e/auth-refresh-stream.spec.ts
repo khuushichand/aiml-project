@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import http from "node:http"
 import { AddressInfo } from "node:net"
 import path from "node:path"
@@ -158,7 +159,7 @@ test.describe("Auth refresh + streaming", () => {
     const { server, state } = createAuthRefreshServer()
     const url = await listen(server)
 
-    const { context, page } = await launchWithExtension(EXT_PATH, {
+    const { context, page } = await launchWithExtensionOrSkip(test, EXT_PATH, {
       seedConfig: {
         tldwConfig: {
           serverUrl: url,
@@ -218,7 +219,7 @@ test.describe("Auth refresh + streaming", () => {
     const { server, state } = createAuthRefreshServer()
     const url = await listen(server)
 
-    const { context, page } = await launchWithExtension(EXT_PATH, {
+    const { context, page } = await launchWithExtensionOrSkip(test, EXT_PATH, {
       seedConfig: {
         tldwConfig: {
           serverUrl: url,
@@ -259,7 +260,7 @@ test.describe("Auth refresh + streaming", () => {
     const { server, state } = createAuthRefreshServer()
     const url = await listen(server)
 
-    const { context, page, optionsUrl } = await launchWithExtension(EXT_PATH, {
+    const { context, page, optionsUrl } = await launchWithExtensionOrSkip(test, EXT_PATH, {
       seedConfig: {
         tldwConfig: {
           serverUrl: url,
@@ -298,7 +299,7 @@ test.describe("Stream abort", () => {
     const { server } = createHangingStreamServer()
     const url = await listen(server)
 
-    const { context, page } = await launchWithExtension(EXT_PATH, {
+    const { context, page } = await launchWithExtensionOrSkip(test, EXT_PATH, {
       seedConfig: {
         tldwConfig: {
           serverUrl: url,

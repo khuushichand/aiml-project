@@ -6,6 +6,11 @@ export interface DeliveryStatusSummary {
   detail?: string
 }
 
+export interface DeliveryDisclosureSummary {
+  visible: DeliveryStatusSummary[]
+  hidden: DeliveryStatusSummary[]
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
@@ -88,6 +93,23 @@ export const getOutputDeliveryStatuses = (metadata: unknown): DeliveryStatusSumm
   }
 
   return []
+}
+
+export const buildDeliveryDisclosureSummary = (
+  deliveries: DeliveryStatusSummary[],
+  options?: { maxVisible?: number }
+): DeliveryDisclosureSummary => {
+  const maxVisible = Math.max(1, Number(options?.maxVisible ?? 1))
+  if (!Array.isArray(deliveries) || deliveries.length <= maxVisible) {
+    return {
+      visible: Array.isArray(deliveries) ? [...deliveries] : [],
+      hidden: []
+    }
+  }
+  return {
+    visible: deliveries.slice(0, maxVisible),
+    hidden: deliveries.slice(maxVisible)
+  }
 }
 
 export const getDeliveryStatusColor = (status: string): string => {

@@ -6,6 +6,13 @@ import {
 } from "../run-notifications"
 
 describe("run notification helpers", () => {
+  const translatedHints: Record<string, string> = {
+    "watchlists:notifications.failureHints.timeout": "Localized timeout hint",
+    "watchlists:notifications.failureHints.auth": "Localized auth hint"
+  }
+  const t = (key: string, defaultValue?: string) =>
+    translatedHints[key] ?? defaultValue ?? key
+
   it("returns completed notification when run transitions from running", () => {
     const result = resolveRunTransitionNotification("running", {
       status: "completed",
@@ -15,13 +22,17 @@ describe("run notification helpers", () => {
   })
 
   it("returns failed notification and remediation hint for failed transitions", () => {
-    const result = resolveRunTransitionNotification("pending", {
-      status: "failed",
-      error_msg: "timeout while fetching"
-    })
+    const result = resolveRunTransitionNotification(
+      "pending",
+      {
+        status: "failed",
+        error_msg: "timeout while fetching"
+      },
+      t
+    )
     expect(result).toEqual({
       kind: "failed",
-      hint: "The source request timed out. Retry, or lower concurrency for this source."
+      hint: "Localized timeout hint"
     })
   })
 
@@ -73,5 +84,17 @@ describe("run notification helpers", () => {
     expect(getRunFailureHint("rate limit exceeded")).toContain("rate-limiting")
     expect(getRunFailureHint("dns lookup failed")).toContain("resolved")
     expect(getRunFailureHint("")).toContain("inspect logs")
+  })
+
+  it("resolves localized hint keys when translator is provided", () => {
+    expect(getRunFailureHint("403 Forbidden", t)).toBe("Localized auth hint")
+    expect(getRunFailureHint("timeout while fetching", t)).toBe("Localized timeout hint")
+  })
+
+  it("falls back to default copy when translator is missing key", () => {
+    const missingTranslator = (key: string) => key
+    expect(getRunFailureHint("timeout while fetching", missingTranslator)).toBe(
+      "The source request timed out. Retry, or lower concurrency for this source."
+    )
   })
 })

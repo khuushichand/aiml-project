@@ -5,9 +5,12 @@
   "main": "index.ts",
   "types": "index.ts",
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:worldbooks": "vitest run src/components/Option/WorldBooks/__tests__ --maxWorkers=1"
+  "test": "vitest run",
+  "test:watch": "vitest",
+  "test:characters-harness": "vitest run src/components/Option/Characters/__tests__/Manager.first-use.test.tsx src/components/Option/Characters/__tests__/CharacterGalleryCard.test.tsx src/components/Option/Characters/__tests__/search-utils.test.ts",
+  "test:worldbooks": "vitest run src/components/Option/WorldBooks/__tests__ --maxWorkers=1",
+    "test:dictionaries": "vitest run src/components/Option/Dictionaries/__tests__ --maxWorkers=1 --no-file-parallelism",
+    "test:watchlists:help": "vitest run src/components/Option/Watchlists/shared/__tests__/help-docs.test.ts src/components/Option/Watchlists/__tests__/WatchlistsPlaygroundPage.help-links.test.tsx --maxWorkers=1 --no-file-parallelism"
   },
   "exports": {
     ".": "./index.ts",
@@ -23,6 +26,7 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.1",
     "axe-core": "^4.11.1",
+    "jsdom": "^28.1.0",
     "vitest": "^4.0.16"
   },
   "peerDependencies": {

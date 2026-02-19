@@ -236,7 +236,7 @@ export const TemplatesTab: React.FC = () => {
     {
       title: t("watchlists:templates.columns.actions", "Actions"),
       key: "actions",
-      width: 100,
+      width: 140,
       align: "center",
       render: (_, record) => (
         <Space size="small">
@@ -244,6 +244,7 @@ export const TemplatesTab: React.FC = () => {
             <Button
               type="text"
               size="small"
+              aria-label={t("watchlists:templates.edit", "Edit")}
               icon={<Edit className="h-4 w-4" />}
               onClick={() => handleEdit(record)}
             />
@@ -253,6 +254,7 @@ export const TemplatesTab: React.FC = () => {
               type="text"
               size="small"
               danger
+              aria-label={t("watchlists:templates.delete", "Delete")}
               icon={<Trash2 className="h-4 w-4" />}
               loading={checkingTemplateDeleteName === record.name}
               onClick={() => void requestDeleteConfirmation(record)}

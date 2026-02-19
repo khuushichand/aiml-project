@@ -224,4 +224,20 @@ describe("TakeQuizTab list controls and default passing policy", () => {
       ).toBeInTheDocument()
     })
   }, 15000)
+
+  it("renders loading skeleton placeholders while quiz list is loading", () => {
+    vi.mocked(useQuizzesQuery).mockReturnValue({
+      data: undefined,
+      isLoading: true
+    } as any)
+
+    render(
+      <TakeQuizTab
+        onNavigateToGenerate={() => {}}
+        onNavigateToCreate={() => {}}
+      />
+    )
+
+    expect(screen.getByTestId("take-loading-skeleton")).toBeInTheDocument()
+  })
 })

@@ -3,10 +3,16 @@ import { Button, Input, InputNumber, Select, Switch, Tag, Tooltip, message } fro
 import { ArrowDown, ArrowUp, Code2, Plus, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { FilterAction, FilterType, WatchlistFilter } from "@/types/watchlists"
+import type { FilterPreviewOutcome } from "./filter-preview"
 
 interface FilterBuilderProps {
   value: WatchlistFilter[]
   onChange: (filters: WatchlistFilter[]) => void
+  preview?: {
+    loading?: boolean
+    unavailableReason?: string | null
+    outcome?: FilterPreviewOutcome | null
+  }
 }
 
 interface FilterPreset {
@@ -91,7 +97,8 @@ const cloneFilters = (filters: WatchlistFilter[]): WatchlistFilter[] =>
 
 export const FilterBuilder: React.FC<FilterBuilderProps> = ({
   value,
-  onChange
+  onChange,
+  preview
 }) => {
   const { t } = useTranslation(["watchlists"])
   const [selectedPresetId, setSelectedPresetId] = React.useState<string | null>(null)
@@ -533,10 +540,72 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
         {t("watchlists:filters.addFilter", "Add Filter")}
       </Button>
 
+      {preview && (
+        <div className="rounded-lg border border-border bg-surface p-3" data-testid="filter-preview-panel">
+          <div className="text-xs font-medium text-text-muted">
+            {t("watchlists:filters.preview.title", "Sample filter preview")}
+          </div>
+          {preview.loading ? (
+            <div className="mt-2 text-xs text-text-muted">
+              {t("watchlists:filters.preview.loading", "Loading sample candidates...")}
+            </div>
+          ) : preview.unavailableReason ? (
+            <div className="mt-2 text-xs text-text-muted">
+              {preview.unavailableReason}
+            </div>
+          ) : preview.outcome ? (
+            <div className="mt-2 space-y-2">
+              <div className="text-xs text-text-muted">
+                {t(
+                  "watchlists:filters.preview.summary",
+                  "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
+                  {
+                    ingestable: preview.outcome.ingestable,
+                    filtered: preview.outcome.filtered,
+                    total: preview.outcome.total
+                  }
+                )}
+              </div>
+              {preview.outcome.total > 0 ? (
+                <div className="space-y-1">
+                  {preview.outcome.items.slice(0, 4).map((item) => {
+                    const reason = item.preview_filter_key || item.preview_filter_type || "-"
+                    return (
+                      <div
+                        key={`${item.source_id}-${item.url || item.title || ""}`}
+                        className="flex items-start justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1 truncate text-text-muted">
+                          {item.title || item.url || t("watchlists:runs.detail.itemsUntitled", "Untitled")}
+                        </div>
+                        <div className="shrink-0 flex items-center gap-1">
+                          <Tag color={item.preview_decision === "ingest" ? "green" : "red"} className="m-0">
+                            {item.preview_decision}
+                          </Tag>
+                          <span className="text-text-subtle">{reason}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-xs text-text-muted">
+                  {t("watchlists:filters.preview.empty", "No sample candidates available.")}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-text-muted">
+              {t("watchlists:filters.preview.unavailable", "Sample preview unavailable.")}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="text-xs text-text-muted">
         {t(
           "watchlists:filters.help",
-          "Filters determine which items are included, excluded, or flagged during job runs. Include filters require at least one match."
+          "Filters determine which items are included, excluded, or flagged during monitor runs. Include filters require at least one match."
         )}
       </div>
     </div>

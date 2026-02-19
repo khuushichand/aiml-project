@@ -34,6 +34,12 @@ describe("DictionaryListSection", () => {
   const baseProps = {
     dictionarySearch: "",
     onDictionarySearchChange: vi.fn(),
+    categoryFilter: "",
+    onCategoryFilterChange: vi.fn(),
+    tagFilters: [],
+    onTagFiltersChange: vi.fn(),
+    categoryFilterOptions: ["Clinical"],
+    tagFilterOptions: ["urgent", "medical"],
     onOpenImport: vi.fn(),
     onOpenCreate: vi.fn(),
     status: "success" as const,
@@ -70,6 +76,8 @@ describe("DictionaryListSection", () => {
   it("routes search/create/import actions from the header controls", async () => {
     const user = userEvent.setup()
     const onDictionarySearchChange = vi.fn()
+    const onCategoryFilterChange = vi.fn()
+    const onTagFiltersChange = vi.fn()
     const onOpenImport = vi.fn()
     const onOpenCreate = vi.fn()
 
@@ -77,6 +85,8 @@ describe("DictionaryListSection", () => {
       <DictionaryListSection
         {...baseProps}
         onDictionarySearchChange={onDictionarySearchChange}
+        onCategoryFilterChange={onCategoryFilterChange}
+        onTagFiltersChange={onTagFiltersChange}
         onOpenImport={onOpenImport}
         onOpenCreate={onOpenCreate}
       />
@@ -87,6 +97,26 @@ describe("DictionaryListSection", () => {
       "clinical"
     )
     expect(onDictionarySearchChange).toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter dictionaries by category" })
+    )
+    await user.click(
+      await screen.findByText("Clinical", {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+    expect(onCategoryFilterChange).toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter dictionaries by tags" })
+    )
+    await user.click(
+      await screen.findByText("urgent", {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+    expect(onTagFiltersChange).toHaveBeenCalled()
 
     await user.click(screen.getByRole("button", { name: "Import" }))
     expect(onOpenImport).toHaveBeenCalledTimes(1)

@@ -1,7 +1,6 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type BrowserContext, type Page } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
-
-import { launchWithExtension } from './utils/extension'
 
 const serverUrl = process.env.TLDW_E2E_SERVER_URL || 'http://127.0.0.1:8000'
 const apiKey = process.env.TLDW_E2E_API_KEY || ''
@@ -15,15 +14,93 @@ const seededWatchlistsConfig = {
   }
 }
 
+const installWatchlistsRuntimeBridge = async (context: BrowserContext) => {
+  await context.addInitScript(() => {
+    if (typeof (window as any).__watchlistsBindBridge === 'function') {
+      return
+    }
+
+    ;(window as any).__watchlistsBindBridge = (handleRequest, handleUpload) => {
+      const patchRuntime = (runtime) => {
+        if (!runtime?.sendMessage) return
+        const original = runtime.sendMessage.bind(runtime)
+        const handler = async (message) => {
+          const bridgeHandler =
+            message?.type === 'tldw:request'
+              ? handleRequest
+              : message?.type === 'tldw:upload'
+                ? handleUpload
+                : null
+
+          if (bridgeHandler) {
+            try {
+              const data = await bridgeHandler(message.payload || {})
+              if (data == null) {
+                return { ok: false, status: 404, error: 'Not found' }
+              }
+              return { ok: true, status: 200, data }
+            } catch (error) {
+              return { ok: false, status: 500, error: String(error || '') }
+            }
+          }
+
+          return original ? original(message) : { ok: true, status: 200, data: {} }
+        }
+
+        try {
+          runtime.sendMessage = handler
+          return
+        } catch {}
+
+        try {
+          Object.defineProperty(runtime, 'sendMessage', {
+            value: handler,
+            configurable: true,
+            writable: true
+          })
+        } catch {}
+      }
+
+      if (window.chrome?.runtime) {
+        patchRuntime(window.chrome.runtime)
+      }
+
+      if (window.browser?.runtime) {
+        patchRuntime(window.browser.runtime)
+      }
+    }
+  })
+}
+
+const selectRowsAndAssertCount = async (page: Page, expectedCount: number) => {
+  const rowCheckboxes = page.locator('.ant-table-tbody tr[data-row-key] .ant-checkbox')
+  await expect(rowCheckboxes).toHaveCount(expectedCount)
+
+  for (let index = 0; index < expectedCount; index += 1) {
+    const checkbox = rowCheckboxes.nth(index)
+    await checkbox.scrollIntoViewIfNeeded()
+    const alreadyChecked = await checkbox.evaluate((node) =>
+      node.classList.contains('ant-checkbox-checked')
+    )
+    if (!alreadyChecked) {
+      await checkbox.click({ force: true })
+      await expect(checkbox).toHaveClass(/ant-checkbox-checked/)
+    }
+  }
+
+  await expect(page.getByText(`${expectedCount} selected`)).toBeVisible()
+}
+
 test.describe('Watchlists playground smoke', () => {
   test.describe.configure({ mode: 'serial' })
 
   test('loads tabs and key flows', async () => {
     test.setTimeout(120_000)
-    const extPath = path.resolve('build/chrome-mv3')
-    const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: seededWatchlistsConfig
     })
+    await installWatchlistsRuntimeBridge(context)
 
     await context.addInitScript(() => {
       ;(window as any).__watchlistsStubbed = true
@@ -157,6 +234,13 @@ test.describe('Watchlists playground smoke', () => {
           title: 'Morning Brief Output',
           version: 1,
           expired: false,
+          metadata: {
+            deliveries: [
+              { channel: 'email', status: 'sent' },
+              { channel: 'chatbook', status: 'stored', detail: 'Saved to Chatbook' },
+              { channel: 'webhook', status: 'failed', detail: 'timeout' }
+            ]
+          },
           created_at: now(),
           expires_at: null
         }
@@ -295,7 +379,9 @@ test.describe('Watchlists playground smoke', () => {
         }
 
         if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
-          const runId = Number(params.get('run_id'))
+          const runIdRaw = params.get('run_id')
+          const runId =
+            runIdRaw && runIdRaw.trim() !== '' ? Number(runIdRaw) : Number.NaN
           const filtered = Number.isNaN(runId)
             ? items
             : items.filter((item) => item.run_id === runId)
@@ -303,8 +389,12 @@ test.describe('Watchlists playground smoke', () => {
         }
 
         if (pathname === '/api/v1/watchlists/outputs' && method === 'GET') {
-          const jobId = Number(params.get('job_id'))
-          const runId = Number(params.get('run_id'))
+          const jobIdRaw = params.get('job_id')
+          const runIdRaw = params.get('run_id')
+          const jobId =
+            jobIdRaw && jobIdRaw.trim() !== '' ? Number(jobIdRaw) : Number.NaN
+          const runId =
+            runIdRaw && runIdRaw.trim() !== '' ? Number(runIdRaw) : Number.NaN
           let filtered = outputs
           if (!Number.isNaN(jobId)) {
             filtered = filtered.filter((output) => output.job_id === jobId)
@@ -381,44 +471,181 @@ test.describe('Watchlists playground smoke', () => {
         return null
       }
 
-      const patchRuntime = (runtime) => {
-        if (!runtime?.sendMessage) return
-        const original = runtime.sendMessage.bind(runtime)
-        const handler = async (message) => {
-          if (message?.type === 'tldw:request') {
-            try {
-              const data = handleRequest(message.payload || {})
-              if (data == null) {
-                return { ok: false, status: 404, error: 'Not found' }
-              }
-              return { ok: true, status: 200, data }
-            } catch (error) {
-              return { ok: false, status: 500, error: String(error || '') }
-            }
-          }
-          return original ? original(message) : { ok: true, status: 200, data: {} }
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+
+    })
+
+    const page = await context.newPage()
+    page.setDefaultTimeout(15_000)
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await expect(page.getByRole('heading', { name: 'Watchlists' })).toBeVisible()
+    await expect(
+      page.getByText('Create scheduled monitors to automatically scrape and process content.')
+    ).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Overview' })).toBeVisible()
+    await expect(page.getByText('At-a-glance watchlist health')).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Feeds' }).click()
+    await expect(page.getByText('Tech Daily')).toBeVisible()
+
+    await expect(page.locator('.ant-table-row')).toHaveCount(2)
+
+    await page.getByRole('tab', { name: 'Monitors' }).click()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('Morning Brief')
+    ).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Activity' }).click()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('Showing core columns. Use advanced mode for run metrics.')
+    ).toBeVisible()
+    await page.getByTestId('watchlists-runs-advanced-toggle').click()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('Filter by monitor')
+    ).toBeVisible()
+
+    await page.getByRole('tab', { name: 'Reports' }).click()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('Showing core columns. Use advanced mode for format/run details.')
+    ).toBeVisible()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('+2 more')
+    ).toBeVisible()
+    await page.getByTestId('watchlists-outputs-advanced-toggle').click()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('Filter by monitor')
+    ).toBeVisible()
+    await expect(
+      page.locator('.ant-tabs-tabpane-active').getByText('chatbook Stored')
+    ).toBeVisible()
+
+    await context.close()
+  })
+
+  test('activity tab cancel action updates run status to cancelled', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+
+      const now = () => new Date().toISOString()
+      const jobs = [
+        {
+          id: 11,
+          name: 'Morning Brief',
+          description: 'Daily scan',
+          active: true,
+          scope: { sources: [1], groups: [], tags: ['tech'] },
+          schedule_expr: '0 9 * * *',
+          timezone: 'UTC',
+          job_filters: { filters: [] },
+          created_at: now(),
+          updated_at: now(),
+          last_run_at: now(),
+          next_run_at: null
         }
-        try {
-          runtime.sendMessage = handler
-          return
-        } catch {}
-        try {
-          Object.defineProperty(runtime, 'sendMessage', {
-            value: handler,
-            configurable: true,
-            writable: true
-          })
-        } catch {}
+      ]
+
+      const runs = [
+        {
+          id: 101,
+          job_id: 11,
+          status: 'running',
+          started_at: now(),
+          finished_at: null,
+          stats: {
+            items_found: 2,
+            items_ingested: 1,
+            items_filtered: 0,
+            items_errored: 0
+          }
+        }
+      ]
+
+      const runDetails = {
+        id: 101,
+        job_id: 11,
+        status: 'running',
+        started_at: now(),
+        finished_at: null,
+        stats: {
+          items_found: 2,
+          items_ingested: 1,
+          items_filtered: 0,
+          items_errored: 0
+        },
+        filter_tallies: null,
+        log_text: 'Running...',
+        log_path: null,
+        truncated: false,
+        filtered_sample: null,
+        error_msg: null
       }
 
-      if (window.chrome?.runtime) {
-        patchRuntime(window.chrome.runtime)
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
       }
 
-      if (window.browser?.runtime) {
-        patchRuntime(window.browser.runtime)
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          return paginate(runs, page, size)
+        }
+
+        const runDetailsMatch = pathname.match(/^\/api\/v1\/watchlists\/runs\/(\d+)\/details$/)
+        if (runDetailsMatch && method === 'GET') {
+          return runDetails
+        }
+
+        const runCancelMatch = pathname.match(/^\/api\/v1\/watchlists\/runs\/(\d+)\/cancel$/)
+        if (runCancelMatch && method === 'POST') {
+          const runId = Number(runCancelMatch[1])
+          const target = runs.find((run) => run.id === runId)
+          if (!target) {
+            return { run_id: runId, status: 'missing', cancelled: false, message: 'run_not_found' }
+          }
+          target.status = 'cancelled'
+          target.finished_at = now()
+          runDetails.status = 'cancelled'
+          runDetails.finished_at = target.finished_at
+          runDetails.error_msg = 'cancelled_by_user'
+          return { run_id: runId, status: 'cancelled', cancelled: true, message: 'cancel_requested' }
+        }
+
+        return null
       }
 
+      ;(window as any).__watchlistsBindBridge(handleRequest)
     })
 
     const page = await context.newPage()
@@ -428,61 +655,217 @@ test.describe('Watchlists playground smoke', () => {
     })
     await basePage.close().catch(() => {})
 
-    await expect(page.getByRole('heading', { name: 'Watchlists' })).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'Overview' })).toBeVisible()
-    await expect(page.getByText('At-a-glance watchlist health')).toBeVisible()
+    await page.getByRole('tab', { name: 'Activity' }).click()
+    await expect(page.getByText('Running')).toBeVisible()
 
-    await page.getByRole('tab', { name: 'Feeds' }).click()
-    await expect(page.getByText('Tech Daily')).toBeVisible()
+    await page.getByTestId('watchlists-run-cancel-101').click()
 
-    const firstRowCheckbox = page
-      .locator('.ant-table input.ant-checkbox-input:not([aria-label="Select all"])')
-      .first()
-    await firstRowCheckbox.check({ force: true })
-    await expect(firstRowCheckbox).toBeChecked()
-    const selectionBar = page
-      .locator('div')
-      .filter({ has: page.getByRole('button', { name: 'Disable' }) })
-      .filter({ hasText: '1 selected' })
-      .first()
-    await expect(selectionBar).toBeVisible()
+    await expect(page.getByText('Cancelled')).toBeVisible()
 
-    await selectionBar.getByRole('button', { name: 'Disable' }).click()
-    const disableConfirm = page.locator('.ant-modal-confirm').filter({
-      hasText: 'Disable selected feeds?'
+    await context.close()
+  })
+
+  test('activity run-details remediation can retry a failed run', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
     })
-    await expect(disableConfirm).toBeVisible()
-    await expect(disableConfirm).toContainText(
-      '1 selected (1 active, 0 inactive). 1 will change state.'
-    )
-    await page.getByRole('button', { name: 'Cancel' }).click()
+    await installWatchlistsRuntimeBridge(context)
 
-    await selectionBar.getByRole('button', { name: 'Delete' }).click()
-    const deleteConfirm = page.locator('.ant-modal-confirm').filter({
-      hasText: 'Delete 1 selected feeds?'
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsRetryRunCalls = 0
+      ;(window as any).__watchlistsRetryRunJobIds = []
+      ;(window as any).__watchlistsLastRunDetailsId = null
+
+      const now = () => new Date().toISOString()
+      const jobs = [
+        {
+          id: 11,
+          name: 'Recovery Monitor',
+          description: 'Retries failed runs',
+          active: true,
+          scope: { sources: [1], groups: [], tags: ['recovery'] },
+          schedule_expr: '0 9 * * *',
+          timezone: 'UTC',
+          job_filters: { filters: [] },
+          created_at: now(),
+          updated_at: now(),
+          last_run_at: now(),
+          next_run_at: now()
+        }
+      ]
+
+      const runs = [
+        {
+          id: 101,
+          job_id: 11,
+          status: 'failed',
+          started_at: now(),
+          finished_at: now(),
+          error_msg: '403 forbidden while fetching source',
+          stats: {
+            items_found: 3,
+            items_ingested: 1,
+            items_filtered: 1,
+            items_errored: 1
+          }
+        }
+      ]
+
+      const runDetailsById: Record<number, Record<string, any>> = {
+        101: {
+          id: 101,
+          job_id: 11,
+          status: 'failed',
+          started_at: now(),
+          finished_at: now(),
+          error_msg: '403 forbidden while fetching source',
+          stats: {
+            items_found: 3,
+            items_ingested: 1,
+            items_filtered: 1,
+            items_errored: 1
+          },
+          filter_tallies: { include: 1, exclude: 1 },
+          log_text: '403 forbidden while fetching source',
+          log_path: null,
+          truncated: false,
+          filtered_sample: [
+            {
+              title: 'Filtered candidate',
+              status: 'filtered',
+              matched_action: 'exclude'
+            }
+          ]
+        },
+        202: {
+          id: 202,
+          job_id: 11,
+          status: 'pending',
+          started_at: now(),
+          finished_at: null,
+          error_msg: null,
+          stats: {
+            items_found: 0,
+            items_ingested: 0,
+            items_filtered: 0,
+            items_errored: 0
+          },
+          filter_tallies: null,
+          log_text: 'Retry queued',
+          log_path: null,
+          truncated: false,
+          filtered_sample: null
+        }
+      }
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          const q = params.get('q')
+          const filtered = q ? runs.filter((run) => run.status === q) : runs
+          return paginate(filtered, page, size)
+        }
+
+        const runDetailsMatch = pathname.match(/^\/api\/v1\/watchlists\/runs\/(\d+)\/details$/)
+        if (runDetailsMatch && method === 'GET') {
+          const runId = Number(runDetailsMatch[1])
+          ;(window as any).__watchlistsLastRunDetailsId = runId
+          return runDetailsById[runId] || null
+        }
+
+        const triggerRunMatch = pathname.match(/^\/api\/v1\/watchlists\/jobs\/(\d+)\/run$/)
+        if (triggerRunMatch && method === 'POST') {
+          const jobId = Number(triggerRunMatch[1])
+          ;(window as any).__watchlistsRetryRunCalls += 1
+          ;(window as any).__watchlistsRetryRunJobIds.push(jobId)
+          const retryRun = {
+            id: 202,
+            job_id: jobId,
+            status: 'pending',
+            started_at: now(),
+            finished_at: null,
+            error_msg: null,
+            stats: {
+              items_found: 0,
+              items_ingested: 0,
+              items_filtered: 0,
+              items_errored: 0
+            }
+          }
+          runs.unshift(retryRun)
+          return retryRun
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
     })
-    await expect(deleteConfirm).toBeVisible()
-    await expect(deleteConfirm).toContainText(
-      'This will delete 1 feeds (1 active, 0 inactive).'
-    )
-    await page.getByRole('button', { name: 'Cancel' }).click()
 
-    await page.getByRole('button', { name: 'Clear' }).click()
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
 
-    await page.getByRole('tab', { name: 'Monitors' }).click()
-    await expect(
-      page.locator('.ant-tabs-tabpane-active').getByText('Morning Brief')
-    ).toBeVisible()
+    await page.getByRole('tab', { name: 'Activity' }).click()
+    await expect(page.getByText('Failed', { exact: true }).first()).toBeVisible()
+
+    await page.getByRole('button', { name: 'View Details' }).first().click()
+    await expect(page.getByRole('dialog', { name: 'Run Details' })).toBeVisible()
+    await expect(page.getByText('Suggested recovery steps')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Retry run' }).click()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsRetryRunCalls))
+      .toBe(1)
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsRetryRunJobIds))
+      .toEqual([11])
 
     await context.close()
   })
 
   test('overview health and failed-run notification click-through', async () => {
     test.setTimeout(120_000)
-    const extPath = path.resolve('build/chrome-mv3')
-    const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: seededWatchlistsConfig
     })
+    await installWatchlistsRuntimeBridge(context)
 
     await context.addInitScript(() => {
       ;(window as any).__watchlistsStubbed = true
@@ -624,43 +1007,7 @@ test.describe('Watchlists playground smoke', () => {
         return null
       }
 
-      const patchRuntime = (runtime) => {
-        if (!runtime?.sendMessage) return
-        const original = runtime.sendMessage.bind(runtime)
-        const handler = async (message) => {
-          if (message?.type === 'tldw:request') {
-            try {
-              const data = handleRequest(message.payload || {})
-              if (data == null) {
-                return { ok: false, status: 404, error: 'Not found' }
-              }
-              return { ok: true, status: 200, data }
-            } catch (error) {
-              return { ok: false, status: 500, error: String(error || '') }
-            }
-          }
-          return original ? original(message) : { ok: true, status: 200, data: {} }
-        }
-        try {
-          runtime.sendMessage = handler
-          return
-        } catch {}
-        try {
-          Object.defineProperty(runtime, 'sendMessage', {
-            value: handler,
-            configurable: true,
-            writable: true
-          })
-        } catch {}
-      }
-
-      if (window.chrome?.runtime) {
-        patchRuntime(window.chrome.runtime)
-      }
-
-      if (window.browser?.runtime) {
-        patchRuntime(window.browser.runtime)
-      }
+      ;(window as any).__watchlistsBindBridge(handleRequest)
 
     })
 
@@ -696,10 +1043,11 @@ test.describe('Watchlists playground smoke', () => {
 
   test('overview quick setup callout drives first tab transition', async () => {
     test.setTimeout(120_000)
-    const extPath = path.resolve('build/chrome-mv3')
-    const { context, page: basePage, optionsUrl } = await launchWithExtension(extPath, {
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: seededWatchlistsConfig
     })
+    await installWatchlistsRuntimeBridge(context)
 
     await context.addInitScript(() => {
       ;(window as any).__watchlistsStubbed = true
@@ -745,43 +1093,7 @@ test.describe('Watchlists playground smoke', () => {
         return null
       }
 
-      const patchRuntime = (runtime) => {
-        if (!runtime?.sendMessage) return
-        const original = runtime.sendMessage.bind(runtime)
-        const handler = async (message) => {
-          if (message?.type === 'tldw:request') {
-            try {
-              const data = handleRequest(message.payload || {})
-              if (data == null) {
-                return { ok: false, status: 404, error: 'Not found' }
-              }
-              return { ok: true, status: 200, data }
-            } catch (error) {
-              return { ok: false, status: 500, error: String(error || '') }
-            }
-          }
-          return original ? original(message) : { ok: true, status: 200, data: {} }
-        }
-        try {
-          runtime.sendMessage = handler
-          return
-        } catch {}
-        try {
-          Object.defineProperty(runtime, 'sendMessage', {
-            value: handler,
-            configurable: true,
-            writable: true
-          })
-        } catch {}
-      }
-
-      if (window.chrome?.runtime) {
-        patchRuntime(window.chrome.runtime)
-      }
-
-      if (window.browser?.runtime) {
-        patchRuntime(window.browser.runtime)
-      }
+      ;(window as any).__watchlistsBindBridge(handleRequest)
     })
 
     const page = await context.newPage()
@@ -795,6 +1107,1387 @@ test.describe('Watchlists playground smoke', () => {
     await expect(page.getByText('Add Feed -> Create Monitor -> Review Results')).toBeVisible()
     await page.getByRole('button', { name: 'Add first feed' }).click()
     await expect(page.getByRole('tab', { name: 'Feeds' })).toHaveAttribute('aria-selected', 'true')
+
+    await context.close()
+  })
+
+  test('guided quick setup creates feed and monitor in three steps', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsQuickSetup = {
+        sourceBody: null,
+        jobBody: null,
+        run: null
+      }
+
+      const now = () => new Date().toISOString()
+      const sources: Array<Record<string, any>> = []
+      const jobs: Array<Record<string, any>> = []
+      const runs: Array<Record<string, any>> = []
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const body = payload?.body || null
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'POST') {
+          ;(window as any).__watchlistsQuickSetup.sourceBody = body
+          const created = {
+            id: 501,
+            name: String(body?.name || 'Untitled'),
+            url: String(body?.url || ''),
+            source_type: String(body?.source_type || 'rss'),
+            active: body?.active !== false,
+            tags: [],
+            group_ids: [],
+            status: 'healthy',
+            created_at: now(),
+            updated_at: now(),
+            last_scraped_at: null
+          }
+          sources.unshift(created)
+          return created
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'POST') {
+          ;(window as any).__watchlistsQuickSetup.jobBody = body
+          const created = {
+            id: 601,
+            name: String(body?.name || 'Untitled Monitor'),
+            description: null,
+            active: body?.active !== false,
+            scope: body?.scope || { sources: [] },
+            schedule_expr: body?.schedule_expr || null,
+            timezone: body?.timezone || 'UTC',
+            job_filters: null,
+            output_prefs: null,
+            created_at: now(),
+            updated_at: now(),
+            last_run_at: null,
+            next_run_at: null
+          }
+          jobs.unshift(created)
+          return created
+        }
+
+        const runTriggerMatch = pathname.match(/^\/api\/v1\/watchlists\/jobs\/(\d+)\/run$/)
+        if (runTriggerMatch && method === 'POST') {
+          const run = {
+            id: 701,
+            job_id: Number(runTriggerMatch[1]),
+            status: 'running',
+            started_at: now(),
+            finished_at: null,
+            stats: {
+              items_found: 0,
+              items_ingested: 0,
+              items_filtered: 0,
+              items_errored: 0
+            }
+          }
+          ;(window as any).__watchlistsQuickSetup.run = run
+          runs.unshift(run)
+          return run
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          if (params.get('reviewed') === 'false') {
+            return { items: [], total: 0, page, size, has_more: false }
+          }
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          const q = params.get('q')
+          if (q === 'running') return paginate(runs.filter((run) => run.status === 'running'), page, size)
+          if (q === 'pending') return paginate([], page, size)
+          if (q === 'failed') return paginate([], page, size)
+          return paginate(runs, page, size)
+        }
+
+        const runDetailsMatch = pathname.match(/^\/api\/v1\/watchlists\/runs\/(\d+)\/details$/)
+        if (runDetailsMatch && method === 'GET') {
+          const runId = Number(runDetailsMatch[1])
+          const run = runs.find((item) => item.id === runId)
+          if (!run) return null
+          return {
+            id: run.id,
+            job_id: run.job_id,
+            status: run.status,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            stats: run.stats || {
+              items_found: 0,
+              items_ingested: 0,
+              items_filtered: 0,
+              items_errored: 0
+            },
+            filter_tallies: null,
+            log_text: 'Run started',
+            log_path: null,
+            truncated: false,
+            filtered_sample: null,
+            error_msg: null
+          }
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await expect(page.getByText('Quick setup')).toBeVisible()
+    await page.getByRole('button', { name: 'Guided setup' }).click()
+
+    const dialog = page.getByRole('dialog', { name: 'Guided quick setup' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByPlaceholder('e.g., Daily Tech Feed').fill('Guided Feed')
+    await dialog.getByPlaceholder('https://example.com/feed.xml').fill('https://example.com/guided.xml')
+    await dialog.getByRole('button', { name: 'Next' }).click()
+
+    await expect(dialog.getByPlaceholder('e.g., Morning Brief')).toBeVisible()
+    await dialog.getByPlaceholder('e.g., Morning Brief').fill('Guided Monitor')
+    await dialog.getByRole('button', { name: 'Next' }).click()
+    await expect(dialog.getByRole('button', { name: 'Create setup' })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Create setup' }).click()
+
+    await expect(page.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
+
+    const quickSetupState = await page.evaluate(() => (window as any).__watchlistsQuickSetup)
+    expect(quickSetupState.sourceBody?.name).toBe('Guided Feed')
+    expect(quickSetupState.sourceBody?.url).toBe('https://example.com/guided.xml')
+    expect(quickSetupState.jobBody?.name).toBe('Guided Monitor')
+    expect(quickSetupState.jobBody?.scope?.sources).toEqual([501])
+    expect(quickSetupState.run?.job_id).toBe(601)
+
+    await context.close()
+  })
+
+  test('creates a monitor without opening advanced sections', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsCreatedJobBody = null
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Tech Daily',
+          url: 'https://example.com/rss.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['tech'],
+          status: 'healthy',
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        }
+      ]
+      const jobs: Array<Record<string, unknown>> = []
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const body = payload?.body || null
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/groups' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/tags' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'POST') {
+          ;(window as any).__watchlistsCreatedJobBody = body
+          const created = {
+            id: 44,
+            name: String(body?.name || 'Untitled'),
+            description: body?.description || null,
+            active: body?.active !== false,
+            scope: body?.scope || {},
+            schedule_expr: body?.schedule_expr || null,
+            timezone: body?.timezone || 'UTC',
+            job_filters: body?.job_filters || null,
+            output_prefs: body?.output_prefs || null,
+            created_at: now(),
+            updated_at: now(),
+            last_run_at: null,
+            next_run_at: null
+          }
+          jobs.unshift(created)
+          return created
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/outputs/templates' && method === 'GET') {
+          return { items: [], total: 0 }
+        }
+
+        if (pathname === '/api/v1/watchlists/templates' && method === 'GET') {
+          return { items: [] }
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+    console.log('[E2E_STEP] monitor-create: page ready')
+
+    await page.getByRole('tab', { name: 'Monitors' }).click()
+    console.log('[E2E_STEP] monitor-create: monitors tab opened')
+    await page.getByRole('button', { name: 'Add Monitor' }).click()
+    console.log('[E2E_STEP] monitor-create: add monitor clicked')
+
+    const dialog = page.getByRole('dialog', { name: 'Add Monitor' })
+    await expect(dialog).toBeVisible()
+    console.log('[E2E_STEP] monitor-create: dialog visible')
+    await dialog.getByPlaceholder('e.g., Daily Tech News').fill('Simple Monitor')
+    console.log('[E2E_STEP] monitor-create: name filled')
+
+    const scopeHeader = dialog.locator('.ant-collapse-header').filter({ hasText: 'Feeds to Include' }).first()
+    await expect(scopeHeader).toBeVisible({ timeout: 10_000 })
+    console.log('[E2E_STEP] monitor-create: scope header visible')
+    const scopeExpanded = await scopeHeader.getAttribute('aria-expanded', { timeout: 1_000 })
+    if (scopeExpanded !== 'true') {
+      await scopeHeader.click()
+      console.log('[E2E_STEP] monitor-create: scope header expanded')
+    }
+
+    await expect(dialog.getByRole('tab', { name: 'Feeds' })).toBeVisible({ timeout: 10_000 })
+    console.log('[E2E_STEP] monitor-create: feeds tab visible')
+    const scopeSelect = dialog.getByRole('combobox').first()
+    await scopeSelect.click()
+    console.log('[E2E_STEP] monitor-create: scope select opened')
+    const techDailyOption = page
+      .locator('.ant-select-dropdown .ant-select-item-option')
+      .filter({ hasText: 'Tech Daily' })
+      .first()
+    await expect(techDailyOption).toBeVisible({ timeout: 10_000 })
+    await techDailyOption.click()
+    console.log('[E2E_STEP] monitor-create: source selected')
+    await expect(dialog.getByTestId('job-form-summary-scope')).not.toContainText('No feeds selected')
+    console.log('[E2E_STEP] monitor-create: summary updated')
+
+    await dialog.getByRole('button', { name: 'Create' }).click()
+    console.log('[E2E_STEP] monitor-create: create clicked')
+    await expect(dialog).not.toBeVisible()
+    console.log('[E2E_STEP] monitor-create: dialog closed')
+    await expect(page.locator('.ant-table-tbody')).toContainText('Simple Monitor')
+    console.log('[E2E_STEP] monitor-create: monitor row visible')
+
+    const createdPayload = await page.evaluate(() => (window as any).__watchlistsCreatedJobBody)
+    expect(createdPayload).toBeTruthy()
+    expect(createdPayload.name).toBe('Simple Monitor')
+    expect(createdPayload.scope?.sources).toEqual([1])
+    expect(createdPayload.schedule_expr ?? null).toBeNull()
+    expect(
+      createdPayload.job_filters == null ||
+        !Array.isArray(createdPayload.job_filters?.filters) ||
+        createdPayload.job_filters.filters.length === 0
+    ).toBe(true)
+
+    await context.close()
+  })
+
+  test('articles batch triage controls handle 50+ items efficiently', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsItemReviewUpdates = 0
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Triage Feed',
+          url: 'https://example.com/triage.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['triage'],
+          status: 'healthy',
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        }
+      ]
+
+      const items = Array.from({ length: 55 }, (_, index) => {
+        const id = 1000 + index
+        return {
+          id,
+          run_id: 77,
+          job_id: 66,
+          source_id: 1,
+          url: `https://example.com/article-${id}`,
+          title: `Batch item ${id}`,
+          summary: `Summary for item ${id}`,
+          published_at: now(),
+          tags: ['triage'],
+          status: index % 5 === 0 ? 'filtered' : 'ingested',
+          reviewed: false,
+          created_at: now()
+        }
+      })
+
+      const jobs = [
+        {
+          id: 66,
+          name: 'Batch Monitor',
+          description: 'Bulk review load',
+          active: true,
+          scope: { sources: [1], groups: [], tags: ['triage'] },
+          schedule_expr: null,
+          timezone: 'UTC',
+          job_filters: { filters: [] },
+          created_at: now(),
+          updated_at: now(),
+          last_run_at: now(),
+          next_run_at: null
+        }
+      ]
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const applyItemFilters = (params) => {
+        let filtered = [...items]
+        if (params.get('source_id')) {
+          const sourceIdRaw = params.get('source_id')
+          const sourceId =
+            sourceIdRaw && sourceIdRaw.trim() !== '' ? Number(sourceIdRaw) : Number.NaN
+          filtered = filtered.filter((item) => item.source_id === sourceId)
+        }
+        if (params.get('status')) {
+          const status = String(params.get('status'))
+          filtered = filtered.filter((item) => item.status === status)
+        }
+        if (params.get('reviewed') === 'true') {
+          filtered = filtered.filter((item) => item.reviewed)
+        } else if (params.get('reviewed') === 'false') {
+          filtered = filtered.filter((item) => !item.reviewed)
+        }
+        const query = String(params.get('q') || '').trim().toLowerCase()
+        if (query) {
+          filtered = filtered.filter((item) =>
+            String(item.title || '').toLowerCase().includes(query)
+          )
+        }
+        return filtered
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const body = payload?.body || null
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          const filtered = applyItemFilters(params)
+          return paginate(filtered, page, size)
+        }
+
+        const itemPatchMatch = pathname.match(/^\/api\/v1\/watchlists\/items\/(\d+)$/)
+        if (itemPatchMatch && method === 'PATCH') {
+          const itemId = Number(itemPatchMatch[1])
+          const index = items.findIndex((item) => item.id === itemId)
+          if (index < 0) return null
+          if (typeof body?.reviewed === 'boolean') {
+            items[index].reviewed = body.reviewed
+          }
+          ;(window as any).__watchlistsItemReviewUpdates += 1
+          return { ...items[index] }
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await page.getByRole('tab', { name: 'Articles' }).click()
+    await expect(page.locator('[data-testid^="watchlists-item-row-"]')).toHaveCount(25)
+
+    await page.getByTestId('watchlists-items-mark-page').click()
+    const firstConfirm = page.locator('.ant-modal-confirm').last()
+    await firstConfirm.getByRole('button', { name: 'Mark as reviewed' }).click()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsItemReviewUpdates))
+      .toBe(25)
+
+    await expect(page.getByTestId('watchlists-items-mark-page')).toBeDisabled()
+
+    await page.getByTestId('watchlists-items-mark-all-filtered').click()
+    const secondConfirm = page.locator('.ant-modal-confirm').last()
+    await secondConfirm.getByRole('button', { name: 'Mark as reviewed' }).click()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsItemReviewUpdates))
+      .toBe(55)
+
+    await context.close()
+  })
+
+  test('articles keyboard shortcuts support mouse-free triage flow', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsKeyboardReviewUpdates = 0
+      ;(window as any).__watchlistsKeyboardItemsFetches = 0
+      ;(window as any).__watchlistsOpenedUrls = []
+
+      window.open = ((url?: string | URL | undefined) => {
+        if (typeof url === 'string') {
+          ;(window as any).__watchlistsOpenedUrls.push(url)
+        } else if (url instanceof URL) {
+          ;(window as any).__watchlistsOpenedUrls.push(url.toString())
+        }
+        return null
+      }) as typeof window.open
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Keyboard Feed',
+          url: 'https://example.com/keyboard.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['keyboard'],
+          status: 'healthy',
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        }
+      ]
+
+      const items = [
+        {
+          id: 2101,
+          run_id: 88,
+          job_id: 77,
+          source_id: 1,
+          url: 'https://example.com/keyboard-1',
+          title: 'Keyboard item one',
+          summary: 'Summary one',
+          published_at: now(),
+          tags: ['keyboard'],
+          status: 'ingested',
+          reviewed: false,
+          created_at: now()
+        },
+        {
+          id: 2102,
+          run_id: 88,
+          job_id: 77,
+          source_id: 1,
+          url: 'https://example.com/keyboard-2',
+          title: 'Keyboard item two',
+          summary: 'Summary two',
+          published_at: now(),
+          tags: ['keyboard'],
+          status: 'ingested',
+          reviewed: false,
+          created_at: now()
+        },
+        {
+          id: 2103,
+          run_id: 88,
+          job_id: 77,
+          source_id: 1,
+          url: 'https://example.com/keyboard-3',
+          title: 'Keyboard item three',
+          summary: 'Summary three',
+          published_at: now(),
+          tags: ['keyboard'],
+          status: 'filtered',
+          reviewed: true,
+          created_at: now()
+        }
+      ]
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const applyItemFilters = (params) => {
+        let filtered = [...items]
+        if (params.get('reviewed') === 'true') {
+          filtered = filtered.filter((item) => item.reviewed)
+        } else if (params.get('reviewed') === 'false') {
+          filtered = filtered.filter((item) => !item.reviewed)
+        }
+        if (params.get('status')) {
+          const status = String(params.get('status'))
+          filtered = filtered.filter((item) => item.status === status)
+        }
+        const query = String(params.get('q') || '').trim().toLowerCase()
+        if (query) {
+          filtered = filtered.filter((item) =>
+            String(item.title || '').toLowerCase().includes(query)
+          )
+        }
+        return filtered
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const body = payload?.body || null
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/groups' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/tags' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          ;(window as any).__watchlistsKeyboardItemsFetches += 1
+          return paginate(applyItemFilters(params), page, size)
+        }
+
+        const itemPatchMatch = pathname.match(/^\/api\/v1\/watchlists\/items\/(\d+)$/)
+        if (itemPatchMatch && method === 'PATCH') {
+          const itemId = Number(itemPatchMatch[1])
+          const index = items.findIndex((item) => item.id === itemId)
+          if (index < 0) return null
+          if (typeof body?.reviewed === 'boolean') {
+            items[index].reviewed = body.reviewed
+          }
+          ;(window as any).__watchlistsKeyboardReviewUpdates += 1
+          return { ...items[index] }
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await page.getByRole('tab', { name: 'Articles' }).click()
+    await expect(page.getByTestId('watchlists-item-reader')).toContainText('Keyboard item one')
+
+    await page.keyboard.press('j')
+    await expect(page.getByTestId('watchlists-item-reader')).toContainText('Keyboard item two')
+
+    await page.keyboard.press('k')
+    await expect(page.getByTestId('watchlists-item-reader')).toContainText('Keyboard item one')
+
+    await page.getByTestId('watchlists-item-reader').click()
+    await page.keyboard.press(' ')
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsKeyboardReviewUpdates))
+      .toBeGreaterThanOrEqual(1)
+
+    await page.keyboard.press('o')
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsOpenedUrls.length))
+      .toBe(1)
+
+    const fetchCountBeforeRefresh = await page.evaluate(
+      () => (window as any).__watchlistsKeyboardItemsFetches
+    )
+    await page.keyboard.press('r')
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsKeyboardItemsFetches))
+      .toBeGreaterThan(fetchCountBeforeRefresh)
+
+    await page.keyboard.press('n')
+    await expect(page.getByRole('tab', { name: 'Feeds' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('dialog', { name: 'Add Source' })).toBeVisible()
+
+    await context.close()
+  })
+
+  test('feed delete warns when active monitors depend on the feed', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsDeleteCalls = 0
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Critical Feed',
+          url: 'https://example.com/critical.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['critical'],
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        }
+      ]
+
+      const jobs = [
+        {
+          id: 11,
+          name: 'Critical Monitor',
+          description: 'Tracks critical updates',
+          active: true,
+          scope: { sources: [1], groups: [], tags: [] },
+          schedule_expr: '0 9 * * *',
+          timezone: 'UTC',
+          job_filters: { filters: [] },
+          created_at: now(),
+          updated_at: now(),
+          last_run_at: now(),
+          next_run_at: now()
+        }
+      ]
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/tags' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/groups' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        const sourceSeenMatch = pathname.match(/^\/api\/v1\/watchlists\/sources\/(\d+)\/seen(?:\?.*)?$/)
+        if (sourceSeenMatch && method === 'GET') {
+          return {
+            source_id: Number(sourceSeenMatch[1]),
+            user_id: 1,
+            seen_count: 0,
+            latest_seen_at: null,
+            consec_not_modified: 0,
+            defer_until: null,
+            recent_keys: []
+          }
+        }
+
+        const sourceDeleteMatch = pathname.match(/^\/api\/v1\/watchlists\/sources\/(\d+)$/)
+        if (sourceDeleteMatch && method === 'DELETE') {
+          const sourceId = Number(sourceDeleteMatch[1])
+          const index = sources.findIndex((item) => item.id === sourceId)
+          if (index >= 0) {
+            sources.splice(index, 1)
+          }
+          ;(window as any).__watchlistsDeleteCalls += 1
+          return { ok: true }
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await page.getByRole('tab', { name: 'Feeds' }).click()
+    await expect(page.getByText('Critical Feed')).toBeVisible()
+
+    await selectRowsAndAssertCount(page, 1)
+    await page.getByRole('button', { name: /^Delete$/ }).first().click()
+
+    const confirm = page.locator('.ant-modal-confirm').last()
+    await expect(confirm).toContainText(/active monitor/i)
+    await expect(confirm).toContainText('Critical Monitor')
+    await confirm.getByRole('button', { name: 'Cancel' }).click()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsDeleteCalls))
+      .toBe(0)
+
+    await context.close()
+  })
+
+  test('feeds bulk disable shows impact summary before commit', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsBulkDisableCalls = 0
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Breaking Feed',
+          url: 'https://example.com/breaking.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['news'],
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        },
+        {
+          id: 2,
+          name: 'Already Paused Feed',
+          url: 'https://example.com/paused.xml',
+          source_type: 'site',
+          active: false,
+          tags: ['news'],
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: null
+        }
+      ]
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const body = payload?.body || {}
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        const sourceUpdateMatch = pathname.match(/^\/api\/v1\/watchlists\/sources\/(\d+)$/)
+        if (sourceUpdateMatch && method === 'PATCH') {
+          const sourceId = Number(sourceUpdateMatch[1])
+          const source = sources.find((item) => item.id === sourceId)
+          if (!source) return null
+          source.active = Boolean(body?.active)
+          source.updated_at = now()
+          ;(window as any).__watchlistsBulkDisableCalls += 1
+          return source
+        }
+
+        if (pathname === '/api/v1/watchlists/tags' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/groups' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        const sourceSeenMatch = pathname.match(/^\/api\/v1\/watchlists\/sources\/(\d+)\/seen-stats$/)
+        if (sourceSeenMatch && method === 'GET') {
+          return {
+            keys_total: 0,
+            keys_limit: 0,
+            seen_recent: 0,
+            top_keys: [],
+            consec_not_modified: 0,
+            defer_until: null,
+            old_seen_count: 0,
+            old_last_seen: null,
+            old_cleanup_cutoff: null
+          }
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await page.getByRole('tab', { name: 'Feeds' }).click()
+    await expect(page.getByText('Breaking Feed')).toBeVisible()
+    await expect(page.getByText('Already Paused Feed')).toBeVisible()
+
+    await selectRowsAndAssertCount(page, 2)
+    await page.getByRole('button', { name: 'Disable' }).click()
+
+    const firstConfirm = page.locator('.ant-modal-confirm').last()
+    await expect(firstConfirm).toContainText('2 selected (1 active, 1 inactive). 1 will change state.')
+    await firstConfirm.getByRole('button', { name: 'Cancel' }).click()
+    await expect(firstConfirm).toBeHidden()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsBulkDisableCalls))
+      .toBe(0)
+
+    await page.getByRole('button', { name: 'Disable' }).first().click()
+    const secondConfirm = page.locator('.ant-modal-confirm').last()
+    await secondConfirm.getByRole('button', { name: 'Disable' }).click()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsBulkDisableCalls))
+      .toBe(2)
+
+    await context.close()
+  })
+
+  test('feeds OPML import supports retry failed only recovery flow', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      ;(window as any).__watchlistsImportUploadTexts = []
+
+      const now = () => new Date().toISOString()
+      const sources: Array<Record<string, any>> = []
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const decodeUploadText = (uploadPayload: any): string => {
+        try {
+          const data = uploadPayload?.file?.data
+          if (!data) return ''
+          let bytes: Uint8Array
+          if (data instanceof ArrayBuffer) {
+            bytes = new Uint8Array(data)
+          } else if (ArrayBuffer.isView(data)) {
+            bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+          } else if (Array.isArray(data)) {
+            bytes = Uint8Array.from(data)
+          } else {
+            return ''
+          }
+          return new TextDecoder().decode(bytes)
+        } catch {
+          return ''
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/tags' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/groups' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        const sourceSeenMatch = pathname.match(/^\/api\/v1\/watchlists\/sources\/(\d+)\/seen(?:\?.*)?$/)
+        if (sourceSeenMatch && method === 'GET') {
+          return {
+            source_id: Number(sourceSeenMatch[1]),
+            user_id: 1,
+            seen_count: 0,
+            latest_seen_at: null,
+            consec_not_modified: 0,
+            defer_until: null,
+            recent_keys: []
+          }
+        }
+
+        return null
+      }
+
+      const handleUpload = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'POST').toUpperCase()
+        if (path !== '/api/v1/watchlists/sources/import' || method !== 'POST') {
+          return null
+        }
+
+        const opmlText = decodeUploadText(payload)
+        ;(window as any).__watchlistsImportUploadTexts.push(opmlText)
+
+        if ((window as any).__watchlistsImportUploadTexts.length === 1) {
+          return {
+            items: [
+              {
+                status: 'created',
+                name: 'Good Feed',
+                url: 'https://good.example.com/rss.xml'
+              },
+              {
+                status: 'error',
+                name: 'Failed Feed',
+                url: 'https://failed.example.com/rss.xml',
+                error: 'timeout while fetching'
+              }
+            ]
+          }
+        }
+
+        return {
+          items: [
+            {
+              status: 'created',
+              name: 'Failed Feed',
+              url: 'https://failed.example.com/rss.xml'
+            }
+          ]
+        }
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest, handleUpload)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await page.getByRole('tab', { name: 'Feeds' }).click()
+    await page.getByRole('button', { name: 'Import OPML' }).first().click()
+    const importDialog = page.getByRole('dialog', { name: 'Import OPML' })
+    await expect(importDialog).toBeVisible()
+
+    const opml = `<?xml version="1.0"?>
+<opml version="2.0">
+  <body>
+    <outline text="Good Feed" xmlUrl="https://good.example.com/rss.xml"/>
+    <outline text="Failed Feed" xmlUrl="https://failed.example.com/rss.xml"/>
+  </body>
+</opml>`
+
+    await importDialog.locator('input[type="file"]').setInputFiles({
+      name: 'feeds.opml',
+      mimeType: 'text/xml',
+      buffer: Buffer.from(opml, 'utf-8')
+    })
+
+    await expect(importDialog.getByText('Preflight Summary')).toBeVisible()
+    await importDialog.getByRole('button', { name: 'Import 2 feeds' }).click()
+
+    const retryButton = importDialog.getByRole('button', { name: 'Retry failed only' })
+    await expect(retryButton).toBeVisible()
+    await retryButton.click()
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsImportUploadTexts.length))
+      .toBe(2)
+
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsImportUploadTexts[1] || ''))
+      .toContain('https://failed.example.com/rss.xml')
+    await expect
+      .poll(async () => page.evaluate(() => (window as any).__watchlistsImportUploadTexts[1] || ''))
+      .not.toContain('https://good.example.com/rss.xml')
+
+    await context.close()
+  })
+
+  test('watchlists help links and guided-tour resume are discoverable', async () => {
+    test.setTimeout(120_000)
+    const extPath = path.resolve('.output/chrome-mv3')
+    const { context, page: basePage, optionsUrl } = await launchWithExtensionOrSkip(test, extPath, {
+      seedConfig: seededWatchlistsConfig
+    })
+    await installWatchlistsRuntimeBridge(context)
+
+    await context.addInitScript(() => {
+      ;(window as any).__watchlistsStubbed = true
+      localStorage.setItem(
+        'watchlists:guided-tour:v1',
+        JSON.stringify({ status: 'in_progress', step: 2 })
+      )
+
+      const now = () => new Date().toISOString()
+      const sources = [
+        {
+          id: 1,
+          name: 'Docs Feed',
+          url: 'https://example.com/docs.xml',
+          source_type: 'rss',
+          active: true,
+          tags: ['docs'],
+          status: 'healthy',
+          created_at: now(),
+          updated_at: now(),
+          last_scraped_at: now()
+        }
+      ]
+      const jobs = [
+        {
+          id: 11,
+          name: 'Docs Monitor',
+          description: 'Tracks docs updates',
+          active: true,
+          scope: { sources: [1], groups: [], tags: ['docs'] },
+          schedule_expr: '0 9 * * *',
+          timezone: 'UTC',
+          job_filters: { filters: [] },
+          created_at: now(),
+          updated_at: now(),
+          last_run_at: now(),
+          next_run_at: now()
+        }
+      ]
+      const runs = [
+        {
+          id: 101,
+          job_id: 11,
+          status: 'completed',
+          started_at: now(),
+          finished_at: now(),
+          error_msg: null,
+          stats: {
+            items_found: 1,
+            items_ingested: 1,
+            items_filtered: 0,
+            items_errored: 0
+          }
+        }
+      ]
+
+      const paginate = (list, page, size) => {
+        const current = page || 1
+        const limit = size || list.length || 1
+        const start = (current - 1) * limit
+        const end = start + limit
+        return {
+          items: list.slice(start, end),
+          total: list.length,
+          page: current,
+          size: limit,
+          has_more: end < list.length
+        }
+      }
+
+      const handleRequest = (payload) => {
+        const path = payload?.path || ''
+        const method = String(payload?.method || 'GET').toUpperCase()
+        const [pathname, queryString] = path.split('?')
+        const params = new URLSearchParams(queryString || '')
+        const page = Number(params.get('page') || 1)
+        const size = Number(params.get('size') || 20)
+
+        if (pathname === '/api/v1/watchlists/sources' && method === 'GET') {
+          return paginate(sources, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/jobs' && method === 'GET') {
+          return paginate(jobs, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/runs' && method === 'GET') {
+          const q = params.get('q')
+          const filtered = q ? runs.filter((run) => run.status === q) : runs
+          return paginate(filtered, page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/items' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/tags' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        if (pathname === '/api/v1/watchlists/groups' && method === 'GET') {
+          return paginate([], page, size)
+        }
+
+        const sourceSeenMatch = pathname.match(/^\/api\/v1\/watchlists\/sources\/(\d+)\/seen(?:\?.*)?$/)
+        if (sourceSeenMatch && method === 'GET') {
+          return {
+            source_id: Number(sourceSeenMatch[1]),
+            user_id: 1,
+            seen_count: 0,
+            latest_seen_at: null,
+            consec_not_modified: 0,
+            defer_until: null,
+            recent_keys: []
+          }
+        }
+
+        return null
+      }
+
+      ;(window as any).__watchlistsBindBridge(handleRequest)
+    })
+
+    const page = await context.newPage()
+    await page.goto(optionsUrl + '?e2e=1#/watchlists', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => (window as any).__watchlistsStubbed === true, undefined, {
+      timeout: 5_000
+    })
+    await basePage.close().catch(() => {})
+
+    await expect(page.getByTestId('watchlists-main-docs-link')).toHaveAttribute(
+      'href',
+      'https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Watchlists_API.md'
+    )
+    await expect(page.getByTestId('watchlists-beta-docs-link')).toHaveAttribute(
+      'href',
+      'https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Watchlists_API.md'
+    )
+    await expect(page.getByTestId('watchlists-beta-report-link')).toHaveAttribute(
+      'href',
+      'https://github.com/rmusser01/tldw_server/issues/new'
+    )
+    await expect(page.getByTestId('watchlists-context-docs-link')).toHaveAttribute(
+      'href',
+      'https://github.com/rmusser01/tldw_server/blob/main/Docs/Product/Watchlists/Watchlist_PRD.md'
+    )
+
+    await expect(page.getByTestId('watchlists-resume-guide')).toBeVisible()
+    await page.getByTestId('watchlists-resume-guide').click()
+    await expect(page.getByText('Watchlists guided tour')).toBeVisible()
+    await expect(page.getByText('Step 3 of 5')).toBeVisible()
+    await expect(page.getByTestId('watchlists-context-docs-link')).toHaveAttribute(
+      'href',
+      'https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Watchlists_API.md#runs'
+    )
+
+    await page.getByRole('button', { name: 'Skip' }).click()
+    await page.getByRole('tab', { name: 'Feeds' }).click()
+    await expect(page.getByTestId('watchlists-context-docs-link')).toHaveAttribute(
+      'href',
+      'https://github.com/rmusser01/tldw_server/blob/main/Docs/API/Watchlists_Filters_OPML.md'
+    )
 
     await context.close()
   })

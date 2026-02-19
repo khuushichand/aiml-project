@@ -4,9 +4,14 @@ import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
+import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
 import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
+import {
+  DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
+  normalizeDefaultCharacterPreferenceId
+} from "@/utils/default-character-preference"
 import {
   buildContentPayload,
   mapApiDetailToUi,
@@ -66,6 +71,17 @@ export interface TldwConfig {
   refreshToken?: string
   orgId?: number
   authMode: 'single-user' | 'multi-user'
+}
+
+export type UserProfileUpdateEntry = {
+  key: string
+  value: unknown | null
+}
+
+export type UserProfileUpdateResponse = {
+  profile_version?: string
+  applied: string[]
+  skipped: Array<{ key: string; message: string }>
 }
 
 export interface TldwModel {
@@ -186,7 +202,44 @@ export interface ServerChatSummary {
   character_id?: string | number | null
   parent_conversation_id?: string | null
   root_id?: string | null
+  forked_from_message_id?: string | null
   version?: number | null
+}
+
+export type ConversationSharePermission = "view"
+
+export interface ConversationShareLinkSummary {
+  id: string
+  permission: ConversationSharePermission
+  created_at: string
+  expires_at: string
+  revoked_at?: string | null
+  share_path?: string | null
+  token?: string | null
+}
+
+export interface ConversationShareLinkCreateResponse {
+  share_id: string
+  permission: ConversationSharePermission
+  created_at: string
+  expires_at: string
+  token: string
+  share_path: string
+}
+
+export interface ConversationShareLinksListResponse {
+  conversation_id: string
+  links: ConversationShareLinkSummary[]
+}
+
+export interface ConversationShareLinkResolveResponse {
+  conversation_id: string
+  title?: string | null
+  source?: string | null
+  permission: ConversationSharePermission
+  shared_by_user_id: string
+  expires_at: string
+  messages: any[]
 }
 
 export type ConversationState =
@@ -781,6 +834,72 @@ export class TldwApiClient {
 
   async getServerInfo(): Promise<any> {
     return await bgRequest<any>({ path: '/', method: 'GET' })
+  }
+
+  async getCurrentUserProfile(params?: {
+    sections?: string | string[]
+    includeSources?: boolean
+    includeRaw?: boolean
+    maskSecrets?: boolean
+  }): Promise<any> {
+    const sections = Array.isArray(params?.sections)
+      ? params?.sections.join(",")
+      : params?.sections
+    const query = this.buildQuery({
+      sections,
+      include_sources: params?.includeSources,
+      include_raw: params?.includeRaw,
+      mask_secrets: params?.maskSecrets
+    })
+    return await this.request<any>({
+      path: `/api/v1/users/me/profile${query}`,
+      method: "GET"
+    })
+  }
+
+  async updateCurrentUserProfile(payload: {
+    updates: UserProfileUpdateEntry[]
+    profile_version?: string
+    dry_run?: boolean
+  }): Promise<UserProfileUpdateResponse> {
+    return await this.request<UserProfileUpdateResponse>({
+      path: "/api/v1/users/me/profile",
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getDefaultCharacterPreference(): Promise<string | null> {
+    const profile = await this.getCurrentUserProfile({
+      sections: "preferences"
+    })
+    const raw = profile?.preferences?.[DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY]
+    if (
+      raw &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      "value" in raw
+    ) {
+      return normalizeDefaultCharacterPreferenceId(
+        (raw as { value?: unknown }).value
+      )
+    }
+    return normalizeDefaultCharacterPreferenceId(raw)
+  }
+
+  async setDefaultCharacterPreference(
+    characterId: string | null
+  ): Promise<UserProfileUpdateResponse> {
+    const normalizedCharacterId = normalizeDefaultCharacterPreferenceId(characterId)
+    return await this.updateCurrentUserProfile({
+      updates: [
+        {
+          key: DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
+          value: normalizedCharacterId
+        }
+      ]
+    })
   }
 
   private buildQuery(params?: Record<string, any>): string {
@@ -2150,14 +2269,84 @@ export class TldwApiClient {
   // Characters API
   async listCharacters(params?: Record<string, any>): Promise<any[]> {
     const query = this.buildQuery(params)
-    const base = await this.resolveApiPath("characters.list", [
-      "/api/v1/characters",
-      "/api/v1/characters/"
-    ])
-    return await bgRequest<any[]>({
-      path: appendPathQuery(base, query),
-      method: 'GET'
-    })
+    const listPathCandidates = ["/api/v1/characters", "/api/v1/characters/"] as const
+    const base = await this.resolveApiPath("characters.list", [...listPathCandidates])
+    const requestList = async (path: string) =>
+      await bgRequest<any[]>({
+        path: appendPathQuery(path as AllowedPath, query),
+        method: "GET"
+      })
+
+    try {
+      return await requestList(base)
+    } catch (error) {
+      const candidate = error as
+        | {
+            status?: unknown
+            response?: { status?: unknown }
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const rawStatus = candidate?.status ?? candidate?.response?.status
+      const statusCodeFromNumberLike =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string"
+            ? Number(rawStatus)
+            : Number.NaN
+      const statusCodeFromMessage = String(candidate?.message || "").match(
+        /\b(301|302|307|308|404|405|422)\b/
+      )
+      const statusCode = Number.isFinite(statusCodeFromNumberLike)
+        ? statusCodeFromNumberLike
+        : statusCodeFromMessage
+          ? Number(statusCodeFromMessage[1])
+          : Number.NaN
+      const normalizedMessage = String(candidate?.message || "").toLowerCase()
+      const normalizedDetails = (() => {
+        const details = candidate?.details
+        if (typeof details === "string") return details.toLowerCase()
+        if (details == null) return ""
+        try {
+          return JSON.stringify(details).toLowerCase()
+        } catch {
+          return String(details).toLowerCase()
+        }
+      })()
+      const shouldTryAlternatePath =
+        statusCode === 301 ||
+        statusCode === 302 ||
+        statusCode === 307 ||
+        statusCode === 308 ||
+        statusCode === 404 ||
+        statusCode === 405 ||
+        statusCode === 422 ||
+        normalizedMessage.includes("path.character_id") ||
+        normalizedMessage.includes("unable to parse string as an integer") ||
+        normalizedMessage.includes('input":"query"') ||
+        normalizedMessage.includes("/api/v1/characters/query") ||
+        normalizedDetails.includes("path.character_id") ||
+        normalizedDetails.includes("unable to parse string as an integer") ||
+        normalizedDetails.includes('input":"query"') ||
+        normalizedDetails.includes("/api/v1/characters/query")
+
+      if (!shouldTryAlternatePath) {
+        throw error
+      }
+
+      const alternatePath = listPathCandidates.find((path) => path !== base)
+      if (!alternatePath) {
+        throw error
+      }
+
+      try {
+        return await requestList(alternatePath)
+      } catch {
+        throw error
+      }
+    }
   }
 
   async listCharactersPage(
@@ -2168,10 +2357,129 @@ export class TldwApiClient {
       "/api/v1/characters/query",
       "/api/v1/characters/query/"
     ])
-    const response = await bgRequest<any>({
-      path: appendPathQuery(base, query),
-      method: "GET"
-    })
+    const requestedPage =
+      typeof params?.page === "number" && Number.isFinite(params.page)
+        ? Math.max(1, Math.floor(params.page))
+        : 1
+    const requestedPageSize =
+      typeof params?.page_size === "number" && Number.isFinite(params.page_size)
+        ? Math.max(1, Math.floor(params.page_size))
+        : 25
+
+    const buildLegacyListFallback = async (): Promise<CharacterListQueryResponse> => {
+      const offset = (requestedPage - 1) * requestedPageSize
+      const legacyResponse = await this.listCharacters({
+        limit: requestedPageSize,
+        offset,
+        query: params?.query,
+        tags: params?.tags,
+        match_all_tags: params?.match_all_tags,
+        creator: params?.creator,
+        has_conversations: params?.has_conversations,
+        favorite_only: params?.favorite_only,
+        include_deleted: params?.include_deleted,
+        deleted_only: params?.deleted_only,
+        sort_by: params?.sort_by,
+        sort_order: params?.sort_order,
+        include_image_base64: params?.include_image_base64
+      })
+      const legacyCandidate = legacyResponse as
+        | {
+            items?: unknown
+            total?: unknown
+            has_more?: unknown
+          }
+        | null
+        | undefined
+      const legacyItems = Array.isArray(legacyCandidate?.items)
+        ? legacyCandidate.items
+        : Array.isArray(legacyResponse)
+          ? legacyResponse
+          : []
+      const legacyHasMore =
+        typeof legacyCandidate?.has_more === "boolean"
+          ? legacyCandidate.has_more
+          : legacyItems.length >= requestedPageSize
+      const legacyTotal =
+        typeof legacyCandidate?.total === "number" &&
+        Number.isFinite(legacyCandidate.total)
+          ? legacyCandidate.total
+          : legacyHasMore
+            ? offset + legacyItems.length + 1
+            : offset + legacyItems.length
+
+      return {
+        items: legacyItems,
+        total: legacyTotal,
+        page: requestedPage,
+        page_size: requestedPageSize,
+        has_more: legacyHasMore
+      }
+    }
+
+    const isQueryRouteConflict = (error: unknown): boolean => {
+      const candidate = error as
+        | {
+            status?: unknown
+            response?: { status?: unknown }
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const rawStatus = candidate?.status ?? candidate?.response?.status
+      const statusCodeFromNumberLike =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string"
+            ? Number(rawStatus)
+            : Number.NaN
+      const statusCodeFromMessage = String(candidate?.message || "").match(
+        /\b(404|405|422)\b/
+      )
+      const statusCode = Number.isFinite(statusCodeFromNumberLike)
+        ? statusCodeFromNumberLike
+        : statusCodeFromMessage
+          ? Number(statusCodeFromMessage[1])
+          : Number.NaN
+      const normalizedMessage = String(candidate?.message || "").toLowerCase()
+      const normalizedDetails = (() => {
+        const details = candidate?.details
+        if (typeof details === "string") return details.toLowerCase()
+        if (details == null) return ""
+        try {
+          return JSON.stringify(details).toLowerCase()
+        } catch {
+          return String(details).toLowerCase()
+        }
+      })()
+      return (
+        statusCode === 404 ||
+        statusCode === 405 ||
+        statusCode === 422 ||
+        normalizedMessage.includes("path.character_id") ||
+        normalizedMessage.includes("unable to parse string as an integer") ||
+        normalizedMessage.includes('input":"query"') ||
+        normalizedMessage.includes("/api/v1/characters/query") ||
+        normalizedDetails.includes("path.character_id") ||
+        normalizedDetails.includes("unable to parse string as an integer") ||
+        normalizedDetails.includes('input":"query"') ||
+        normalizedDetails.includes("/api/v1/characters/query")
+      )
+    }
+
+    let response: any
+    try {
+      response = await bgRequest<any>({
+        path: appendPathQuery(base, query),
+        method: "GET"
+      })
+    } catch (error) {
+      if (!isQueryRouteConflict(error)) {
+        throw error
+      }
+      return await buildLegacyListFallback()
+    }
 
     if (Array.isArray(response)) {
       return {
@@ -2181,6 +2489,29 @@ export class TldwApiClient {
         page_size: Number(params?.page_size || response.length || 25),
         has_more: false
       }
+    }
+
+    const responseLooksLikeRouteConflict =
+      response &&
+      typeof response === "object" &&
+      !Array.isArray(response) &&
+      !Array.isArray((response as any).items) &&
+      (() => {
+        try {
+          const payload = JSON.stringify(response).toLowerCase()
+          return (
+            payload.includes("path.character_id") ||
+            payload.includes("unable to parse string as an integer") ||
+            payload.includes('input":"query"') ||
+            payload.includes("/api/v1/characters/query")
+          )
+        } catch {
+          return false
+        }
+      })()
+
+    if (responseLooksLikeRouteConflict) {
+      return await buildLegacyListFallback()
     }
 
     const items = Array.isArray(response?.items) ? response.items : []
@@ -2473,16 +2804,170 @@ export class TldwApiClient {
   }
 
   async createCharacter(payload: Record<string, any>): Promise<any> {
-    const path = await this.resolveApiPath("characters.create", [
-      "/api/v1/characters",
-      "/api/v1/characters/"
-    ])
-    return await bgRequest<any>({
-      path,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload
-    })
+    const pathCandidates = [
+      "/api/v1/characters/",
+      "/api/v1/characters"
+    ] as const
+    const path = await this.resolveApiPath("characters.create", [...pathCandidates])
+    await this.ensureConfigForRequest(true)
+
+    const requestCreate = async (requestPath: string) =>
+      await bgRequest<any>({
+        path: requestPath as AllowedPath,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload
+      })
+
+    const requestCreateDirect = async (
+      requestPath: string
+    ): Promise<any> => {
+      const storage = createSafeStorage()
+      const response = await tldwRequest(
+        {
+          path: requestPath as AllowedPath,
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload
+        },
+        {
+          getConfig: () =>
+            storage.get<TldwConfig>("tldwConfig").catch(() => null)
+        }
+      )
+      if (response?.ok) {
+        return response.data
+      }
+
+      const error = new Error(
+        typeof response?.error === "string" && response.error.trim().length > 0
+          ? response.error
+          : `Request failed: ${response?.status ?? 0}`
+      ) as Error & {
+        status?: number
+        details?: unknown
+      }
+      error.status = response?.status
+      if (typeof response?.data !== "undefined") {
+        error.details = response.data
+      }
+      throw error
+    }
+
+    const readErrorText = (error: unknown): string => {
+      const candidate = error as
+        | {
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const message = String(candidate?.message || "")
+      const details = (() => {
+        const value = candidate?.details
+        if (typeof value === "string") return value
+        if (value == null) return ""
+        try {
+          return JSON.stringify(value)
+        } catch {
+          return String(value)
+        }
+      })()
+      return `${message} ${details}`.toLowerCase()
+    }
+
+    const getErrorStatusCode = (error: unknown): number | null => {
+      const candidate = error as
+        | {
+            status?: unknown
+            response?: { status?: unknown }
+            message?: unknown
+            details?: unknown
+          }
+        | null
+        | undefined
+      const rawStatus = candidate?.status ?? candidate?.response?.status
+      const statusCodeFromNumberLike =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string"
+            ? Number(rawStatus)
+            : Number.NaN
+      if (Number.isFinite(statusCodeFromNumberLike)) {
+        return statusCodeFromNumberLike
+      }
+      const statusFromText = readErrorText(error).match(
+        /\b(301|302|307|308|404|405|422)\b/
+      )
+      if (!statusFromText) return null
+      const parsedStatus = Number(statusFromText[1])
+      return Number.isFinite(parsedStatus) ? parsedStatus : null
+    }
+
+    const isExtensionTimeoutError = (error: unknown): boolean => {
+      return Boolean(
+        (error as { __tldwExtensionTimeout?: boolean } | null)
+          ?.__tldwExtensionTimeout
+      ) || readErrorText(error).includes("extension messaging timeout")
+    }
+
+    const shouldTryAlternatePath = (error: unknown): boolean => {
+      const statusCode = getErrorStatusCode(error)
+      if (
+        statusCode === 301 ||
+        statusCode === 302 ||
+        statusCode === 307 ||
+        statusCode === 308 ||
+        statusCode === 404 ||
+        statusCode === 405 ||
+        statusCode === 422
+      ) {
+        return true
+      }
+      const normalizedText = readErrorText(error)
+      return (
+        normalizedText.includes("path.character_id") ||
+        normalizedText.includes("unable to parse string as an integer") ||
+        normalizedText.includes("/api/v1/characters/query")
+      )
+    }
+
+    const runCreateWithTimeoutRetry = async (
+      requestPath: string
+    ): Promise<any> => {
+      try {
+        return await requestCreate(requestPath)
+      } catch (error) {
+        if (!isExtensionTimeoutError(error)) {
+          throw error
+        }
+        try {
+          return await requestCreate(requestPath)
+        } catch (retryError) {
+          if (!isExtensionTimeoutError(retryError)) {
+            throw retryError
+          }
+          return await requestCreateDirect(requestPath)
+        }
+      }
+    }
+
+    try {
+      return await runCreateWithTimeoutRetry(path)
+    } catch (error) {
+      if (!shouldTryAlternatePath(error)) {
+        throw error
+      }
+
+      const alternatePath = pathCandidates.find(
+        (candidate) => candidate !== path
+      )
+      if (!alternatePath) {
+        throw error
+      }
+
+      return await runCreateWithTimeoutRetry(alternatePath)
+    }
   }
 
   async importCharacterFile(
@@ -2718,6 +3203,8 @@ export class TldwApiClient {
       parent_conversation_id:
         input?.parent_conversation_id ?? input?.parentConversationId ?? null,
       root_id: input?.root_id ?? input?.rootId ?? null,
+      forked_from_message_id:
+        input?.forked_from_message_id ?? input?.forkedFromMessageId ?? null,
       version:
         typeof input?.version === "number"
           ? input.version
@@ -2937,6 +3424,56 @@ export class TldwApiClient {
       method: "POST"
     })
     return this.normalizeChatSummary(res)
+  }
+
+  async createConversationShareLink(
+    chat_id: string | number,
+    payload?: {
+      permission?: ConversationSharePermission
+      ttl_seconds?: number
+      label?: string
+    }
+  ): Promise<ConversationShareLinkCreateResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ConversationShareLinkCreateResponse>({
+      path: `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {},
+    })
+  }
+
+  async listConversationShareLinks(
+    chat_id: string | number
+  ): Promise<ConversationShareLinksListResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ConversationShareLinksListResponse>({
+      path: `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+      method: "GET",
+    })
+  }
+
+  async revokeConversationShareLink(
+    chat_id: string | number,
+    shareId: string
+  ): Promise<{ success: boolean; share_id: string }> {
+    const cid = encodeURIComponent(String(chat_id))
+    const sid = encodeURIComponent(String(shareId))
+    return await bgRequest<{ success: boolean; share_id: string }>({
+      path: `/api/v1/chat/conversations/${cid}/share-links/${sid}`,
+      method: "DELETE",
+    })
+  }
+
+  async resolveConversationShareLink(
+    token: string
+  ): Promise<ConversationShareLinkResolveResponse> {
+    const encodedToken = encodeURIComponent(token)
+    return await bgRequest<ConversationShareLinkResolveResponse>({
+      path: `/api/v1/chat/shared/conversations/${encodedToken}`,
+      method: "GET",
+      noAuth: true,
+    })
   }
 
   async listChatMessages(
@@ -3490,7 +4027,7 @@ export class TldwApiClient {
 
   async exportDictionaryMarkdown(dictionary_id: number | string): Promise<any> {
     const id = String(dictionary_id)
-    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export/markdown`, method: 'GET' })
+    return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/export`, method: 'GET' })
   }
 
   async exportDictionaryJSON(dictionary_id: number | string): Promise<any> {
@@ -3572,6 +4109,52 @@ export class TldwApiClient {
   async dictionaryStatistics(dictionary_id: number | string): Promise<any> {
     const id = String(dictionary_id)
     return await bgRequest<any>({ path: `/api/v1/chat/dictionaries/${id}/statistics`, method: 'GET' })
+  }
+
+  async dictionaryVersions(
+    dictionary_id: number | string,
+    params?: {
+      limit?: number
+      offset?: number
+    }
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const query = new URLSearchParams()
+    if (typeof params?.limit === "number" && Number.isFinite(params.limit)) {
+      query.set("limit", String(Math.max(1, Math.floor(params.limit))))
+    }
+    if (typeof params?.offset === "number" && Number.isFinite(params.offset)) {
+      query.set("offset", String(Math.max(0, Math.floor(params.offset))))
+    }
+    const qp = query.toString()
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/versions${qp ? `?${qp}` : ""}`,
+      method: "GET"
+    })
+  }
+
+  async dictionaryVersionSnapshot(
+    dictionary_id: number | string,
+    revision: number | string
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const rev = String(revision)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/versions/${rev}`,
+      method: "GET"
+    })
+  }
+
+  async revertDictionaryVersion(
+    dictionary_id: number | string,
+    revision: number | string
+  ): Promise<any> {
+    const id = String(dictionary_id)
+    const rev = String(revision)
+    return await bgRequest<any>({
+      path: `/api/v1/chat/dictionaries/${id}/versions/${rev}/revert`,
+      method: "POST"
+    })
   }
 
   // Chat Documents

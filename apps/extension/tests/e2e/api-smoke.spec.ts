@@ -1,14 +1,13 @@
 import { test, expect } from "@playwright/test"
 import path from "path"
-import { launchWithExtension } from "./utils/extension"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe('API smoke test for notes, prompts, and world-books', () => {
   test('hits notes search, prompts search, and world-books endpoints without path errors', async () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath, {
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: {
         serverUrl,
         authMode: 'single-user',

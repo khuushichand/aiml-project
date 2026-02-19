@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
+  DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
+  extractDefaultCharacterPreferenceId,
   isFreshChatState,
+  normalizeDefaultCharacterPreferenceId,
   resolveCharacterSelectionId,
   shouldApplyDefaultCharacter,
   shouldResetDefaultCharacterBootstrap
@@ -64,5 +67,35 @@ describe("default-character-preference helpers", () => {
     expect(shouldResetDefaultCharacterBootstrap(true, true)).toBe(false)
     expect(shouldResetDefaultCharacterBootstrap(false, false)).toBe(false)
     expect(shouldResetDefaultCharacterBootstrap(true, false)).toBe(false)
+  })
+
+  it("normalizes profile default-character values to nullable string ids", () => {
+    expect(normalizeDefaultCharacterPreferenceId("  char-9  ")).toBe("char-9")
+    expect(normalizeDefaultCharacterPreferenceId(7)).toBe("7")
+    expect(normalizeDefaultCharacterPreferenceId("   ")).toBeNull()
+    expect(normalizeDefaultCharacterPreferenceId(Number.NaN)).toBeNull()
+  })
+
+  it("extracts default-character id from profile preferences payloads", () => {
+    expect(
+      extractDefaultCharacterPreferenceId({
+        preferences: {
+          [DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY]: "char-11"
+        }
+      })
+    ).toBe("char-11")
+
+    expect(
+      extractDefaultCharacterPreferenceId({
+        preferences: {
+          [DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY]: {
+            value: "char-12",
+            source: "user"
+          }
+        }
+      })
+    ).toBe("char-12")
+
+    expect(extractDefaultCharacterPreferenceId({ preferences: {} })).toBeNull()
   })
 })

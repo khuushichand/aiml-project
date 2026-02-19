@@ -19,6 +19,12 @@ Route scope: `/flashcards` (Review, Cards, Import/Export)
 9. `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_hci_09_error_recovery_2026_02_18.md` (`H9-1` through `H9-2`)
 10. `Docs/Plans/IMPLEMENTATION_PLAN_flashcards_hci_10_help_documentation_2026_02_18.md` (`H10-1` through `H10-3`)
 
+## Progress Snapshot (2026-02-18)
+
+- H1 through H10 group plans: **Complete**
+- Flashcards UX/HCI plan stages complete: **34 / 34**
+- Regression coverage status: targeted and full flashcards Vitest suites passing in latest implementation cycle
+
 ## Execution Waves
 
 - Wave 1 (quick wins): H1, H3, H5, H9, H10
@@ -35,8 +41,8 @@ Route scope: `/flashcards` (Review, Cards, Import/Export)
 
 ## Program Completion Criteria
 
-- All major findings (`H1-1`, `H2-1`, `H3-1`, `H7-1`, `H10-1`) are implemented with regression tests.
-- First-run flow supports all three starts: manual create, structured import, and LLM generation.
-- Daily review flow supports edit-in-place, actionable failure recovery, and clear next-review feedback.
-- Deck-level and user-level study status is visible without leaving `/flashcards`.
-- Remaining minor/cosmetic findings are explicitly shipped or deferred with rationale.
+- [x] All major findings (`H1-1`, `H2-1`, `H3-1`, `H7-1`, `H10-1`) are implemented with regression tests.
+- [x] First-run flow supports all three starts: manual create, structured import, and LLM generation.
+- [x] Daily review flow supports edit-in-place, actionable failure recovery, and clear next-review feedback.
+- [x] Deck-level and user-level study status is visible without leaving `/flashcards`.
+- [x] Remaining minor/cosmetic findings are explicitly shipped or deferred with rationale.

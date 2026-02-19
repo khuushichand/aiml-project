@@ -81,7 +81,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
               onChange={(e) => setInput(e.target.value)}
               placeholder={
                 isQueuedState
-                  ? "Type your next question..."
+                  ? "Current search in progress..."
                   : "Ask a follow-up question..."
               }
               aria-label="Ask a follow-up question"
@@ -125,7 +125,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
           )}
         >
           {isQueuedState
-            ? "You can queue your next question while the current search completes."
+            ? "Follow-up input unlocks when the current search completes."
             : "Follow-up questions maintain context. Click \"New Topic\" to start fresh."}
         </p>
       </div>

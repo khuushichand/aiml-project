@@ -173,6 +173,10 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
+      - name: Run Stage 4 accessibility axe gate
+        working-directory: apps/tldw-frontend
+        run: npm run e2e:smoke:stage4
+
       - name: Run Stage 5 critical UX release gate
         working-directory: apps/tldw-frontend
         run: npm run e2e:smoke:stage5

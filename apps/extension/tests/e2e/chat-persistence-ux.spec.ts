@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { launchWithExtensionOrSkip } from "./utils/real-server"
 import path from 'path'
 import { launchWithExtension } from './utils/extension'
 import { MockTldwServer } from './utils/mock-server'
@@ -8,7 +9,7 @@ import { waitForConnectionStore, forceConnected, forceConnectionState } from './
 test.describe('Chat persistence UX', () => {
   test('exposes clear labels for temporary vs local-only chats', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath, {
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: withAllFeaturesDisabled()
     })
 
@@ -49,7 +50,7 @@ test.describe('Chat persistence UX', () => {
 
   test('shows a connect hint when server save is unavailable', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page } = await launchWithExtension(extPath, {
+    const { context, page } = await launchWithExtensionOrSkip(test, extPath, {
       seedConfig: withAllFeaturesDisabled()
     })
 
@@ -84,7 +85,7 @@ test.describe('Chat persistence UX', () => {
       serverStarted = true
 
       const extPath = path.resolve('build/chrome-mv3')
-      const launched = await launchWithExtension(extPath, {
+      const launched = await launchWithExtensionOrSkip(test, extPath, {
         seedConfig: withAllFeaturesDisabled({
           tldwConfig: {
             serverUrl: server.url,

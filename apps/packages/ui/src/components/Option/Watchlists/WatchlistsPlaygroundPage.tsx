@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef } from "react"
-import { Button, Empty, Tabs } from "antd"
+import { Alert, Button, Empty, Modal, Tabs } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import {
   CalendarClock,
+  ExternalLink,
   FileOutput,
   FileText,
   LayoutDashboard,
@@ -28,14 +29,63 @@ import { TemplatesTab } from "./TemplatesTab/TemplatesTab"
 import { SettingsTab } from "./SettingsTab/SettingsTab"
 import { ItemsTab } from "./ItemsTab/ItemsTab"
 import {
+  WATCHLISTS_ISSUE_REPORT_URL,
+  WATCHLISTS_MAIN_DOCS_URL,
+  WATCHLISTS_TAB_HELP_DOCS
+} from "./shared/help-docs"
+import {
   getRunFailureHint,
   resolveRunTransitionNotification,
   shouldNotifyNewTerminalRun
 } from "./RunsTab/run-notifications"
+import { trackWatchlistsIaExperimentTransition } from "@/utils/watchlists-ia-experiment-telemetry"
 
 const RUN_NOTIFICATIONS_POLL_MS = 15_000
 const RUN_NOTIFICATIONS_PAGE_SIZE = 25
 const RUN_NOTIFICATIONS_MIN_POLL_MS = 100
+const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
+
+type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
+type GuidedTourStatus = "idle" | "in_progress" | "dismissed" | "completed"
+interface GuidedTourState {
+  status: GuidedTourStatus
+  step: number
+}
+
+const GUIDED_TOUR_TABS: GuidedTourTab[] = ["sources", "jobs", "runs", "items", "outputs"]
+const GUIDED_TOUR_LAST_STEP = GUIDED_TOUR_TABS.length - 1
+
+const clampTourStep = (step: number): number => {
+  if (!Number.isFinite(step)) return 0
+  return Math.max(0, Math.min(Math.floor(step), GUIDED_TOUR_LAST_STEP))
+}
+
+const readGuidedTourState = (): GuidedTourState => {
+  if (typeof window === "undefined") return { status: "idle", step: 0 }
+  try {
+    const raw = localStorage.getItem(GUIDED_TOUR_STORAGE_KEY)
+    if (!raw) return { status: "idle", step: 0 }
+    const parsed = JSON.parse(raw) as Partial<GuidedTourState>
+    const status =
+      parsed.status === "in_progress" ||
+      parsed.status === "dismissed" ||
+      parsed.status === "completed"
+        ? parsed.status
+        : "idle"
+    return { status, step: clampTourStep(Number(parsed.step || 0)) }
+  } catch {
+    return { status: "idle", step: 0 }
+  }
+}
+
+const writeGuidedTourState = (state: GuidedTourState): void => {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(GUIDED_TOUR_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // localStorage may be unavailable.
+  }
+}
 
 const resolveRunNotificationsPollMs = (): number => {
   if (typeof window === "undefined") return RUN_NOTIFICATIONS_POLL_MS
@@ -45,6 +95,15 @@ const resolveRunNotificationsPollMs = (): number => {
   )
   if (!Number.isFinite(override)) return RUN_NOTIFICATIONS_POLL_MS
   return Math.max(RUN_NOTIFICATIONS_MIN_POLL_MS, Math.floor(override))
+}
+
+const resolveWatchlistsIaExperimentEnabled = (): boolean => {
+  if (typeof window !== "undefined") {
+    const override = (window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown })
+      .__TLDW_WATCHLISTS_IA_EXPERIMENT__
+    if (typeof override === "boolean") return override
+  }
+  return process.env.NEXT_PUBLIC_WATCHLISTS_EXPERIMENTAL_IA === "true"
 }
 
 /**
@@ -67,6 +126,114 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const initializedRunPollingRef = useRef(false)
   const runNotificationsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const sessionStartedAtMsRef = useRef<number>(Date.now())
+  const [guidedTourState, setGuidedTourState] = React.useState<GuidedTourState>(() => readGuidedTourState())
+  const [guidedTourOpen, setGuidedTourOpen] = React.useState(false)
+  const [showGuidedTourCompletion, setShowGuidedTourCompletion] = React.useState(false)
+  const iaExperimentEnabled = React.useMemo(() => resolveWatchlistsIaExperimentEnabled(), [])
+  const iaExperimentVariant = iaExperimentEnabled ? "experimental" : "baseline"
+  const previousActiveTabRef = useRef<typeof activeTab | null>(null)
+
+  const tabHelpLabels = {
+    overview: t("watchlists:help.tabs.overview", "Overview guidance"),
+    sources: t("watchlists:help.tabs.sources", "Feeds setup"),
+    jobs: t("watchlists:help.tabs.jobs", "Monitor scheduling"),
+    runs: t("watchlists:help.tabs.runs", "Activity diagnostics"),
+    items: t("watchlists:help.tabs.items", "Article review"),
+    outputs: t("watchlists:help.tabs.outputs", "Report outputs"),
+    templates: t("watchlists:help.tabs.templates", "Template authoring"),
+    settings: t("watchlists:help.tabs.settings", "Workspace settings")
+  } as const
+
+  const activeTabHelpHref = WATCHLISTS_TAB_HELP_DOCS[activeTab] || WATCHLISTS_MAIN_DOCS_URL
+  const activeTabHelpLabel = tabHelpLabels[activeTab] || t("watchlists:help.docs", "Watchlists docs")
+
+  const guidedTourSteps = [
+    {
+      tab: "sources" as const,
+      title: t("watchlists:guide.steps.sources.title", "1. Add feeds"),
+      description: t(
+        "watchlists:guide.steps.sources.description",
+        "Add RSS/site sources so monitors have content to fetch."
+      )
+    },
+    {
+      tab: "jobs" as const,
+      title: t("watchlists:guide.steps.jobs.title", "2. Create monitors"),
+      description: t(
+        "watchlists:guide.steps.jobs.description",
+        "Define monitor schedules and scopes for your feeds."
+      )
+    },
+    {
+      tab: "runs" as const,
+      title: t("watchlists:guide.steps.runs.title", "3. Check activity"),
+      description: t(
+        "watchlists:guide.steps.runs.description",
+        "Use Activity to inspect run status, logs, and failures."
+      )
+    },
+    {
+      tab: "items" as const,
+      title: t("watchlists:guide.steps.items.title", "4. Review articles"),
+      description: t(
+        "watchlists:guide.steps.items.description",
+        "Triaging article output keeps your feed review queue clean."
+      )
+    },
+    {
+      tab: "outputs" as const,
+      title: t("watchlists:guide.steps.outputs.title", "5. Deliver reports"),
+      description: t(
+        "watchlists:guide.steps.outputs.description",
+        "Use Reports for generated briefings and output verification."
+      )
+    }
+  ]
+  const guidedTourStep = guidedTourSteps[clampTourStep(guidedTourState.step)]
+
+  useEffect(() => {
+    writeGuidedTourState(guidedTourState)
+  }, [guidedTourState])
+
+  const startGuidedTour = useCallback(() => {
+    const nextState: GuidedTourState = { status: "in_progress", step: 0 }
+    setGuidedTourState(nextState)
+    setGuidedTourOpen(true)
+    setShowGuidedTourCompletion(false)
+    setActiveTab(GUIDED_TOUR_TABS[0])
+  }, [setActiveTab])
+
+  const resumeGuidedTour = useCallback(() => {
+    const step = clampTourStep(guidedTourState.step)
+    setGuidedTourOpen(true)
+    setActiveTab(GUIDED_TOUR_TABS[step])
+  }, [guidedTourState.step, setActiveTab])
+
+  const handleSkipGuidedTour = useCallback(() => {
+    setGuidedTourState((previous) => ({
+      ...previous,
+      status: "dismissed"
+    }))
+    setGuidedTourOpen(false)
+  }, [])
+
+  const handleGuidedTourBack = useCallback(() => {
+    const nextStep = clampTourStep(guidedTourState.step - 1)
+    setGuidedTourState({ status: "in_progress", step: nextStep })
+    setActiveTab(GUIDED_TOUR_TABS[nextStep])
+  }, [guidedTourState.step, setActiveTab])
+
+  const handleGuidedTourNext = useCallback(() => {
+    if (guidedTourState.step >= GUIDED_TOUR_LAST_STEP) {
+      setGuidedTourState({ status: "completed", step: GUIDED_TOUR_LAST_STEP })
+      setGuidedTourOpen(false)
+      setShowGuidedTourCompletion(true)
+      return
+    }
+    const nextStep = clampTourStep(guidedTourState.step + 1)
+    setGuidedTourState({ status: "in_progress", step: nextStep })
+    setActiveTab(GUIDED_TOUR_TABS[nextStep])
+  }, [guidedTourState.step, setActiveTab])
 
   // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
   const resetStoreRef = useRef(resetStore)
@@ -95,7 +262,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           "Run #{{id}} failed. {{hint}}",
           {
             id: run.id,
-            hint: hint || getRunFailureHint(run.error_msg) || ""
+            hint: hint || getRunFailureHint(run.error_msg, t) || ""
           }
         )
       : t("watchlists:notifications.runCompletedDescription", "Run #{{id}} completed successfully.", {
@@ -142,7 +309,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         const runStateKey = `${run.id}:${String(run.status || "").toLowerCase()}`
         if (notifiedRunStatesRef.current.has(runStateKey)) return
 
-        const transition = resolveRunTransitionNotification(previousStatus, run)
+        const transition = resolveRunTransitionNotification(previousStatus, run, t)
         if (initialized && transition) {
           notifiedRunStatesRef.current.add(runStateKey)
           showRunNotification(run, transition.kind, transition.hint)
@@ -156,7 +323,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         ) {
           const status = String(run.status || "").toLowerCase()
           const kind = status === "failed" ? "failed" : "completed"
-          const hint = kind === "failed" ? getRunFailureHint(run.error_msg) : null
+          const hint = kind === "failed" ? getRunFailureHint(run.error_msg, t) : null
           notifiedRunStatesRef.current.add(runStateKey)
           showRunNotification(run, kind, hint)
         }
@@ -167,7 +334,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     } catch (err) {
       console.debug("Watchlists run notification polling failed:", err)
     }
-  }, [showRunNotification])
+  }, [showRunNotification, t])
 
   useEffect(() => {
     if (!isOnline) return
@@ -266,6 +433,36 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       children: <SettingsTab />
     }
   ]
+  const reducedIaPrimaryTabKeys = ["overview", "sources", "runs", "outputs", "settings"] as const
+  const reducedIaSecondaryTabKeys = ["jobs", "items", "templates"] as const
+  const reducedIaSecondaryButtons = reducedIaSecondaryTabKeys.map((key) => ({
+    key,
+    label:
+      key === "jobs"
+        ? t("watchlists:tabs.jobs", "Monitors")
+        : key === "items"
+          ? t("watchlists:tabs.items", "Articles")
+          : t("watchlists:tabs.templates", "Templates")
+  }))
+  const renderedTabItems: TabsProps["items"] = iaExperimentEnabled
+    ? (() => {
+        const primarySet = new Set<string>(reducedIaPrimaryTabKeys)
+        const primaryItems = tabItems.filter((item) => item?.key && primarySet.has(String(item.key)))
+        if (primarySet.has(activeTab)) return primaryItems
+        const activeSecondaryItem = tabItems.find((item) => String(item?.key) === activeTab)
+        if (!activeSecondaryItem) return primaryItems
+        return [...primaryItems, activeSecondaryItem]
+      })()
+    : tabItems
+
+  useEffect(() => {
+    trackWatchlistsIaExperimentTransition(
+      previousActiveTabRef.current,
+      activeTab,
+      iaExperimentVariant
+    )
+    previousActiveTabRef.current = activeTab
+  }, [activeTab, iaExperimentVariant])
 
   if (!isOnline) {
     return (
@@ -289,17 +486,133 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         <p className="mt-1 text-sm text-text-muted">
           {t(
             "watchlists:description",
-            "Monitor RSS feeds, websites, and forums. Create scheduled jobs to automatically scrape and process content."
+            "Monitor RSS feeds, websites, and forums. Create scheduled monitors to automatically scrape and process content."
           )}
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+          <a
+            href={WATCHLISTS_MAIN_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+            data-testid="watchlists-main-docs-link"
+          >
+            {t("watchlists:help.docs", "Watchlists docs")}
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+          <a
+            href={activeTabHelpHref}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+            data-testid="watchlists-context-docs-link"
+          >
+            {t("watchlists:help.learnMoreTab", "Learn more: {{tab}}", {
+              tab: activeTabHelpLabel
+            })}
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+          {guidedTourState.status === "in_progress" ? (
+            <Button
+              size="small"
+              type="default"
+              onClick={resumeGuidedTour}
+              data-testid="watchlists-resume-guide"
+            >
+              {t("watchlists:guide.resume", "Resume guided tour")}
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              type="default"
+              onClick={startGuidedTour}
+              data-testid="watchlists-start-guide"
+            >
+              {guidedTourState.status === "completed"
+                ? t("watchlists:guide.restart", "Restart guided tour")
+                : t("watchlists:guide.start", "Start guided tour")}
+            </Button>
+          )}
+          {iaExperimentEnabled && (
+            <div className="inline-flex flex-wrap items-center gap-2 border-l border-border pl-3 ml-1">
+              <span className="text-text-muted">
+                {t("watchlists:tabs.moreViews", "More views")}
+              </span>
+              {reducedIaSecondaryButtons.map((item) => (
+                <Button
+                  key={item.key}
+                  size="small"
+                  type={activeTab === item.key ? "primary" : "default"}
+                  data-testid={`watchlists-experimental-tab-${item.key}`}
+                  onClick={() => setActiveTab(item.key as typeof activeTab)}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {showGuidedTourCompletion && (
+        <Alert
+          type="success"
+          showIcon
+          className="mb-4"
+          title={t("watchlists:guide.completedTitle", "Guided tour complete")}
+          description={t(
+            "watchlists:guide.completedDescription",
+            "Next: monitor Activity for run health and Articles for review triage."
+          )}
+          action={(
+            <div className="flex flex-wrap gap-2">
+              <Button size="small" onClick={() => setActiveTab("runs")}>
+                {t("watchlists:guide.openActivity", "Open Activity")}
+              </Button>
+              <Button size="small" onClick={() => setActiveTab("items")}>
+                {t("watchlists:guide.openArticles", "Open Articles")}
+              </Button>
+            </div>
+          )}
+          closable
+          onClose={() => setShowGuidedTourCompletion(false)}
+        />
+      )}
 
       <DismissibleBetaAlert
         storageKey="beta-dismissed:watchlists"
         message={t("watchlists:betaNotice", "Beta Feature")}
-        description={t(
-          "watchlists:betaDescription",
-          "Watchlists is currently in beta. Some features may be incomplete or change."
+        description={(
+          <div className="space-y-1">
+            <div>
+              {t(
+                "watchlists:betaDescription",
+                "Watchlists is currently in beta. Some features may be incomplete or change."
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <a
+                href={WATCHLISTS_MAIN_DOCS_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+                data-testid="watchlists-beta-docs-link"
+              >
+                {t("watchlists:help.docs", "Watchlists docs")}
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <a
+                href={WATCHLISTS_ISSUE_REPORT_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+                data-testid="watchlists-beta-report-link"
+              >
+                {t("watchlists:help.reportIssue", "Report an issue")}
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
+          </div>
         )}
         className="mb-6"
       />
@@ -307,9 +620,49 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as typeof activeTab)}
-        items={tabItems}
+        items={renderedTabItems}
         className="watchlists-tabs"
       />
+
+      <Modal
+        open={guidedTourOpen}
+        onCancel={handleSkipGuidedTour}
+        title={t("watchlists:guide.title", "Watchlists guided tour")}
+        footer={(
+          <div className="flex items-center justify-between gap-2">
+            <Button onClick={handleSkipGuidedTour}>
+              {t("watchlists:guide.skip", "Skip")}
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={handleGuidedTourBack}
+                disabled={guidedTourState.step === 0}
+              >
+                {t("common:back", "Back")}
+              </Button>
+              <Button
+                type="primary"
+                onClick={handleGuidedTourNext}
+              >
+                {guidedTourState.step >= GUIDED_TOUR_LAST_STEP
+                  ? t("watchlists:guide.finish", "Finish")
+                  : t("common:next", "Next")}
+              </Button>
+            </div>
+          </div>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="text-xs font-medium text-text-muted">
+            {t("watchlists:guide.progress", "Step {{current}} of {{total}}", {
+              current: clampTourStep(guidedTourState.step) + 1,
+              total: guidedTourSteps.length
+            })}
+          </div>
+          <div className="text-base font-semibold">{guidedTourStep.title}</div>
+          <div className="text-sm text-text-muted">{guidedTourStep.description}</div>
+        </div>
+      </Modal>
     </PageShell>
   )
 }

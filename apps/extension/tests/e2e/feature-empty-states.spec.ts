@@ -2,12 +2,13 @@ import { test, expect } from "@playwright/test"
 import path from "path"
 import { launchWithExtension } from "./utils/extension"
 import { grantHostPermission } from "./utils/permissions"
-import { requireRealServerConfig } from "./utils/real-server"
+import { requireRealServerConfig, launchWithExtensionOrSkip } from "./utils/real-server"
 
 test.describe('Feature empty states (connected vs not connected)', () => {
   test('Notes view shows connection-focused empty state when server is offline', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, extensionId } = (await launchWithExtension(extPath)) as any
+    const { context, page, extensionId } =
+      (await launchWithExtensionOrSkip(test, extPath)) as any
     const optionsUrl = `chrome-extension://${extensionId}/options.html`
 
     await page.goto(`${optionsUrl}#/notes`)
@@ -28,7 +29,7 @@ test.describe('Feature empty states (connected vs not connected)', () => {
 
   test('Knowledge settings shows connection-focused empty state when server is offline', async () => {
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, extensionId } = (await launchWithExtension(extPath)) as any
+    const { context, page, extensionId } = (await launchWithExtensionOrSkip(test, extPath)) as any
     const optionsUrl = `chrome-extension://${extensionId}/options.html`
 
     await page.goto(`${optionsUrl}#/settings/knowledge`)
@@ -49,7 +50,8 @@ test.describe('Feature empty states (connected vs not connected)', () => {
     const { serverUrl, apiKey } = requireRealServerConfig(test)
 
     const extPath = path.resolve('build/chrome-mv3')
-    const { context, page, extensionId } = (await launchWithExtension(extPath)) as any
+    const { context, page, extensionId } =
+      (await launchWithExtensionOrSkip(test, extPath)) as any
     const optionsUrl = `chrome-extension://${extensionId}/options.html`
 
     // Ensure host permission for the real server is granted

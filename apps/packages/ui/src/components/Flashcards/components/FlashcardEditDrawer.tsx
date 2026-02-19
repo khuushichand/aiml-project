@@ -610,51 +610,57 @@ export const FlashcardEditDrawer: React.FC<FlashcardEditDrawerProps> = ({
         </div>
 
         {/* Section: Additional (collapsed) */}
-        <Collapse ghost>
-          <Collapse.Panel
-            header={
-              <span className="inline-flex items-center gap-2">
-                {t("option:flashcards.additionalFields", {
-                  defaultValue: "Additional fields"
-                })}
-                {additionalFieldCount > 0 && (
-                  <Badge
-                    count={additionalFieldCount}
-                    size="small"
-                    title={t("option:flashcards.additionalFieldsSet", {
-                      defaultValue: "{{count}} field(s) set",
-                      count: additionalFieldCount
-                    })}
-                  />
-                )}
-              </span>
+        <Collapse
+          ghost
+          items={[
+            {
+              key: "additional",
+              label: (
+                <span className="inline-flex items-center gap-2">
+                  {t("option:flashcards.additionalFields", {
+                    defaultValue: "Additional fields"
+                  })}
+                  {additionalFieldCount > 0 && (
+                    <Badge
+                      count={additionalFieldCount}
+                      size="small"
+                      title={t("option:flashcards.additionalFieldsSet", {
+                        defaultValue: "{{count}} field(s) set",
+                        count: additionalFieldCount
+                      })}
+                    />
+                  )}
+                </span>
+              ),
+              children: (
+                <>
+                  <Form.Item
+                    name="extra"
+                    label={t("option:flashcards.extra", { defaultValue: "Extra" })}
+                  >
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  {showPreview && extraPreview && (
+                    <div className="mb-4 border rounded p-2 text-xs bg-surface">
+                      <MarkdownWithBoundary content={extraPreview || ""} size="xs" />
+                    </div>
+                  )}
+                  <Form.Item
+                    name="notes"
+                    label={t("option:flashcards.notes", { defaultValue: "Notes" })}
+                  >
+                    <Input.TextArea rows={2} />
+                  </Form.Item>
+                  {showPreview && notesPreview && (
+                    <div className="mb-4 border rounded p-2 text-xs bg-surface">
+                      <MarkdownWithBoundary content={notesPreview || ""} size="xs" />
+                    </div>
+                  )}
+                </>
+              )
             }
-            key="additional"
-          >
-            <Form.Item
-              name="extra"
-              label={t("option:flashcards.extra", { defaultValue: "Extra" })}
-            >
-              <Input.TextArea rows={2} />
-            </Form.Item>
-            {showPreview && extraPreview && (
-              <div className="mb-4 border rounded p-2 text-xs bg-surface">
-                <MarkdownWithBoundary content={extraPreview || ""} size="xs" />
-              </div>
-            )}
-            <Form.Item
-              name="notes"
-              label={t("option:flashcards.notes", { defaultValue: "Notes" })}
-            >
-              <Input.TextArea rows={2} />
-            </Form.Item>
-            {showPreview && notesPreview && (
-              <div className="mb-4 border rounded p-2 text-xs bg-surface">
-                <MarkdownWithBoundary content={notesPreview || ""} size="xs" />
-              </div>
-            )}
-          </Collapse.Panel>
-        </Collapse>
+          ]}
+        />
 
         {/* Hidden fields */}
         <Form.Item name="expected_version" hidden>

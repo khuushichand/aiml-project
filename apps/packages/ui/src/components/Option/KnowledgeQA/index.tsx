@@ -5,7 +5,7 @@
  * the full power of the RAG pipeline.
  */
 
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import { KnowledgeQAProvider, useKnowledgeQA } from "./KnowledgeQAProvider"
 import { SearchBar } from "./SearchBar"
 import { AnswerPanel } from "./AnswerPanel"
@@ -26,6 +26,31 @@ import {
   KNOWLEDGE_QA_RETRY_INTERVAL_MS,
   KNOWLEDGE_QA_RETRY_TICK_MS,
 } from "./retryScheduler"
+import { useLocation, useParams } from "react-router-dom"
+
+function normalizeThreadId(rawValue: string | null | undefined): string | null {
+  if (typeof rawValue !== "string") return null
+  const candidate = rawValue.trim()
+  if (candidate.length === 0) return null
+  try {
+    const decoded = decodeURIComponent(candidate).trim()
+    return decoded.length > 0 ? decoded : null
+  } catch {
+    return candidate
+  }
+}
+
+function normalizeShareToken(rawValue: string | null | undefined): string | null {
+  if (typeof rawValue !== "string") return null
+  const candidate = rawValue.trim()
+  if (candidate.length === 0) return null
+  try {
+    const decoded = decodeURIComponent(candidate).trim()
+    return decoded.length > 0 ? decoded : null
+  } catch {
+    return candidate
+  }
+}
 
 // Main page component (inner, uses context)
 function KnowledgeQAContent() {
@@ -37,9 +62,19 @@ function KnowledgeQAContent() {
     hasSearched,
     isSearching,
     error,
+    currentThreadId,
+    selectThread,
+    selectSharedThread,
   } = useKnowledgeQA()
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [retryNowMs, setRetryNowMs] = useState(() => Date.now())
+  const routeHydratedThreadRef = useRef<string | null>(null)
+  const routeHydratedShareRef = useRef<string | null>(null)
+  const location = useLocation()
+  const { threadId: routeThreadIdParam, shareToken: routeShareTokenParam } = useParams<{
+    threadId?: string
+    shareToken?: string
+  }>()
   const online = useServerOnline(KNOWLEDGE_QA_RETRY_INTERVAL_MS)
   const { capabilities, loading: capabilitiesLoading, refresh: refreshCapabilities } =
     useServerCapabilities()
@@ -57,6 +92,30 @@ function KnowledgeQAContent() {
       }),
     [lastCheckedAt, retryNowMs]
   )
+  const routeThreadId = useMemo(() => {
+    const threadFromPath = normalizeThreadId(routeThreadIdParam)
+    if (threadFromPath) {
+      return threadFromPath
+    }
+    const pathMatch = location.pathname.match(/\/knowledge\/thread\/([^/?#]+)/i)
+    if (pathMatch?.[1]) {
+      return normalizeThreadId(pathMatch[1])
+    }
+    const searchParams = new URLSearchParams(location.search)
+    return normalizeThreadId(searchParams.get("thread"))
+  }, [location.pathname, location.search, routeThreadIdParam])
+  const routeShareToken = useMemo(() => {
+    const shareFromPath = normalizeShareToken(routeShareTokenParam)
+    if (shareFromPath) {
+      return shareFromPath
+    }
+    const pathMatch = location.pathname.match(/\/knowledge\/shared\/([^/?#]+)/i)
+    if (pathMatch?.[1]) {
+      return normalizeShareToken(pathMatch[1])
+    }
+    const searchParams = new URLSearchParams(location.search)
+    return normalizeShareToken(searchParams.get("share"))
+  }, [location.pathname, location.search, routeShareTokenParam])
 
   useEffect(() => {
     if (online) {
@@ -69,6 +128,37 @@ function KnowledgeQAContent() {
     )
     return () => window.clearInterval(interval)
   }, [online])
+
+  useEffect(() => {
+    if (!routeShareToken) {
+      routeHydratedShareRef.current = null
+      return
+    }
+    if (routeHydratedShareRef.current === routeShareToken) {
+      return
+    }
+    routeHydratedShareRef.current = routeShareToken
+    void selectSharedThread(routeShareToken)
+  }, [routeShareToken, selectSharedThread])
+
+  useEffect(() => {
+    if (routeShareToken) {
+      routeHydratedThreadRef.current = null
+      return
+    }
+    if (!routeThreadId) {
+      routeHydratedThreadRef.current = null
+      return
+    }
+    if (routeHydratedThreadRef.current === routeThreadId) {
+      return
+    }
+    routeHydratedThreadRef.current = routeThreadId
+    if (currentThreadId === routeThreadId) {
+      return
+    }
+    void selectThread(routeThreadId)
+  }, [currentThreadId, routeShareToken, routeThreadId, selectThread])
 
   const handleRetryConnection = () => {
     void checkOnce()

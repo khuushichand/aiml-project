@@ -194,6 +194,7 @@ describe('FilterPanel', () => {
       />
     )
 
+    fireEvent.click(screen.getByRole('button', { name: 'Keywords' }))
     expect(
       screen.getByText('Suggestions shown here are from current results.')
     ).toBeInTheDocument()
@@ -216,6 +217,7 @@ describe('FilterPanel', () => {
       />
     )
 
+    fireEvent.click(screen.getByRole('button', { name: 'Keywords' }))
     expect(screen.getByTestId('keyword-suggestions-status')).toHaveTextContent(
       '3 keyword suggestions available'
     )
@@ -250,5 +252,29 @@ describe('FilterPanel', () => {
     expect(screen.getByTestId('exclude-keyword-suggestions-status')).toHaveTextContent(
       '1 exclude keyword suggestions available'
     )
+  })
+
+  it('allows collapsing and expanding the keywords section', () => {
+    render(
+      <FilterPanel
+        mediaTypes={[]}
+        selectedMediaTypes={[]}
+        onMediaTypesChange={vi.fn()}
+        selectedKeywords={[]}
+        onKeywordsChange={vi.fn()}
+      />
+    )
+
+    const keywordsToggle = screen.getByRole('button', { name: 'Keywords' })
+    expect(keywordsToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByLabelText('Filter by keyword')).not.toBeInTheDocument()
+
+    fireEvent.click(keywordsToggle)
+    expect(keywordsToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByLabelText('Filter by keyword')).toBeInTheDocument()
+
+    fireEvent.click(keywordsToggle)
+    expect(keywordsToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByLabelText('Filter by keyword')).not.toBeInTheDocument()
   })
 })
