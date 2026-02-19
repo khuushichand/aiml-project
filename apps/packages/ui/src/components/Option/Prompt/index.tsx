@@ -18,6 +18,11 @@ import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
 import { ConflictResolutionModal } from "./ConflictResolutionModal"
+import { PromptBulkActionBar } from "./PromptBulkActionBar"
+import { PromptInspectorPanel } from "./PromptInspectorPanel"
+import { PromptListTable } from "./PromptListTable"
+import { PromptListToolbar } from "./PromptListToolbar"
+import type { PromptListQueryState, PromptRowVM } from "./prompt-workspace-types"
 import {
   buildSyncBatchPlan,
   type SyncBatchTask
@@ -149,7 +154,7 @@ const INITIAL_BATCH_SYNC_STATE: BatchSyncState = {
   cancelled: false
 }
 
-type PromptSortKey = "title" | "type" | "modifiedAt" | "usageCount" | null
+type PromptSortKey = "title" | "modifiedAt" | null
 type PromptSortOrder = "ascend" | "descend" | null
 type PromptSortState = {
   key: PromptSortKey
@@ -176,13 +181,7 @@ const readPromptSortState = (): PromptSortState => {
       return { key: null, order: null }
     }
     const parsed = JSON.parse(raw) as PromptSortState
-    const allowedKeys: PromptSortKey[] = [
-      "title",
-      "type",
-      "modifiedAt",
-      "usageCount",
-      null
-    ]
+    const allowedKeys: PromptSortKey[] = ["title", "modifiedAt", null]
     const allowedOrders: PromptSortOrder[] = ["ascend", "descend", null]
     if (!allowedKeys.includes(parsed?.key) || !allowedOrders.includes(parsed?.order)) {
       return { key: null, order: null }
@@ -259,9 +258,6 @@ export const PromptBody = () => {
   const [promptSort, setPromptSort] = useState<PromptSortState>(() =>
     readPromptSortState()
   )
-  const [expandedContentByPromptId, setExpandedContentByPromptId] = useState<
-    Record<string, boolean>
-  >({})
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<InputRef | null>(null)
   const [importMode, setImportMode] = useState<"merge" | "replace">("merge")
@@ -269,6 +265,8 @@ export const PromptBody = () => {
   const [bulkKeywordModalOpen, setBulkKeywordModalOpen] = useState(false)
   const [bulkKeywordValue, setBulkKeywordValue] = useState("")
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [inspectorPromptId, setInspectorPromptId] = useState<string | null>(null)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   const [isCompactViewport, setIsCompactViewport] = useState(() =>
     typeof window !== "undefined"
       ? window.innerWidth < PROMPTS_MOBILE_BREAKPOINT_PX
@@ -593,8 +591,6 @@ export const PromptBody = () => {
   ]
     .filter(Boolean)
     .join(" ")
-  const systemPromptLabel = t("managePrompts.systemPrompt")
-  const quickPromptLabel = t("managePrompts.quickPrompt")
 
   const guardPrivateMode = React.useCallback(() => {
     if (!isFireFoxPrivateMode) return false
@@ -1744,6 +1740,58 @@ export const PromptBody = () => {
     return filterTrashPromptsByName(trashData, trashSearchText)
   }, [trashData, trashSearchText])
 
+  const getPromptRecordById = React.useCallback(
+    (promptId: string) => {
+      const prompts = Array.isArray(data) ? data : []
+      return prompts.find((prompt: any) => String(prompt?.id) === String(promptId))
+    },
+    [data]
+  )
+
+  const inspectorPrompt = useMemo<PromptRowVM | null>(() => {
+    if (!inspectorPromptId) return null
+    const promptRecord = getPromptRecordById(inspectorPromptId)
+    if (!promptRecord) return null
+    const { systemText, userText } = getPromptTexts(promptRecord)
+    return {
+      id: promptRecord.id,
+      title:
+        promptRecord?.name || promptRecord?.title || t("common:untitled", { defaultValue: "Untitled" }),
+      author: promptRecord?.author,
+      details: promptRecord?.details,
+      previewSystem: systemText || undefined,
+      previewUser: userText || undefined,
+      keywords: getPromptKeywords(promptRecord) || [],
+      favorite: !!promptRecord?.favorite,
+      syncStatus: promptRecord?.syncStatus || "local",
+      sourceSystem: promptRecord?.sourceSystem || "workspace",
+      serverId: promptRecord?.serverId,
+      updatedAt: getPromptModifiedAt(promptRecord),
+      createdAt:
+        typeof promptRecord?.createdAt === "number"
+          ? promptRecord.createdAt
+          : Date.now(),
+      usageCount: getPromptUsageCount(promptRecord),
+      lastUsedAt: getPromptLastUsedAt(promptRecord)
+    }
+  }, [
+    inspectorPromptId,
+    getPromptRecordById,
+    getPromptTexts,
+    getPromptKeywords,
+    getPromptModifiedAt,
+    getPromptUsageCount,
+    getPromptLastUsedAt,
+    t
+  ])
+
+  useEffect(() => {
+    if (!inspectorOpen) return
+    if (inspectorPrompt) return
+    setInspectorOpen(false)
+    setInspectorPromptId(null)
+  }, [inspectorOpen, inspectorPrompt])
+
   const selectedPromptRows = useMemo(() => {
     const selectedIds = new Set(selectedRowKeys.map((key) => String(key)))
     return (data || []).filter((prompt: any) => selectedIds.has(prompt.id))
@@ -1860,11 +1908,6 @@ export const PromptBody = () => {
 
     const direction = promptSort.order === "ascend" ? 1 : -1
     const items = [...filteredData]
-    const typeRank: Record<string, number> = {
-      system: 0,
-      mixed: 1,
-      quick: 2
-    }
 
     items.sort((a, b) => {
       let compare = 0
@@ -1872,20 +1915,8 @@ export const PromptBody = () => {
         compare = String(a?.name || a?.title || "").localeCompare(
           String(b?.name || b?.title || "")
         )
-      } else if (promptSort.key === "type") {
-        compare =
-          (typeRank[getPromptType(a)] ?? 99) - (typeRank[getPromptType(b)] ?? 99)
       } else if (promptSort.key === "modifiedAt") {
         compare = getPromptModifiedAt(a) - getPromptModifiedAt(b)
-      } else if (promptSort.key === "usageCount") {
-        compare = getPromptUsageCount(a) - getPromptUsageCount(b)
-      }
-
-      if (compare === 0) {
-        if (promptSort.key === "usageCount") {
-          compare =
-            (getPromptLastUsedAt(a) || 0) - (getPromptLastUsedAt(b) || 0)
-        }
       }
       if (compare === 0) {
         compare = getPromptModifiedAt(a) - getPromptModifiedAt(b)
@@ -1896,10 +1927,7 @@ export const PromptBody = () => {
     return items
   }, [
     filteredData,
-    getPromptLastUsedAt,
     getPromptModifiedAt,
-    getPromptType,
-    getPromptUsageCount,
     promptSort.key,
     promptSort.order
   ])
@@ -1918,6 +1946,57 @@ export const PromptBody = () => {
     }
     return sortedFilteredData.length
   }, [serverSearchData?.total_matches, sortedFilteredData.length, useServerSearchResults])
+
+  const customPromptRows = useMemo<PromptRowVM[]>(() => {
+    return paginatedData.map((prompt: any) => {
+      const { systemText, userText } = getPromptTexts(prompt)
+      return {
+        id: String(prompt?.id || ""),
+        title:
+          prompt?.name ||
+          prompt?.title ||
+          t("common:untitled", { defaultValue: "Untitled" }),
+        author: prompt?.author,
+        details: prompt?.details,
+        previewSystem: systemText || undefined,
+        previewUser: userText || undefined,
+        keywords: getPromptKeywords(prompt) || [],
+        favorite: !!prompt?.favorite,
+        syncStatus: prompt?.syncStatus || "local",
+        sourceSystem: prompt?.sourceSystem || "workspace",
+        serverId: prompt?.serverId,
+        updatedAt: getPromptModifiedAt(prompt),
+        createdAt:
+          typeof prompt?.createdAt === "number" ? prompt.createdAt : Date.now(),
+        usageCount: getPromptUsageCount(prompt),
+        lastUsedAt: getPromptLastUsedAt(prompt)
+      }
+    })
+  }, [
+    paginatedData,
+    getPromptTexts,
+    t,
+    getPromptKeywords,
+    getPromptModifiedAt,
+    getPromptUsageCount,
+    getPromptLastUsedAt
+  ])
+
+  const customPromptTableQuery: PromptListQueryState = {
+    searchText,
+    typeFilter: typeFilter,
+    syncFilter: "all",
+    usageFilter,
+    tagFilter,
+    tagMatchMode,
+    sort: {
+      key: promptSort.key,
+      order: promptSort.order
+    },
+    page: currentPage,
+    pageSize: resultsPerPage,
+    savedView: "all"
+  }
 
   const hiddenServerResultsOnPage = useMemo(() => {
     if (!useServerSearchResults || !serverSearchData) {
@@ -1949,19 +2028,6 @@ export const PromptBody = () => {
       return prev
     })
   }, [sortedFilteredData, t])
-
-  React.useEffect(() => {
-    const visibleIds = new Set(sortedFilteredData.map((p: any) => p.id))
-    setExpandedContentByPromptId((prev) => {
-      const next: Record<string, boolean> = {}
-      for (const [key, value] of Object.entries(prev)) {
-        if (visibleIds.has(key)) {
-          next[key] = value
-        }
-      }
-      return next
-    })
-  }, [sortedFilteredData])
 
   const triggerExport = async () => {
     try {
@@ -2614,6 +2680,83 @@ export const PromptBody = () => {
     setDrawerOpen(true)
   }
 
+  const closeInspector = React.useCallback(() => {
+    setInspectorOpen(false)
+    setInspectorPromptId(null)
+  }, [])
+
+  const openPromptInspector = React.useCallback((promptId: string) => {
+    setInspectorPromptId(promptId)
+    setInspectorOpen(true)
+  }, [])
+
+  const handleUsePromptInChat = React.useCallback(
+    async (record: any) => {
+      const { systemText, userText } = getPromptTexts(record)
+      const hasSystem =
+        typeof systemText === "string" && systemText.trim().length > 0
+      const hasUser =
+        typeof userText === "string" && userText.trim().length > 0
+
+      if (hasSystem) {
+        setInsertPrompt({
+          id: record.id,
+          systemText,
+          userText: hasUser ? userText : undefined
+        })
+        return
+      }
+
+      const quickContent = userText ?? record?.content
+      if (quickContent) {
+        await markPromptAsUsed(record.id)
+        setSelectedQuickPrompt(quickContent)
+        setSelectedSystemPrompt(undefined)
+        navigate("/chat")
+      }
+    },
+    [
+      getPromptTexts,
+      markPromptAsUsed,
+      navigate,
+      setSelectedQuickPrompt,
+      setSelectedSystemPrompt
+    ]
+  )
+
+  const handleDuplicatePrompt = React.useCallback(
+    (record: any) => {
+      savePromptMutation({
+        title: `${record.title || record.name} (Copy)`,
+        name: `${record.name || record.title} (Copy)`,
+        content: record.content,
+        is_system: record.is_system,
+        keywords: getPromptKeywords(record),
+        tags: getPromptKeywords(record),
+        favorite: !!record?.favorite,
+        author: record?.author,
+        details: record?.details,
+        system_prompt: record?.system_prompt,
+        user_prompt: record?.user_prompt
+      })
+    },
+    [getPromptKeywords, savePromptMutation]
+  )
+
+  const handleDeletePrompt = React.useCallback(
+    async (record: any) => {
+      const ok = await confirmDanger({
+        title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
+        content: t("managePrompts.confirm.delete"),
+        okText: t("common:delete", { defaultValue: "Delete" }),
+        cancelText: t("common:cancel", { defaultValue: "Cancel" })
+      })
+      if (!ok) return
+      deletePrompt(record.id)
+    },
+    [confirmDanger, deletePrompt, t]
+  )
+
   const handleDrawerSubmit = (values: any) => {
     const payload = normalizePromptPayload(values)
     if (drawerMode === "create") {
@@ -2629,13 +2772,6 @@ export const PromptBody = () => {
     newParams.delete("project")
     setSearchParams(newParams, { replace: true })
   }
-
-  const toggleContentExpansion = React.useCallback((promptId: string) => {
-    setExpandedContentByPromptId((prev) => ({
-      ...prev,
-      [promptId]: !prev[promptId]
-    }))
-  }, [])
 
   const openConflictResolution = React.useCallback((localId: string) => {
     setConflictPromptId(localId)
@@ -2833,6 +2969,184 @@ export const PromptBody = () => {
     void runBatchSync()
   }, [batchSyncState.failed, batchSyncState.running, cancelBatchSync, runBatchSync])
 
+  const handleCustomPromptTableQueryChange = React.useCallback(
+    (patch: Partial<PromptListQueryState>) => {
+      const nextPage =
+        typeof patch.page === "number" ? patch.page : currentPage
+      const nextPageSize =
+        typeof patch.pageSize === "number" ? patch.pageSize : resultsPerPage
+
+      if (nextPageSize !== resultsPerPage) {
+        setResultsPerPage(nextPageSize)
+        setCurrentPage(1)
+      } else if (nextPage !== currentPage) {
+        setCurrentPage(nextPage)
+      }
+
+      if (patch.sort) {
+        const rawNextKey = patch.sort.key
+        const nextKey: PromptSortKey =
+          rawNextKey === "title" || rawNextKey === "modifiedAt"
+            ? rawNextKey
+            : null
+        const nextOrder = patch.sort.order || null
+        setPromptSort({
+          key: nextOrder ? nextKey : null,
+          order: nextOrder
+        })
+      }
+    },
+    [currentPage, resultsPerPage]
+  )
+
+  const handleTogglePromptFavorite = React.useCallback(
+    (promptId: string, nextFavorite: boolean) => {
+      const promptRecord = getPromptRecordById(promptId)
+      if (!promptRecord) return
+      updatePromptDirect(
+        buildPromptUpdatePayload(promptRecord, {
+          favorite: nextFavorite
+        })
+      )
+    },
+    [buildPromptUpdatePayload, getPromptRecordById, updatePromptDirect]
+  )
+
+  const handleEditPromptById = React.useCallback(
+    (promptId: string) => {
+      const promptRecord = getPromptRecordById(promptId)
+      if (!promptRecord) return
+      openEditDrawer(promptRecord)
+    },
+    [getPromptRecordById]
+  )
+
+  const renderCustomPromptTitleMeta = React.useCallback(
+    (row: PromptRowVM) => {
+      if (!isCompactViewport) return null
+      return (
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-text-muted">
+            {formatRelativePromptTime(row.updatedAt)}
+          </span>
+          <Tooltip
+            title={
+              !isOnline
+                ? t("managePrompts.sync.offlineTooltip", {
+                    defaultValue:
+                      "Sync unavailable (offline). Showing last known status."
+                  })
+                : undefined
+            }
+          >
+            <span className={!isOnline ? "opacity-60" : undefined}>
+              <SyncStatusBadge
+                syncStatus={row.syncStatus}
+                sourceSystem={row.sourceSystem}
+                serverId={row.serverId}
+                compact
+                onClick={
+                  isOnline && row.syncStatus === "conflict"
+                    ? () => openConflictResolution(row.id)
+                    : undefined
+                }
+              />
+            </span>
+          </Tooltip>
+        </div>
+      )
+    },
+    [formatRelativePromptTime, isCompactViewport, isOnline, openConflictResolution, t]
+  )
+
+  const renderCustomPromptActions = React.useCallback(
+    (row: PromptRowVM) => {
+      const promptRecord = getPromptRecordById(row.id)
+      const actionDisabled = isFireFoxPrivateMode || !promptRecord
+      return (
+        <PromptActionsMenu
+          promptId={row.id}
+          disabled={actionDisabled}
+          syncStatus={row.syncStatus}
+          serverId={row.serverId}
+          inlineUseInChat={false}
+          onEdit={() => {
+            if (!promptRecord) return
+            openEditDrawer(promptRecord)
+          }}
+          onDuplicate={() => {
+            if (!promptRecord) return
+            handleDuplicatePrompt(promptRecord)
+          }}
+          onUseInChat={() => {
+            if (!promptRecord) return
+            void handleUsePromptInChat(promptRecord)
+          }}
+          onQuickTest={() => {
+            if (!promptRecord) return
+            void handleQuickTest(promptRecord)
+          }}
+          onDelete={() => {
+            if (!promptRecord) return
+            void handleDeletePrompt(promptRecord)
+          }}
+          onShareLink={
+            row.serverId && promptRecord
+              ? () => {
+                  void copyPromptShareLink(promptRecord)
+                }
+              : undefined
+          }
+          onPushToServer={
+            isOnline && promptRecord
+              ? () => {
+                  setPromptToSync(promptRecord.id)
+                  setProjectSelectorOpen(true)
+                }
+              : undefined
+          }
+          onPullFromServer={
+            isOnline && row.serverId && promptRecord
+              ? () => {
+                  pullFromStudioMutation({
+                    serverId: row.serverId as number,
+                    localId: promptRecord.id
+                  })
+                }
+              : undefined
+          }
+          onUnlink={
+            isOnline && row.serverId && promptRecord
+              ? () => {
+                  unlinkPromptMutation(promptRecord.id)
+                }
+              : undefined
+          }
+          onResolveConflict={
+            isOnline && row.syncStatus === "conflict"
+              ? () => {
+                  openConflictResolution(row.id)
+                }
+              : undefined
+          }
+        />
+      )
+    },
+    [
+      copyPromptShareLink,
+      getPromptRecordById,
+      handleDeletePrompt,
+      handleDuplicatePrompt,
+      handleQuickTest,
+      handleUsePromptInChat,
+      isFireFoxPrivateMode,
+      isOnline,
+      openConflictResolution,
+      pullFromStudioMutation,
+      unlinkPromptMutation
+    ]
+  )
+
   function customPrompts() {
     const bulkActionTouchClass = isCompactViewport
       ? "min-h-[44px] px-3 py-2"
@@ -2867,7 +3181,7 @@ export const PromptBody = () => {
         <div className="mb-6 space-y-3">
           {/* Bulk action bar - shown when rows are selected */}
           {selectedRowKeys.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/10 p-2">
+            <PromptBulkActionBar mode="legacy">
               <span className="text-sm text-primary">
                 {t("managePrompts.bulk.selected", {
                   defaultValue: "{{count}} selected",
@@ -2950,7 +3264,7 @@ export const PromptBody = () => {
                 className={`ml-auto inline-flex items-center rounded text-sm text-text-muted hover:text-text ${isCompactViewport ? "min-h-[44px] px-2" : ""}`}>
                 {t("common:clearSelection", { defaultValue: "Clear selection" })}
               </button>
-            </div>
+            </PromptBulkActionBar>
           )}
           {isOnline && (batchSyncState.running || batchSyncState.failed.length > 0) && (
             <div
@@ -3035,7 +3349,10 @@ export const PromptBody = () => {
               )}
             </div>
           )}
-          <div className="flex flex-wrap items-start justify-between gap-3 sm:items-center">
+          <PromptListToolbar
+            mode="legacy"
+            className="flex flex-wrap items-start justify-between gap-3 sm:items-center"
+          >
             {/* Left: Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
               <Tooltip title={t("managePrompts.newPromptHint", { defaultValue: "New prompt (N)" })}>
@@ -3275,7 +3592,7 @@ export const PromptBody = () => {
                 />
               </div>
             </div>
-          </div>
+          </PromptListToolbar>
         </div>
 
         {customPromptsLoading && <Skeleton paragraph={{ rows: 8 }} />}
@@ -3323,533 +3640,65 @@ export const PromptBody = () => {
         )}
 
         {status === "success" && Array.isArray(data) && data.length > 0 && (
-          <div className="relative" data-testid="prompts-table-shell">
-            <div
-              className="overflow-x-auto pb-1"
-              data-testid="prompts-table-scroll-container"
-            >
-              <Table
-                data-testid="prompts-table"
-                columns={[
-              {
-                title: "",
-                dataIndex: "favorite",
-                key: "favorite",
-                width: 48,
-                render: (_: any, record: any) => (
-                  <button
-                    onClick={() =>
-                      updatePromptDirect(
-                        buildPromptUpdatePayload(record, {
-                          favorite: !record?.favorite
-                        })
-                      )
-                    }
-                    className={record?.favorite ? "text-warn" : "text-text-muted hover:text-warn"}
-                    title={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
-                    aria-label={record?.favorite ? t("managePrompts.unfavorite", { defaultValue: "Unfavorite" }) : t("managePrompts.favorite", { defaultValue: "Favorite" })}
-                    aria-pressed={!!record?.favorite}
-                    data-testid={`prompt-favorite-${record.id}`}
-                  >
-                    {record?.favorite ? (
-                      <Star className="size-4 fill-current" />
-                    ) : (
-                      <Star className="size-4" />
-                    )}
-                  </button>
-                )
-              },
-              {
-                title: t("managePrompts.columns.title"),
-                dataIndex: "title",
-                key: "title",
-                sorter: true,
-                sortOrder:
-                  promptSort.key === "title" ? promptSort.order : undefined,
-                render: (_: any, record: any) => (
-                  <div className="flex max-w-56 flex-col sm:max-w-64">
-                    <span className="line-clamp-1 font-medium">
-                      {record?.name || record?.title}
-                    </span>
-                    {record?.author && (
-                      <span className="text-xs text-text-muted ">
-                        {t("managePrompts.form.author.label", {
-                          defaultValue: "Author"
-                        })}
-                        : {record.author}
-                      </span>
-                    )}
-                    {record?.details && (
-                      <span className="text-xs text-text-muted line-clamp-2">
-                        {record.details}
-                      </span>
-                    )}
-                    {isCompactViewport && (
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <span className="text-[11px] text-text-muted">
-                          {formatRelativePromptTime(getPromptModifiedAt(record))}
-                        </span>
-                        <Tooltip
-                          title={
-                            !isOnline
-                              ? t("managePrompts.sync.offlineTooltip", {
-                                  defaultValue:
-                                    "Sync unavailable (offline). Showing last known status."
-                                })
-                              : undefined
-                          }
-                        >
-                          <span className={!isOnline ? "opacity-60" : undefined}>
-                            <SyncStatusBadge
-                              syncStatus={record.syncStatus || "local"}
-                              sourceSystem={record.sourceSystem || "workspace"}
-                              serverId={record.serverId}
-                              lastSyncedAt={record.lastSyncedAt}
-                              compact
-                              onClick={
-                                isOnline && record.syncStatus === "conflict"
-                                  ? () => openConflictResolution(record.id)
-                                  : undefined
-                              }
-                            />
-                          </span>
-                        </Tooltip>
-                      </div>
-                    )}
-                  </div>
-                )
-              },
-              {
-                title: t("managePrompts.columns.prompt"),
-                key: "content",
-                render: (_: any, record: any) => {
-                  const { systemText, userText } = getPromptTexts(record)
-                  const isExpanded = !!expandedContentByPromptId[record.id]
-                  const hasLongContent = [systemText, userText].some(
-                    (value) =>
-                      typeof value === "string" && value.trim().length > 180
-                  )
-                  return (
-                    <div
-                      className={`flex flex-col gap-1 ${isCompactViewport ? "max-w-[14rem]" : "max-w-[26rem]"}`}
-                    >
-                      {systemText && (
-                        <div className="flex items-start gap-2">
-                          <Tag color="volcano">
-                            {t("managePrompts.form.systemPrompt.shortLabel", {
-                              defaultValue: "System"
-                            })}
-                          </Tag>
-                          <span
-                            className={
-                              isExpanded
-                                ? "whitespace-pre-wrap break-words"
-                                : isCompactViewport
-                                  ? "line-clamp-1"
-                                  : "line-clamp-2"
-                            }
-                          >
-                            {systemText}
-                          </span>
-                        </div>
-                      )}
-                      {userText && (
-                        <div className="flex items-start gap-2">
-                          <Tag color="blue">
-                            {t("managePrompts.form.userPrompt.shortLabel", {
-                              defaultValue: "User"
-                            })}
-                          </Tag>
-                          <span
-                            className={
-                              isExpanded
-                                ? "whitespace-pre-wrap break-words"
-                                : isCompactViewport
-                                  ? "line-clamp-1"
-                                  : "line-clamp-2"
-                            }
-                          >
-                            {userText}
-                          </span>
-                        </div>
-                      )}
-                      {hasLongContent && (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            toggleContentExpansion(record.id)
-                          }}
-                          className="self-start text-xs text-primary hover:underline"
-                          data-testid={`prompt-content-toggle-${record.id}`}
-                        >
-                          {isExpanded
-                            ? t("common:showLess", { defaultValue: "Show less" })
-                            : t("common:showMore", { defaultValue: "Show more" })}
-                        </button>
-                      )}
-                    </div>
-                  )
-                }
-              },
-              ...(!isCompactViewport
-                ? [
-                    {
-                      title: t("managePrompts.tags.label", {
-                        defaultValue: "Keywords"
-                      }),
-                      dataIndex: "keywords",
-                      key: "keywords",
-                      render: (_: any, record: any) => {
-                        const tags = getPromptKeywords(record)
-                        return (
-                          <div className="flex max-w-64 flex-wrap gap-1">
-                            {(tags || []).map((tag: string) => (
-                              <Tag key={tag}>{tag}</Tag>
-                            ))}
-                          </div>
-                        )
-                      }
-                    },
-                    {
-                      title: t("managePrompts.columns.type"),
-                      key: "type",
-                      width: 80,
-                      sorter: true,
-                      sortOrder:
-                        promptSort.key === "type" ? promptSort.order : undefined,
-                      render: (_: any, record: any) => {
-                        const promptType = getPromptType(record)
-                        const hasSystem =
-                          promptType === "system" || promptType === "mixed"
-                        const hasQuick =
-                          promptType === "quick" || promptType === "mixed"
-                        const typeDescription =
-                          hasSystem && hasQuick
-                            ? t("managePrompts.type.mixed", {
-                                defaultValue: "System and quick prompt"
-                              })
-                            : hasSystem
-                              ? t("managePrompts.type.system", {
-                                  defaultValue: "System prompt"
-                                })
-                              : t("managePrompts.type.quick", {
-                                  defaultValue: "Quick prompt"
-                                })
-                        return (
-                          <div
-                            className="flex items-center gap-1"
-                            role="group"
-                            aria-label={t("managePrompts.type.ariaLabel", {
-                              defaultValue: "Prompt type: {{type}}",
-                              type: typeDescription
-                            })}
-                          >
-                            <Tooltip title={systemPromptLabel}>
-                              <span>
-                                <Computer
-                                  className={`size-4 ${hasSystem ? "text-warn" : "text-text-muted/30"}`}
-                                  aria-hidden="true"
-                                />
-                              </span>
-                            </Tooltip>
-                            <Tooltip title={quickPromptLabel}>
-                              <span>
-                                <Zap
-                                  className={`size-4 ${hasQuick ? "text-primary" : "text-text-muted/30"}`}
-                                  aria-hidden="true"
-                                />
-                              </span>
-                            </Tooltip>
-                          </div>
-                        )
-                      }
-                    },
-                    {
-                      title: t("managePrompts.columns.modified", {
-                        defaultValue: "Modified"
-                      }),
-                      key: "modifiedAt",
-                      width: 120,
-                      sorter: true,
-                      sortOrder:
-                        promptSort.key === "modifiedAt"
-                          ? promptSort.order
-                          : undefined,
-                      render: (_: any, record: any) => {
-                        const modifiedAt = getPromptModifiedAt(record)
-                        const createdAt = record?.createdAt
-                        return (
-                          <Tooltip
-                            title={
-                              <div className="text-xs">
-                                <div>
-                                  {t("managePrompts.columns.modified", {
-                                    defaultValue: "Modified"
-                                  })}
-                                  :{" "}
-                                  {modifiedAt
-                                    ? new Date(modifiedAt).toLocaleString()
-                                    : t("common:unknown", {
-                                        defaultValue: "Unknown"
-                                      })}
-                                </div>
-                                {createdAt ? (
-                                  <div>
-                                    {t("managePrompts.columns.created", {
-                                      defaultValue: "Created"
-                                    })}
-                                    : {new Date(createdAt).toLocaleString()}
-                                  </div>
-                                ) : null}
-                              </div>
-                            }
-                          >
-                            <span className="text-xs text-text-muted">
-                              {formatRelativePromptTime(modifiedAt)}
-                            </span>
-                          </Tooltip>
-                        )
-                      }
-                    },
-                    {
-                      title: t("managePrompts.columns.used", {
-                        defaultValue: "Used"
-                      }),
-                      key: "usageCount",
-                      width: 120,
-                      sorter: true,
-                      sortOrder:
-                        promptSort.key === "usageCount"
-                          ? promptSort.order
-                          : undefined,
-                      render: (_: any, record: any) => {
-                        const usageCount = getPromptUsageCount(record)
-                        const lastUsedAt = getPromptLastUsedAt(record)
-                        return (
-                          <Tooltip
-                            title={
-                              <div className="text-xs">
-                                <div>
-                                  {t("managePrompts.columns.usedCount", {
-                                    defaultValue: "Uses: {{count}}",
-                                    count: usageCount
-                                  })}
-                                </div>
-                                <div>
-                                  {lastUsedAt
-                                    ? t("managePrompts.columns.lastUsedAt", {
-                                        defaultValue: "Last used: {{time}}",
-                                        time: new Date(lastUsedAt).toLocaleString()
-                                      })
-                                    : t("managePrompts.columns.neverUsed", {
-                                        defaultValue: "Never used"
-                                      })}
-                                </div>
-                              </div>
-                            }
-                          >
-                            <span className="text-xs text-text-muted">
-                              {usageCount}
-                            </span>
-                          </Tooltip>
-                        )
-                      }
-                    },
-                    {
-                      title: t("managePrompts.columns.sync", {
-                        defaultValue: "Sync"
-                      }),
-                      key: "syncStatus",
-                      width: 110,
-                      render: (_: any, record: any) => (
-                        <Tooltip
-                          title={
-                            !isOnline
-                              ? t("managePrompts.sync.offlineTooltip", {
-                                  defaultValue:
-                                    "Sync unavailable (offline). Showing last known status."
-                                })
-                              : undefined
-                          }
-                        >
-                          <div className={!isOnline ? "opacity-60" : undefined}>
-                            <SyncStatusBadge
-                              syncStatus={record.syncStatus || "local"}
-                              sourceSystem={record.sourceSystem || "workspace"}
-                              serverId={record.serverId}
-                              lastSyncedAt={record.lastSyncedAt}
-                              compact
-                              onClick={
-                                isOnline && record.syncStatus === "conflict"
-                                  ? () => openConflictResolution(record.id)
-                                  : undefined
-                              }
-                            />
-                          </div>
-                        </Tooltip>
-                      )
-                    }
-                  ]
-                : []),
-              {
-                title: t("managePrompts.columns.actions"),
-                width: isCompactViewport ? 108 : 140,
-                render: (_, record) => (
-                  <PromptActionsMenu
-                    promptId={record.id}
-                    disabled={isFireFoxPrivateMode}
-                    syncStatus={record.syncStatus}
-                    serverId={record.serverId}
-                    onEdit={() => openEditDrawer(record)}
-                    onDuplicate={() => {
-                      savePromptMutation({
-                        title: `${record.title || record.name} (Copy)`,
-                        name: `${record.name || record.title} (Copy)`,
-                        content: record.content,
-                        is_system: record.is_system,
-                        keywords: getPromptKeywords(record),
-                        tags: getPromptKeywords(record),
-                        favorite: !!record?.favorite,
-                        author: record?.author,
-                        details: record?.details,
-                        system_prompt: record?.system_prompt,
-                        user_prompt: record?.user_prompt
-                      })
-                    }}
-                    onUseInChat={async () => {
-                      const { systemText, userText } = getPromptTexts(record)
-                      const hasSystem =
-                        typeof systemText === "string" &&
-                        systemText.trim().length > 0
-                      const hasUser =
-                        typeof userText === "string" &&
-                        userText.trim().length > 0
-
-                      if (hasSystem) {
-                        setInsertPrompt({
-                          id: record.id,
-                          systemText,
-                          userText: hasUser ? userText : undefined
-                        })
-                        return
-                      }
-
-                      const quickContent = userText ?? record?.content
-                      if (quickContent) {
-                        await markPromptAsUsed(record.id)
-                        setSelectedQuickPrompt(quickContent)
-                        setSelectedSystemPrompt(undefined)
-                        navigate("/chat")
-                      }
-                    }}
-                    onQuickTest={() => {
-                      void handleQuickTest(record)
-                    }}
-                    onDelete={async () => {
-                      const ok = await confirmDanger({
-                        title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
-                        content: t("managePrompts.confirm.delete"),
-                        okText: t("common:delete", { defaultValue: "Delete" }),
-                        cancelText: t("common:cancel", { defaultValue: "Cancel" })
-                      })
-                      if (!ok) return
-                      deletePrompt(record.id)
-                    }}
-                    onShareLink={
-                      record.serverId
-                        ? () => {
-                            void copyPromptShareLink(record)
-                          }
-                        : undefined
-                    }
-                    // Sync actions (only when online)
-                    onPushToServer={isOnline ? () => {
-                      setPromptToSync(record.id)
-                      setProjectSelectorOpen(true)
-                    } : undefined}
-                    onPullFromServer={isOnline && record.serverId ? () => {
-                      pullFromStudioMutation({ serverId: record.serverId, localId: record.id })
-                    } : undefined}
-                    onUnlink={isOnline && record.serverId ? () => {
-                      unlinkPromptMutation(record.id)
-                    } : undefined}
-                    onResolveConflict={isOnline && record.syncStatus === "conflict" ? () => {
-                      openConflictResolution(record.id)
-                    } : undefined}
-                  />
-                )
-              }
-            ]}
-                bordered
-                dataSource={paginatedData}
-                rowKey={(record) => record.id}
-                scroll={isCompactViewport ? { x: 980 } : undefined}
-                pagination={{
-              current: currentPage,
-              pageSize: resultsPerPage,
-              total: tableTotal,
-              showSizeChanger: true,
-              pageSizeOptions: ["10", "20", "50", "100"],
-              showTotal: (total, range) =>
-                t("managePrompts.pagination.summary", {
-                  defaultValue: "{{start}}-{{end}} of {{total}} prompts",
-                  start: range[0],
-                  end: range[1],
-                  total
-                })
+          <PromptListTable
+            rows={customPromptRows}
+            total={tableTotal}
+            loading={customPromptsLoading}
+            isOnline={isOnline}
+            isCompactViewport={isCompactViewport}
+            query={customPromptTableQuery}
+            selectedIds={selectedRowKeys.map((key) => String(key))}
+            onQueryChange={handleCustomPromptTableQueryChange}
+            onSelectionChange={(ids) => setSelectedRowKeys(ids)}
+            onRowOpen={openPromptInspector}
+            onEdit={handleEditPromptById}
+            onToggleFavorite={handleTogglePromptFavorite}
+            onOpenConflictResolution={openConflictResolution}
+            renderActions={renderCustomPromptActions}
+            renderTitleMeta={renderCustomPromptTitleMeta}
+            favoriteButtonTestId={(row) => `prompt-favorite-${row.id}`}
+            formatRelativeTime={formatRelativePromptTime}
+            selectionDisabled={isFireFoxPrivateMode}
+            columnLabels={{
+              title: t("managePrompts.columns.title"),
+              preview: t("managePrompts.columns.prompt"),
+              tags: t("managePrompts.tags.label", {
+                defaultValue: "Keywords"
+              }),
+              updated: t("managePrompts.columns.modified", {
+                defaultValue: "Updated"
+              }),
+              status: t("managePrompts.columns.sync", {
+                defaultValue: "Sync"
+              }),
+              actions: t("managePrompts.columns.actions"),
+              author: t("managePrompts.form.author.label", {
+                defaultValue: "Author"
+              }),
+              system: t("managePrompts.form.systemPrompt.shortLabel", {
+                defaultValue: "System"
+              }),
+              user: t("managePrompts.form.userPrompt.shortLabel", {
+                defaultValue: "User"
+              }),
+              unknown: t("common:unknown", {
+                defaultValue: "Unknown"
+              }),
+              offlineStatus: t("managePrompts.sync.offlineTooltip", {
+                defaultValue:
+                  "Sync unavailable (offline). Showing last known status."
+              }),
+              edit: t("managePrompts.tooltip.edit")
             }}
-                onChange={(pagination, _filters, sorter) => {
-              const nextPage = pagination.current || 1
-              const nextPageSize = pagination.pageSize || resultsPerPage
-              if (nextPageSize !== resultsPerPage) {
-                setResultsPerPage(nextPageSize)
-                setCurrentPage(1)
-              } else {
-                setCurrentPage(nextPage)
-              }
-
-              const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter
-              const nextKey = (nextSorter?.columnKey as PromptSortKey) || null
-              const nextOrder = (nextSorter?.order as PromptSortOrder) || null
-              setPromptSort({
-                key: nextOrder ? nextKey : null,
-                order: nextOrder
+            paginationShowTotal={(total, range) =>
+              t("managePrompts.pagination.summary", {
+                defaultValue: "{{start}}-{{end}} of {{total}} prompts",
+                start: range[0],
+                end: range[1],
+                total
               })
-            }}
-                onRow={(record) =>
-                  ({
-                    "data-testid": `prompt-row-${record.id}`,
-                    tabIndex: 0,
-                    role: "row",
-                    onKeyDown: (e: React.KeyboardEvent) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        openEditDrawer(record)
-                      }
-                    },
-                    onDoubleClick: () => openEditDrawer(record),
-                    className: "cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary"
-                  } as React.HTMLAttributes<HTMLTableRowElement>)
-                }
-                rowSelection={{
-                  selectedRowKeys,
-                  onChange: (keys) => setSelectedRowKeys(keys),
-                  getCheckboxProps: () => ({
-                    disabled: isFireFoxPrivateMode
-                  })
-                }}
-              />
-            </div>
-            {isCompactViewport && (
-              <div
-                data-testid="prompts-table-overflow-indicator"
-                className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-bg to-transparent sm:hidden"
-                aria-hidden="true"
-              />
-            )}
-          </div>
+            }
+          />
         )}
       </div>
     )
@@ -4459,6 +4308,35 @@ export const PromptBody = () => {
         onSubmit={handleDrawerSubmit}
         isLoading={drawerMode === "create" ? savePromptLoading : isUpdatingPrompt}
         allTags={allTags}
+      />
+
+      <PromptInspectorPanel
+        open={inspectorOpen}
+        prompt={inspectorPrompt}
+        onClose={closeInspector}
+        onEdit={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          closeInspector()
+          openEditDrawer(promptRecord)
+        }}
+        onUseInChat={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          closeInspector()
+          void handleUsePromptInChat(promptRecord)
+        }}
+        onDuplicate={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          handleDuplicatePrompt(promptRecord)
+        }}
+        onDelete={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          closeInspector()
+          void handleDeletePrompt(promptRecord)
+        }}
       />
 
       <Modal

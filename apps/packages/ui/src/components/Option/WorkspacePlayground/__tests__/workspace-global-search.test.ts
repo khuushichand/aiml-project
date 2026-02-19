@@ -58,7 +58,8 @@ describe("workspace global search", () => {
         keywords: ["planning"],
         version: 3,
         isDirty: false
-      }
+      },
+      workspaceNotes: []
     })
 
     expect(results.length).toBeGreaterThanOrEqual(3)
@@ -94,7 +95,8 @@ describe("workspace global search", () => {
         content: "Need follow-up sample size analysis",
         keywords: [],
         isDirty: false
-      }
+      },
+      workspaceNotes: []
     })
 
     expect(results).toHaveLength(1)
@@ -121,5 +123,33 @@ describe("workspace global search", () => {
 
     expect(direct).toBe("msg:message-123")
     expect(fallback).toBe("idx:7:987654")
+  })
+
+  it("indexes workspace note corpus and includes note ids in results", () => {
+    const results = buildWorkspaceGlobalSearchResults({
+      query: "confidence tracker",
+      sources: [],
+      chatMessages: [],
+      currentNote: {
+        id: undefined,
+        title: "Draft scratchpad",
+        content: "Unrelated draft content",
+        keywords: [],
+        isDirty: true
+      },
+      workspaceNotes: [
+        {
+          id: 77,
+          title: "Confidence tracker",
+          content: "Track weekly confidence by source",
+          keywords: ["confidence"]
+        }
+      ]
+    })
+
+    const noteResult = results.find((result) => result.noteId === 77)
+    expect(noteResult).toBeTruthy()
+    expect(noteResult?.domain).toBe("note")
+    expect(noteResult?.noteField).toBe("title")
   })
 })

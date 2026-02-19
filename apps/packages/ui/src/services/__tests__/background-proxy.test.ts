@@ -57,6 +57,27 @@ describe("background proxy fallback safety", () => {
     expect(mocks.tldwRequest).not.toHaveBeenCalled()
   })
 
+  it("normalizes legacy media listing paths before forwarding request", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true, status: 200, data: { ok: true } })
+
+    const { bgRequest } = await importProxy()
+
+    await expect(
+      bgRequest({
+        path: "/api/v1/media/?page=1&results_per_page=20&include_keywords=true",
+        method: "GET"
+      })
+    ).resolves.toEqual({ ok: true })
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          path: "/api/v1/media?page=1&results_per_page=20&include_keywords=true"
+        })
+      })
+    )
+  })
+
   it("emits backend-unreachable event when API request fails with network status 0", async () => {
     mocks.sendMessage.mockRejectedValue(
       new Error("Could not establish connection. Receiving end does not exist.")

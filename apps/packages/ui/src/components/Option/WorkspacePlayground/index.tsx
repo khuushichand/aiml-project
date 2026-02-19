@@ -22,6 +22,8 @@ import {
 } from "@/store/workspace-events"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { bgRequest } from "@/services/background-proxy"
+import type { AllowedPath } from "@/services/tldw/openapi-guard"
 import {
   buildKnowledgeQaSeedNote,
   consumeWorkspacePlaygroundPrefill
@@ -32,13 +34,118 @@ import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
 import {
   buildWorkspaceGlobalSearchResults,
+  type WorkspaceGlobalSearchNoteDocument,
   type WorkspaceGlobalSearchResult
 } from "./workspace-global-search"
 
 const WORKSPACE_SWITCH_TRANSITION_MS = 420
 const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
+const WORKSPACE_NOTE_SEARCH_LIMIT = 75
 
 type WorkspaceTabKey = "sources" | "chat" | "studio"
+
+type WorkspaceNoteKeywordLike =
+  | string
+  | {
+      keyword?: string
+      keyword_text?: string
+      text?: string
+      name?: string
+    }
+
+type WorkspaceNoteSearchItem = {
+  id?: number
+  title?: string
+  content?: string
+  version?: number
+  keywords?: WorkspaceNoteKeywordLike[]
+  metadata?: {
+    keywords?: WorkspaceNoteKeywordLike[]
+  }
+}
+
+type WorkspaceNotesSearchResponse =
+  | WorkspaceNoteSearchItem[]
+  | {
+      notes?: WorkspaceNoteSearchItem[]
+      results?: WorkspaceNoteSearchItem[]
+      items?: WorkspaceNoteSearchItem[]
+    }
+
+const parseNoteKeyword = (
+  keyword: WorkspaceNoteKeywordLike | null | undefined
+): string | null => {
+  if (!keyword) return null
+  if (typeof keyword === "string") {
+    const trimmed = keyword.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  const value =
+    keyword.keyword ??
+    keyword.keyword_text ??
+    keyword.text ??
+    keyword.name ??
+    null
+
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const normalizeNoteKeywords = (keywords: string[]): string[] => {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+
+  for (const keyword of keywords) {
+    const trimmed = keyword.trim()
+    if (!trimmed) continue
+    const dedupe = trimmed.toLowerCase()
+    if (seen.has(dedupe)) continue
+    seen.add(dedupe)
+    normalized.push(trimmed)
+  }
+
+  return normalized
+}
+
+const extractNoteKeywords = (
+  note: WorkspaceNoteSearchItem | null | undefined
+): string[] => {
+  if (!note) return []
+  const raw = Array.isArray(note.metadata?.keywords)
+    ? note.metadata?.keywords
+    : Array.isArray(note.keywords)
+      ? note.keywords
+      : []
+
+  return normalizeNoteKeywords(
+    raw
+      .map((keyword) => parseNoteKeyword(keyword))
+      .filter((keyword): keyword is string => Boolean(keyword))
+  )
+}
+
+const pickNotesArray = (
+  response: WorkspaceNotesSearchResponse
+): WorkspaceNoteSearchItem[] => {
+  if (Array.isArray(response)) return response
+  if (Array.isArray(response.notes)) return response.notes
+  if (Array.isArray(response.results)) return response.results
+  if (Array.isArray(response.items)) return response.items
+  return []
+}
+
+const buildWorkspaceNotesSearchPath = (workspaceTag: string): AllowedPath => {
+  const params = new URLSearchParams()
+  params.append("tokens", workspaceTag)
+  params.set("limit", String(WORKSPACE_NOTE_SEARCH_LIMIT))
+  params.set("include_keywords", "true")
+  return `/api/v1/notes/search/?${params.toString()}` as AllowedPath
+}
+
+const buildWorkspaceNotePath = (noteId: number): AllowedPath =>
+  `/api/v1/notes/${noteId}` as AllowedPath
 
 const isDesktopLayout = (): boolean => {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -209,6 +316,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const [globalSearchOpen, setGlobalSearchOpen] = React.useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = React.useState("")
   const [activeSearchResultIndex, setActiveSearchResultIndex] = React.useState(0)
+  const [workspaceSearchNotes, setWorkspaceSearchNotes] = React.useState<
+    WorkspaceGlobalSearchNoteDocument[]
+  >([])
   const globalSearchInputRef = React.useRef<InputRef | null>(null)
 
   // Workspace switch transition cue state
@@ -227,9 +337,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const initializeWorkspace = useWorkspaceStore((s) => s.initializeWorkspace)
   const createNewWorkspace = useWorkspaceStore((s) => s.createNewWorkspace)
   const addSources = useWorkspaceStore((s) => s.addSources)
+  const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
   const setSelectedSourceIds = useWorkspaceStore((s) => s.setSelectedSourceIds)
   const captureToCurrentNote = useWorkspaceStore((s) => s.captureToCurrentNote)
   const clearCurrentNote = useWorkspaceStore((s) => s.clearCurrentNote)
+  const loadNote = useWorkspaceStore((s) => s.loadNote)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const leftPaneCollapsed = useWorkspaceStore((s) => s.leftPaneCollapsed)
@@ -263,9 +375,16 @@ const WorkspacePlaygroundBody: React.FC = () => {
         query: globalSearchQuery,
         sources,
         chatMessages: workspaceChatMessages,
-        currentNote
+        currentNote,
+        workspaceNotes: workspaceSearchNotes
       }),
-    [currentNote, globalSearchQuery, sources, workspaceChatMessages]
+    [
+      currentNote,
+      globalSearchQuery,
+      sources,
+      workspaceChatMessages,
+      workspaceSearchNotes
+    ]
   )
 
   const processingMediaIds = React.useMemo(
@@ -281,6 +400,86 @@ const WorkspacePlaygroundBody: React.FC = () => {
     setGlobalSearchQuery("")
     setActiveSearchResultIndex(0)
   }, [])
+
+  useEffect(() => {
+    const normalizedWorkspaceTag =
+      typeof workspaceTag === "string" ? workspaceTag.trim() : ""
+
+    if (!normalizedWorkspaceTag) {
+      setWorkspaceSearchNotes([])
+      return
+    }
+
+    let cancelled = false
+
+    const loadWorkspaceSearchNotes = async () => {
+      try {
+        const response = await bgRequest<WorkspaceNotesSearchResponse>({
+          path: buildWorkspaceNotesSearchPath(normalizedWorkspaceTag),
+          method: "GET"
+        })
+        if (cancelled) return
+
+        const noteById = new Map<number, WorkspaceGlobalSearchNoteDocument>()
+        for (const note of pickNotesArray(response)) {
+          if (typeof note.id !== "number" || !Number.isFinite(note.id)) {
+            continue
+          }
+          noteById.set(note.id, {
+            id: note.id,
+            title: note.title || "",
+            content: note.content || "",
+            keywords: extractNoteKeywords(note),
+            isDraft: false
+          })
+        }
+
+        setWorkspaceSearchNotes(Array.from(noteById.values()))
+      } catch {
+        if (!cancelled) {
+          setWorkspaceSearchNotes([])
+        }
+      }
+    }
+
+    void loadWorkspaceSearchNotes()
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceId, workspaceTag])
+
+  const hydrateAndFocusNote = React.useCallback(
+    async (result: WorkspaceGlobalSearchResult) => {
+      if (
+        result.noteId != null &&
+        Number.isFinite(result.noteId) &&
+        currentNote?.id !== result.noteId
+      ) {
+        try {
+          const note = await bgRequest<WorkspaceNoteSearchItem>({
+            path: buildWorkspaceNotePath(result.noteId),
+            method: "GET"
+          })
+          loadNote({
+            id: result.noteId,
+            title: note.title || "",
+            content: note.content || "",
+            keywords: extractNoteKeywords(note),
+            version:
+              typeof note.version === "number" && Number.isFinite(note.version)
+                ? note.version
+                : undefined
+          })
+        } catch {
+          // Keep focus behavior even when loading the target note fails.
+        }
+      }
+
+      focusWorkspaceNote(result.noteField || "content")
+    },
+    [currentNote?.id, focusWorkspaceNote, loadNote]
+  )
 
   const focusWorkspacePane = React.useCallback(
     (pane: WorkspaceTabKey) => {
@@ -382,7 +581,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         }
 
         window.setTimeout(() => {
-          focusWorkspaceNote(result.noteField || "content")
+          void hydrateAndFocusNote(result)
         }, 0)
       }
     },
@@ -390,7 +589,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       closeGlobalSearch,
       focusChatMessageById,
       focusSourceById,
-      focusWorkspaceNote,
+      hydrateAndFocusNote,
       isMobile,
       setLeftPaneCollapsed,
       setRightPaneCollapsed

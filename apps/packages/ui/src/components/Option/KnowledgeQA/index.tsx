@@ -7,20 +7,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { KnowledgeQAProvider, useKnowledgeQA } from "./KnowledgeQAProvider"
-import { SearchBar } from "./SearchBar"
-import { AnswerPanel } from "./AnswerPanel"
-import { SearchDetailsPanel } from "./SearchDetailsPanel"
-import { SourceList } from "./SourceList"
-import { FollowUpInput } from "./FollowUpInput"
-import { ConversationThread } from "./ConversationThread"
-import { HistorySidebar } from "./HistorySidebar"
 import { SettingsPanel } from "./SettingsPanel"
 import { ExportDialog } from "./ExportDialog"
-import { cn } from "@/lib/utils"
+import { KnowledgeQALayout } from "./layout/KnowledgeQALayout"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useConnectionActions, useConnectionState } from "@/hooks/useConnectionState"
-import { WifiOff, AlertCircle, BookOpen, Download } from "lucide-react"
+import { WifiOff, AlertCircle } from "lucide-react"
 import {
   getRetryCountdownSeconds,
   KNOWLEDGE_QA_RETRY_INTERVAL_MS,
@@ -57,11 +50,6 @@ function KnowledgeQAContent() {
   const {
     settingsPanelOpen,
     setSettingsPanelOpen,
-    results,
-    answer,
-    hasSearched,
-    isSearching,
-    error,
     currentThreadId,
     selectThread,
     selectSharedThread,
@@ -219,94 +207,9 @@ function KnowledgeQAContent() {
     )
   }
 
-  const hasResults = results.length > 0 || Boolean(answer)
-  const showNoResultsState =
-    hasSearched && !isSearching && !error && results.length === 0 && !answer
-  const hasVisibleResultsArea =
-    hasResults || showNoResultsState || Boolean(error) || isSearching
-
   return (
     <div className="relative flex h-full">
-      <a
-        href="#knowledge-search-input"
-        className="sr-only z-50 rounded-md bg-surface px-3 py-2 text-sm text-text focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:ring-2 focus:ring-primary"
-      >
-        Skip to search
-      </a>
-
-      {/* History sidebar */}
-      <aside aria-label="Search history">
-        <HistorySidebar />
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Search area */}
-        <div
-          data-testid="knowledge-search-shell"
-          className={cn(
-            "flex flex-col items-center justify-center transition-all duration-300",
-            hasVisibleResultsArea ? "pt-6 pb-4" : "flex-1"
-          )}
-        >
-          {/* Logo/branding when no results */}
-          {!hasVisibleResultsArea && (
-            <div className="mb-8 text-center">
-              <BookOpen className="w-16 h-16 mx-auto mb-4 text-primary" />
-              <h1 className="text-3xl font-bold mb-2">Knowledge QA</h1>
-              <p className="text-text-muted max-w-md">
-                Ask questions about your documents and get AI-powered answers
-                with citations from your knowledge base.
-              </p>
-            </div>
-          )}
-
-          <SearchBar />
-        </div>
-
-        {/* Results area */}
-        {hasVisibleResultsArea && (
-          <div
-            data-testid="knowledge-results-shell"
-            className="flex-1 overflow-y-auto px-4 pb-24 md:px-6 md:pb-6 animate-in fade-in duration-200"
-          >
-            <div className="max-w-4xl mx-auto space-y-6">
-              {/* Export button */}
-              {hasResults && (
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => setExportDialogOpen(true)}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted transition-colors"
-                  >
-                    <Download className="w-4 h-4" />
-                    Export
-                  </button>
-                </div>
-              )}
-
-              {showNoResultsState && (
-                <div className="rounded-xl border border-border bg-muted/20 p-6">
-                  <h2 className="text-base font-semibold">No results found</h2>
-                  <p className="mt-2 text-sm text-text-muted">
-                    Try rephrasing your query or broadening the scope of your search.
-                  </p>
-                  <ul className="mt-3 space-y-1 text-sm text-text-muted">
-                    <li>Try different keywords or fewer constraints.</li>
-                    <li>Broaden the question before adding details.</li>
-                    <li>Confirm your sources were ingested and indexed.</li>
-                  </ul>
-                </div>
-              )}
-
-              <ConversationThread />
-              <AnswerPanel />
-              <SearchDetailsPanel />
-              <FollowUpInput />
-              <SourceList />
-            </div>
-          </div>
-        )}
-      </main>
+      <KnowledgeQALayout onExportClick={() => setExportDialogOpen(true)} />
 
       {/* Settings panel (drawer) */}
       <SettingsPanel
@@ -344,4 +247,5 @@ export { FollowUpInput } from "./FollowUpInput"
 export { HistorySidebar } from "./HistorySidebar"
 export { SettingsPanel } from "./SettingsPanel"
 export { ExportDialog } from "./ExportDialog"
+export { KnowledgeQALayout } from "./layout/KnowledgeQALayout"
 export type * from "./types"

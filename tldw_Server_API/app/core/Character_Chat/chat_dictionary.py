@@ -694,6 +694,10 @@ class ChatDictionaryService:
                         """
                     )
 
+                # Ensure legacy schemas are upgraded before creating indexes
+                # that depend on upgraded columns.
+                self._ensure_entry_sort_order_column(conn)
+
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_dict_entries_dict_id ON dictionary_entries(dictionary_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_dict_entries_group ON dictionary_entries(group_name)")
@@ -710,7 +714,6 @@ class ChatDictionaryService:
                     "ON dictionary_version_history(dictionary_id, revision DESC)"
                 )
 
-                self._ensure_entry_sort_order_column(conn)
                 self._ensure_entry_usage_columns(conn)
                 self._ensure_dictionary_usage_columns(conn)
                 self._ensure_dictionary_default_token_budget_column(conn)

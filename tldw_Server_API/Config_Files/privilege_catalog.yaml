@@ -178,6 +178,22 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-conversations-tree
+  - id: chat.conversations.share_links
+    description: Create, list, and revoke tokenized conversation share links.
+    resource_tags:
+      - chat
+      - conversations
+      - sharing
+    sensitivity_tier: high
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-conversations-share-links
   - id: chat.analytics
     description: Retrieve chat analytics histograms and summaries.
     resource_tags:

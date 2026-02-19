@@ -185,19 +185,6 @@ vi.mock("antd", async () => {
           >
             sort modified desc
           </button>
-          <button
-            type="button"
-            data-testid="table-sort-usage-desc"
-            onClick={() =>
-              props?.onChange?.(
-                { current: currentPage, pageSize },
-                {},
-                { columnKey: "usageCount", order: "descend" }
-              )
-            }
-          >
-            sort usage desc
-          </button>
         </div>
       )
     }
@@ -528,7 +515,7 @@ describe("PromptBody server search and pagination", () => {
     expect(announcer).toHaveAttribute("aria-atomic", "true")
   })
 
-  it("preserves favorite toggle semantics and keyboard row activation", async () => {
+  it("preserves favorite toggle semantics and keyboard row activation for inspector", async () => {
     renderPromptBody()
 
     const favoriteButton = await screen.findByTestId("prompt-favorite-local-1")
@@ -539,8 +526,11 @@ describe("PromptBody server search and pagination", () => {
     fireEvent.keyDown(firstRow, { key: "Enter", code: "Enter" })
 
     await waitFor(() => {
-      expect(screen.getByTestId("mock-prompt-drawer")).toHaveTextContent("Alpha One")
+      expect(
+        screen.getByTestId("prompts-inspector-panel-scaffold")
+      ).toBeInTheDocument()
     })
+    expect(screen.queryByTestId("mock-prompt-drawer")).not.toBeInTheDocument()
   })
 
   it("uses full-width responsive controls on compact viewports", async () => {
@@ -756,73 +746,6 @@ describe("PromptBody server search and pagination", () => {
 
     await waitFor(() => {
       expect(getVisibleRowNames()).toEqual(["New Prompt", "Old Prompt"])
-    })
-  })
-
-  it("sorts prompts by usage count when usage sort is selected", async () => {
-    state.prompts = [
-      {
-        id: "prompt-low",
-        name: "Low Usage",
-        title: "Low Usage",
-        content: "low",
-        is_system: false,
-        createdAt: 1,
-        usageCount: 1,
-        keywords: []
-      },
-      {
-        id: "prompt-high",
-        name: "High Usage",
-        title: "High Usage",
-        content: "high",
-        is_system: false,
-        createdAt: 2,
-        usageCount: 8,
-        keywords: []
-      }
-    ]
-    mocks.getAllPrompts.mockResolvedValue(state.prompts)
-
-    renderPromptBody()
-
-    await waitFor(() => {
-      expect(screen.getByTestId("table-row-count")).toHaveTextContent("2")
-    })
-
-    fireEvent.click(screen.getByTestId("table-sort-usage-desc"))
-
-    await waitFor(() => {
-      expect(getVisibleRowNames()).toEqual(["High Usage", "Low Usage"])
-    })
-  })
-
-  it("toggles prompt content preview between collapsed and expanded states", async () => {
-    state.prompts = [
-      {
-        id: "prompt-long",
-        name: "Long Prompt",
-        title: "Long Prompt",
-        content: "x".repeat(240),
-        system_prompt: "x".repeat(240),
-        is_system: true,
-        createdAt: 100,
-        keywords: []
-      }
-    ]
-    mocks.getAllPrompts.mockResolvedValue(state.prompts)
-
-    renderPromptBody()
-
-    const toggle = await screen.findByTestId("prompt-content-toggle-prompt-long")
-    expect(toggle).toHaveTextContent("Show more")
-
-    fireEvent.click(toggle)
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("prompt-content-toggle-prompt-long")
-      ).toHaveTextContent("Show less")
     })
   })
 

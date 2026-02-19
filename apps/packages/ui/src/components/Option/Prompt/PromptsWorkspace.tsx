@@ -8,7 +8,7 @@ export const PromptsWorkspace: React.FC = () => {
   const { t } = useTranslation(["settings", "common"])
 
   return (
-    <PageShell className="space-y-4">
+    <PageShell className="space-y-4" maxWidthClassName="max-w-none">
       <div className="space-y-1">
         <h1 className="text-lg font-semibold text-text">
           {t("option:header.modePromptsPlayground", "Prompts")}

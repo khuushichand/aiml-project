@@ -26,6 +26,7 @@ export interface WorkspaceSource {
   statusMessage?: string
   thumbnailUrl?: string
   addedAt: Date
+  sourceCreatedAt?: Date
   // Optional metadata
   url?: string
   fileSize?: number

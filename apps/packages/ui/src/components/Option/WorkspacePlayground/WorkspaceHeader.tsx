@@ -24,7 +24,9 @@ import type { SavedWorkspace } from "@/types/workspace"
 import { useWorkspaceStore } from "@/store/workspace"
 import {
   createWorkspaceExportFilename,
-  isWorkspaceExportBundle
+  createWorkspaceExportZipBlob,
+  createWorkspaceExportZipFilename,
+  parseWorkspaceImportFile
 } from "@/store/workspace-bundle"
 import {
   WORKSPACE_TEMPLATE_PRESETS,
@@ -257,7 +259,16 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     switchWorkspace(id)
   }
 
-  const handleExportCurrentWorkspace = () => {
+  const triggerFileDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleExportCurrentWorkspace = async () => {
     if (!workspaceId) return
     const bundle = exportWorkspaceBundle(workspaceId)
     if (!bundle) {
@@ -274,19 +285,32 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       bundle.workspace.name,
       bundle.exportedAt
     )
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
-      type: "application/json;charset=utf-8"
-    })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement("a")
-    anchor.href = url
-    anchor.download = filename
-    anchor.click()
-    URL.revokeObjectURL(url)
-
-    messageApi.success(
-      t("playground:workspace.exportSuccess", "Workspace exported")
-    )
+    try {
+      const zipBlob = await createWorkspaceExportZipBlob(bundle)
+      const zipFilename = createWorkspaceExportZipFilename(
+        bundle.workspace.name,
+        bundle.exportedAt
+      )
+      triggerFileDownload(zipBlob, zipFilename)
+      messageApi.success(
+        t("playground:workspace.exportSuccessZip", "Workspace exported (.zip)")
+      )
+      return
+    } catch {
+      const jsonBlob = new Blob([JSON.stringify(bundle, null, 2)], {
+        type: "application/json;charset=utf-8"
+      })
+      triggerFileDownload(jsonBlob, filename)
+      messageApi.info(
+        t(
+          "playground:workspace.exportZipFallback",
+          "ZIP export unavailable. Downloaded JSON bundle instead."
+        )
+      )
+      messageApi.success(
+        t("playground:workspace.exportSuccess", "Workspace exported")
+      )
+    }
   }
 
   const handleOpenImportWorkspace = () => {
@@ -342,12 +366,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     if (!file) return
 
     try {
-      const raw = await file.text()
-      const parsed: unknown = JSON.parse(raw)
-      if (!isWorkspaceExportBundle(parsed)) {
-        throw new Error("invalid-bundle-format")
-      }
-
+      const parsed = await parseWorkspaceImportFile(file)
       const importedWorkspaceId = importWorkspaceBundle(parsed)
       if (!importedWorkspaceId) {
         throw new Error("import-failed")
@@ -639,7 +658,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       <input
         ref={importFileInputRef}
         type="file"
-        accept=".json,.workspace.json"
+        accept=".json,.workspace.json,.zip,.workspace.zip"
         className="hidden"
         data-testid="workspace-import-input"
         onChange={(event) => {

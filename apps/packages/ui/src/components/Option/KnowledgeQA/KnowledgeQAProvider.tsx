@@ -24,6 +24,8 @@ import type {
   KnowledgeQAThread,
   CitationRef,
   SearchRuntimeDetails,
+  QueryStage,
+  ScopeSnapshot,
 } from "./types"
 import {
   DEFAULT_RAG_SETTINGS,
@@ -78,6 +80,10 @@ const initialState: KnowledgeQAState = {
 
   settingsPanelOpen: false,
   focusedSourceIndex: null,
+  evidenceRailOpen: false,
+  evidenceRailTab: "sources",
+  queryStage: "idle",
+  lastSearchScope: null,
 }
 
 const isLocalThreadId = (id: string | null | undefined) =>
@@ -135,6 +141,10 @@ type Action =
   | { type: "SET_SETTINGS_PANEL_OPEN"; payload: boolean }
   | { type: "SET_HISTORY_SIDEBAR_OPEN"; payload: boolean }
   | { type: "SET_FOCUSED_SOURCE"; payload: number | null }
+  | { type: "SET_EVIDENCE_RAIL_OPEN"; payload: boolean }
+  | { type: "SET_EVIDENCE_RAIL_TAB"; payload: "sources" | "details" }
+  | { type: "SET_QUERY_STAGE"; payload: QueryStage }
+  | { type: "SET_LAST_SEARCH_SCOPE"; payload: ScopeSnapshot | null }
 
 // Reducer
 function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
@@ -142,7 +152,11 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
     case "SET_QUERY":
       return { ...state, query: action.payload }
     case "SET_SEARCHING":
-      return { ...state, isSearching: action.payload, error: action.payload ? null : state.error }
+      return {
+        ...state,
+        isSearching: action.payload,
+        error: action.payload ? null : state.error,
+      }
     case "SET_RESULTS":
       return {
         ...state,
@@ -151,6 +165,7 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
         citations: action.payload.citations,
         hasSearched: true,
         isSearching: false,
+        queryStage: "complete",
       }
     case "SET_PARTIAL_RESULTS":
       return {
@@ -164,7 +179,13 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
     case "SET_SEARCH_DETAILS":
       return { ...state, searchDetails: action.payload }
     case "SET_ERROR":
-      return { ...state, error: action.payload, hasSearched: true, isSearching: false }
+      return {
+        ...state,
+        error: action.payload,
+        hasSearched: true,
+        isSearching: false,
+        queryStage: action.payload ? "error" : "idle",
+      }
     case "CLEAR_RESULTS":
       return {
         ...state,
@@ -174,6 +195,7 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
         searchDetails: null,
         error: null,
         hasSearched: false,
+        queryStage: "idle",
       }
     case "SET_THREAD_ID":
       return { ...state, currentThreadId: action.payload }
@@ -251,6 +273,14 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
       return { ...state, historySidebarOpen: action.payload }
     case "SET_FOCUSED_SOURCE":
       return { ...state, focusedSourceIndex: action.payload }
+    case "SET_EVIDENCE_RAIL_OPEN":
+      return { ...state, evidenceRailOpen: action.payload }
+    case "SET_EVIDENCE_RAIL_TAB":
+      return { ...state, evidenceRailTab: action.payload }
+    case "SET_QUERY_STAGE":
+      return { ...state, queryStage: action.payload }
+    case "SET_LAST_SEARCH_SCOPE":
+      return { ...state, lastSearchScope: action.payload }
     default:
       return state
   }
@@ -640,6 +670,17 @@ function buildSearchDetailsFromStreaming(
   }
 }
 
+function buildScopeSnapshot(
+  preset: RagPresetName,
+  settings: RagSettings
+): ScopeSnapshot {
+  return {
+    preset,
+    sources: [...settings.sources],
+    webFallback: Boolean(settings.enable_web_fallback),
+  }
+}
+
 // Provider component
 export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
@@ -1003,6 +1044,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       const abortController = new AbortController()
       activeSearchAbortRef.current = abortController
       dispatch({ type: "SET_SEARCHING", payload: true })
+      dispatch({ type: "SET_QUERY_STAGE", payload: "searching" })
       dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
       const effectiveSettings: RagSettings = {
         ...state.settings,
@@ -1068,6 +1110,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
               const eventType = typeof event?.type === "string" ? event.type : ""
 
               if (eventType === "contexts" && Array.isArray(event?.contexts)) {
+                dispatch({ type: "SET_QUERY_STAGE", payload: "ranking" })
                 streamResults = mapStreamingContextsToResults(event.contexts)
                 streamWhyPayload = event?.why
                 resolvedSearchDetails = buildSearchDetailsFromStreaming(
@@ -1096,6 +1139,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
               }
 
               if (eventType === "delta") {
+                dispatch({ type: "SET_QUERY_STAGE", payload: "generating" })
                 const deltaText =
                   typeof event?.text === "string" ? event.text : ""
                 if (!deltaText) continue
@@ -1152,6 +1196,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         }
 
         if (!usedStreaming) {
+          dispatch({ type: "SET_QUERY_STAGE", payload: "ranking" })
           const response = await tldwClient.ragSearch(trimmedQuery, {
             ...options,
             signal: abortController.signal,
@@ -1159,6 +1204,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           const extracted = extractRagResponse(response)
           results = extracted.results
           answer = extracted.answer
+          if (answer) {
+            dispatch({ type: "SET_QUERY_STAGE", payload: "generating" })
+          }
           resolvedSearchDetails = buildSearchDetailsFromResponse(
             extracted,
             results,
@@ -1167,6 +1215,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         }
 
         // Parse citations from answer
+        dispatch({ type: "SET_QUERY_STAGE", payload: "verifying" })
         const citations = answer ? parseCitations(answer, results) : []
 
         dispatch({
@@ -1174,6 +1223,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           payload: { results, answer, citations },
         })
         dispatch({ type: "SET_SEARCH_DETAILS", payload: resolvedSearchDetails })
+        dispatch({
+          type: "SET_LAST_SEARCH_SCOPE",
+          payload: buildScopeSnapshot(state.preset, effectiveSettings),
+        })
         void trackKnowledgeQaSearchMetric({
           type: "search_complete",
           duration_ms: Date.now() - searchStartedAt,
@@ -1247,6 +1300,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
             return
           }
           dispatch({ type: "SET_ERROR", payload: "Search cancelled" })
+          dispatch({ type: "SET_QUERY_STAGE", payload: "idle" })
           return
         }
         console.error("Search failed:", error)
@@ -1751,6 +1805,18 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_FOCUSED_SOURCE", payload: index })
   }, [])
 
+  const setEvidenceRailOpen = useCallback((open: boolean) => {
+    dispatch({ type: "SET_EVIDENCE_RAIL_OPEN", payload: open })
+  }, [])
+
+  const setEvidenceRailTab = useCallback((tab: "sources" | "details") => {
+    dispatch({ type: "SET_EVIDENCE_RAIL_TAB", payload: tab })
+  }, [])
+
+  const setQueryStage = useCallback((stage: QueryStage) => {
+    dispatch({ type: "SET_QUERY_STAGE", payload: stage })
+  }, [])
+
   const scrollToSource = useCallback((index: number) => {
     const element = document.getElementById(`source-card-${index}`)
     if (element) {
@@ -1846,6 +1912,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       setSettingsPanelOpen,
       setHistorySidebarOpen,
       focusSource,
+      setEvidenceRailOpen,
+      setEvidenceRailTab,
+      setQueryStage,
       persistRagContext,
       scrollToSource,
     }),
@@ -1872,6 +1941,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       setSettingsPanelOpen,
       setHistorySidebarOpen,
       focusSource,
+      setEvidenceRailOpen,
+      setEvidenceRailTab,
+      setQueryStage,
       persistRagContext,
       scrollToSource,
     ]

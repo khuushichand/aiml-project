@@ -37,6 +37,93 @@ def test_chat_dictionary_router_exposes_markdown_export_alias():
     assert "/dictionaries/{dictionary_id}/export/markdown" in paths
 
 
+def test_chat_dictionary_service_initializes_legacy_entries_table_without_sort_order(
+    chacha_db: CharactersRAGDB,
+):
+    with chacha_db.get_connection() as conn:
+        conn.execute("DROP TABLE IF EXISTS dictionary_entries")
+        conn.execute("DROP TABLE IF EXISTS chat_dictionaries")
+
+        conn.execute(
+            """
+            CREATE TABLE chat_dictionaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                version INTEGER DEFAULT 1,
+                deleted BOOLEAN DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE dictionary_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dictionary_id INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                content TEXT NOT NULL,
+                is_regex BOOLEAN DEFAULT 0,
+                probability REAL DEFAULT 1.0,
+                max_replacements INTEGER DEFAULT 1,
+                group_name TEXT,
+                timed_effects TEXT DEFAULT '{"sticky": 0, "cooldown": 0, "delay": 0}',
+                enabled BOOLEAN DEFAULT 1,
+                case_sensitive BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            INSERT INTO chat_dictionaries (name, description, is_active, version, deleted)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("Legacy Dictionary", "Legacy schema test", True, 1, False),
+        )
+        conn.execute(
+            """
+            INSERT INTO dictionary_entries
+            (dictionary_id, key, content, is_regex, probability, max_replacements, enabled, case_sensitive)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (1, "legacy-key", "legacy-value", False, 1.0, 1, True, True),
+        )
+        conn.commit()
+
+    service = ChatDictionaryService(chacha_db)
+    dictionaries = service.list_dictionaries_with_entry_counts(include_inactive=True)
+    assert len(dictionaries) == 1
+
+    with chacha_db.get_connection() as conn:
+        column_rows = conn.execute("PRAGMA table_info(dictionary_entries)").fetchall()
+        column_names: set[str] = set()
+        for row in column_rows:
+            if isinstance(row, dict):
+                raw_name = row.get("name")
+            elif hasattr(row, "_mapping"):
+                raw_name = row._mapping.get("name")
+            else:
+                raw_name = row[1] if len(row) > 1 else None
+            if isinstance(raw_name, str):
+                column_names.add(raw_name)
+        assert "sort_order" in column_names
+
+        index_rows = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index' AND name = 'idx_dict_entries_sort_order'
+            """
+        ).fetchall()
+        assert len(index_rows) == 1
+
+
 @pytest.mark.asyncio
 async def test_add_dictionary_entry_returns_persisted_fields(chacha_db: CharactersRAGDB):
     service = ChatDictionaryService(chacha_db)

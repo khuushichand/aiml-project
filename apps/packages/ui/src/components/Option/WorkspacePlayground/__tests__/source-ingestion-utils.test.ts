@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_SOURCE_UPLOAD_MAX_SIZE_MB,
   mapSourceIngestionError,
+  parseSourceCreatedAt,
   resolveSourceUploadMaxSizeMb,
   validateSourceUploadFile
 } from "../SourcesPane/source-ingestion-utils"
@@ -68,5 +69,18 @@ describe("source-ingestion-utils", () => {
       mapSourceIngestionError(new Error("NetworkError when attempting to fetch resource."))
     ).toContain("Unable to reach the server")
     expect(mapSourceIngestionError({ status: 429 })).toContain("Too many requests")
+  })
+
+  it("normalizes source created-at timestamps from iso, seconds, and millis values", () => {
+    expect(parseSourceCreatedAt("2026-02-18T09:00:00.000Z")?.toISOString()).toBe(
+      "2026-02-18T09:00:00.000Z"
+    )
+    expect(parseSourceCreatedAt(1_739_869_200)?.toISOString()).toBe(
+      "2025-02-18T09:00:00.000Z"
+    )
+    expect(parseSourceCreatedAt("1739869200000")?.toISOString()).toBe(
+      "2025-02-18T09:00:00.000Z"
+    )
+    expect(parseSourceCreatedAt("not-a-date")).toBeUndefined()
   })
 })

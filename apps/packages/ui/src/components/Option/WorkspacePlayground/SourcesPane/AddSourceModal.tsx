@@ -37,6 +37,7 @@ import {
   formatSourceUploadSizeLimit,
   getConfiguredSourceUploadMaxSizeBytes,
   mapSourceIngestionError,
+  parseSourceCreatedAt,
   validateSourceUploadFile
 } from "./source-ingestion-utils"
 
@@ -57,6 +58,7 @@ type AddSourceCandidate = {
   fileSize?: number
   duration?: number
   pageCount?: number
+  sourceCreatedAt?: Date
   thumbnailUrl?: string
 }
 
@@ -105,6 +107,13 @@ const toOptionalString = (value: unknown): string | undefined => {
 }
 
 const extractCandidateMetadata = (candidate: Record<string, unknown>) => ({
+  sourceCreatedAt:
+    parseSourceCreatedAt(candidate.created_at) ||
+    parseSourceCreatedAt(candidate.createdAt) ||
+    parseSourceCreatedAt(candidate.created) ||
+    parseSourceCreatedAt(candidate.date_added) ||
+    parseSourceCreatedAt(candidate.dateAdded) ||
+    parseSourceCreatedAt(candidate.ingested_at),
   url:
     toOptionalString(candidate.url) ||
     toOptionalString(candidate.source_url) ||
@@ -133,6 +142,7 @@ const extractMediaFromAddResponse = (
   fileSize?: number
   duration?: number
   pageCount?: number
+  sourceCreatedAt?: Date
   thumbnailUrl?: string
   mediaType?: string
 } => {
@@ -279,6 +289,7 @@ const UploadTab: React.FC<{
               fileSize: added.fileSize,
               duration: added.duration,
               pageCount: added.pageCount,
+              sourceCreatedAt: added.sourceCreatedAt,
               thumbnailUrl: added.thumbnailUrl
             }
           ])
@@ -536,6 +547,7 @@ const UrlTab: React.FC<{
         fileSize: added.fileSize,
         duration: added.duration,
         pageCount: added.pageCount,
+        sourceCreatedAt: added.sourceCreatedAt,
         thumbnailUrl: added.thumbnailUrl
       }
     },
@@ -790,6 +802,7 @@ const PasteTab: React.FC<{
             fileSize: added.fileSize,
             duration: added.duration,
             pageCount: added.pageCount,
+            sourceCreatedAt: added.sourceCreatedAt,
             thumbnailUrl: added.thumbnailUrl
           }
         ])
@@ -947,6 +960,7 @@ const SearchTab: React.FC<{
             fileSize: added.fileSize,
             duration: added.duration,
             pageCount: added.pageCount,
+            sourceCreatedAt: added.sourceCreatedAt,
             thumbnailUrl: added.thumbnailUrl
           })
         } else {
@@ -1267,6 +1281,9 @@ const ExistingTab: React.FC<{
       fileSize: toOptionalNumber(m.file_size || m.filesize || m.size),
       duration: toOptionalNumber(m.duration_seconds || m.duration),
       pageCount: toOptionalNumber(m.page_count || m.pages),
+      sourceCreatedAt:
+        parseSourceCreatedAt(m.created_at || m.createdAt || m.date_added) ||
+        undefined,
       thumbnailUrl: m.thumbnail_url || m.thumbnail || undefined
     }))
 

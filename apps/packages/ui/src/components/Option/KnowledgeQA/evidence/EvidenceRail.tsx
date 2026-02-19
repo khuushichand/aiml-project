@@ -1,0 +1,176 @@
+import React from "react"
+import { X, PanelRightOpen, FileText, BarChart3 } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { useDesktop } from "@/hooks/useMediaQuery"
+import { SourceList } from "../SourceList"
+import { SearchDetailsPanel } from "../SearchDetailsPanel"
+
+type EvidenceRailProps = {
+  open: boolean
+  tab: "sources" | "details"
+  onOpenChange: (open: boolean) => void
+  onTabChange: (tab: "sources" | "details") => void
+  resultsCount: number
+  citationsCount: number
+  className?: string
+}
+
+function EvidenceRailContent({
+  tab,
+  onOpenChange,
+  onTabChange,
+  resultsCount,
+  citationsCount,
+}: Omit<EvidenceRailProps, "open" | "className">) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <h2 className="text-sm font-semibold">Evidence</h2>
+        <span className="text-xs text-text-muted">
+          {resultsCount} sources • {citationsCount} citations
+        </span>
+        <button
+          type="button"
+          onClick={() => onOpenChange(false)}
+          className="ml-auto rounded-md p-1 text-text-muted hover:bg-muted hover:text-text transition-colors"
+          aria-label="Close evidence panel"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="border-b border-border px-3 py-2">
+        <div className="inline-flex rounded-md border border-border bg-muted p-0.5">
+          <button
+            type="button"
+            onClick={() => onTabChange("sources")}
+            className={cn(
+              "inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
+              tab === "sources"
+                ? "bg-primary text-white"
+                : "text-text-muted hover:bg-surface hover:text-text"
+            )}
+            aria-pressed={tab === "sources"}
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Sources
+          </button>
+          <button
+            type="button"
+            onClick={() => onTabChange("details")}
+            className={cn(
+              "inline-flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
+              tab === "details"
+                ? "bg-primary text-white"
+                : "text-text-muted hover:bg-surface hover:text-text"
+            )}
+            aria-pressed={tab === "details"}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Details
+          </button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {tab === "sources" ? (
+          resultsCount > 0 ? (
+            <SourceList />
+          ) : (
+            <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm text-text-muted">
+              No sources yet. Run a query to inspect retrieval evidence.
+            </div>
+          )
+        ) : (
+          <SearchDetailsPanel />
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function EvidenceRail({
+  open,
+  tab,
+  onOpenChange,
+  onTabChange,
+  resultsCount,
+  citationsCount,
+  className,
+}: EvidenceRailProps) {
+  const isDesktop = useDesktop()
+
+  if (isDesktop) {
+    if (!open) {
+      return (
+        <aside
+          className={cn(
+            "hidden w-14 shrink-0 border-l border-border bg-surface/40 lg:flex lg:flex-col lg:items-center lg:py-3",
+            className
+          )}
+          aria-label="Open evidence panel"
+        >
+          <button
+            type="button"
+            onClick={() => onOpenChange(true)}
+            className="rounded-md border border-border bg-surface p-2 text-text-muted hover:bg-muted hover:text-text transition-colors"
+            aria-label="Open evidence panel"
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </button>
+        </aside>
+      )
+    }
+
+    return (
+      <aside
+        className={cn(
+          "hidden w-[360px] shrink-0 border-l border-border bg-surface/40 lg:block",
+          className
+        )}
+        aria-label="Evidence panel"
+      >
+        <EvidenceRailContent
+          tab={tab}
+          onOpenChange={onOpenChange}
+          onTabChange={onTabChange}
+          resultsCount={resultsCount}
+          citationsCount={citationsCount}
+        />
+      </aside>
+    )
+  }
+
+  return (
+    <>
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => onOpenChange(true)}
+          className="fixed bottom-4 right-4 z-40 rounded-full border border-border bg-surface px-3 py-2 text-sm shadow-md hover:bg-muted transition-colors"
+          aria-label="Open evidence panel"
+        >
+          Evidence
+        </button>
+      ) : null}
+
+      {open ? (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/45"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close evidence panel"
+          />
+          <aside className="absolute right-0 top-0 h-full w-[88vw] max-w-md border-l border-border bg-surface shadow-xl">
+            <EvidenceRailContent
+              tab={tab}
+              onOpenChange={onOpenChange}
+              onTabChange={onTabChange}
+              resultsCount={resultsCount}
+              citationsCount={citationsCount}
+            />
+          </aside>
+        </div>
+      ) : null}
+    </>
+  )
+}

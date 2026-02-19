@@ -21,7 +21,16 @@ export interface WorkspaceGlobalSearchResult {
   score: number
   sourceId?: string
   chatMessageId?: string
+  noteId?: number
   noteField?: "title" | "content"
+}
+
+export interface WorkspaceGlobalSearchNoteDocument {
+  id?: number
+  title: string
+  content: string
+  keywords?: string[]
+  isDraft?: boolean
 }
 
 const DOMAIN_PREFIX_TO_FILTER: Record<string, WorkspaceGlobalSearchDomain> = {
@@ -163,6 +172,7 @@ interface BuildWorkspaceGlobalSearchResultsInput {
   sources: WorkspaceSource[]
   chatMessages: Message[]
   currentNote: WorkspaceNote | null | undefined
+  workspaceNotes?: WorkspaceGlobalSearchNoteDocument[]
   limit?: number
 }
 
@@ -176,6 +186,7 @@ export const buildWorkspaceGlobalSearchResults = ({
   sources,
   chatMessages,
   currentNote,
+  workspaceNotes = [],
   limit = 30
 }: BuildWorkspaceGlobalSearchResultsInput): WorkspaceGlobalSearchResult[] => {
   const parsedQuery = parseWorkspaceGlobalSearchQuery(query)
@@ -221,30 +232,78 @@ export const buildWorkspaceGlobalSearchResults = ({
     })
   }
 
-  if (allowDomain(parsedQuery.filter, "note") && currentNote) {
-    const noteTitle = currentNote.title || ""
-    const noteContent = currentNote.content || ""
-    const noteKeywords = (currentNote.keywords || []).join(" ")
+  if (allowDomain(parsedQuery.filter, "note")) {
+    const noteDocuments: WorkspaceGlobalSearchNoteDocument[] = []
+    const seenNoteIds = new Set<number>()
 
-    const titleScore = scoreText(noteTitle, parsedQuery.terms)
-    const contentScore = scoreText(noteContent, parsedQuery.terms)
-    const keywordScore = scoreText(noteKeywords, parsedQuery.terms)
+    if (currentNote) {
+      noteDocuments.push({
+        id: currentNote.id,
+        title: currentNote.title || "",
+        content: currentNote.content || "",
+        keywords: currentNote.keywords || [],
+        isDraft: currentNote.id == null
+      })
+      if (typeof currentNote.id === "number" && Number.isFinite(currentNote.id)) {
+        seenNoteIds.add(currentNote.id)
+      }
+    }
 
-    if (titleScore > 0 || contentScore > 0 || keywordScore > 0) {
+    for (const workspaceNote of workspaceNotes) {
+      const workspaceNoteId =
+        typeof workspaceNote.id === "number" && Number.isFinite(workspaceNote.id)
+          ? workspaceNote.id
+          : undefined
+      if (workspaceNoteId != null && seenNoteIds.has(workspaceNoteId)) {
+        continue
+      }
+      noteDocuments.push({
+        ...workspaceNote,
+        id: workspaceNoteId
+      })
+      if (workspaceNoteId != null) {
+        seenNoteIds.add(workspaceNoteId)
+      }
+    }
+
+    for (const noteDocument of noteDocuments) {
+      const noteTitle = noteDocument.title || ""
+      const noteContent = noteDocument.content || ""
+      const noteKeywords = (noteDocument.keywords || []).join(" ")
+
+      const titleScore = scoreText(noteTitle, parsedQuery.terms)
+      const contentScore = scoreText(noteContent, parsedQuery.terms)
+      const keywordScore = scoreText(noteKeywords, parsedQuery.terms)
+
+      if (titleScore === 0 && contentScore === 0 && keywordScore === 0) {
+        continue
+      }
+
       const field: "title" | "content" = titleScore >= contentScore ? "title" : "content"
       const snippetSource = field === "title" ? noteTitle : noteContent
-      const noteLabel = noteTitle.trim() || "Quick note"
+      const noteLabel =
+        noteTitle.trim() ||
+        (noteDocument.id != null ? `Note #${noteDocument.id}` : "Quick note")
+      const noteIdKey = noteDocument.id ?? "draft"
+      const subtitle = noteDocument.isDraft
+        ? field === "title"
+          ? "Draft note title"
+          : "Draft note content"
+        : field === "title"
+          ? "Note title"
+          : "Note content"
 
       results.push({
-        id: `note:${currentNote.id ?? "draft"}:${field}`,
+        id: `note:${noteIdKey}:${field}`,
         domain: "note",
         title: noteLabel,
-        subtitle: field === "title" ? "Note title" : "Note content",
+        subtitle,
         snippet: buildSnippet(snippetSource, parsedQuery.terms),
         score:
           SCORE_DOMAIN_BOOST.note +
           Math.max(titleScore * 2, contentScore) +
           Math.round(keywordScore / 2),
+        noteId: noteDocument.id,
         noteField: field
       })
     }

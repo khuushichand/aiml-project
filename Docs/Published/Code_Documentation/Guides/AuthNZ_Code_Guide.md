@@ -194,7 +194,7 @@ async def media_read(principal: AuthPrincipal = Depends(require_permissions("med
 
 - `session_manager.py` encrypts token material at rest using Fernet.
 - Encryption key precedence: explicit `SESSION_ENCRYPTION_KEY` → persisted file (secure 0600) → derived keys from configured secrets (fallback) → generated in TEST_MODE.
-  - Persisted key preferred path: project root `Config_Files/session_encryption.key`; back-compat fallback: `tldw_Server_API/Config_Files/session_encryption.key`. Set `SESSION_KEY_STORAGE=api` to prefer the API component path. Symlinks are handled safely and file ownership/permissions are validated.
+  - Persisted key preferred path: `tldw_Server_API/Config_Files/session_encryption.key`; legacy fallback: project root `Config_Files/session_encryption.key`. Set `SESSION_KEY_STORAGE=project` to force legacy storage. In default API mode, valid legacy keys are migrated to the API path. Symlinks are handled safely and file ownership/permissions are validated.
 - Blacklist checks (by JTI) protect against replay after logout/rotation; see `token_blacklist.py`.
 - Redis (optional via `REDIS_URL`) accelerates lookups and counters.
 

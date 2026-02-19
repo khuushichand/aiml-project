@@ -326,6 +326,15 @@ const getErrorStatusCode = (error: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+const isMediaEndpointMissingError = (error: unknown): boolean => {
+  const statusCode = getErrorStatusCode(error)
+  if (statusCode !== 404 && statusCode !== 405 && statusCode !== 410) {
+    return false
+  }
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /\/api\/v1\/media(?:\/|\?|$)/i.test(message)
+}
+
 const toNonNegativeFiniteNumber = (value: unknown): number | null => {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
   if (typeof value === 'string' && value.trim().length > 0) {
@@ -432,6 +441,7 @@ const MediaPageContent: React.FC = () => {
     mediaId: string | number
     message: string
   } | null>(null)
+  const [mediaApiUnavailable, setMediaApiUnavailable] = useState(false)
   const [staleSelectionNotice, setStaleSelectionNotice] = useState<string | null>(
     null
   )
@@ -483,6 +493,7 @@ const MediaPageContent: React.FC = () => {
     startedAt: number
     source: 'user' | 'restore'
   } | null>(null)
+  const mediaApiUnavailableNotifiedRef = useRef(false)
   const lastTruncatedTelemetryKeyRef = React.useRef<string>('')
   const lastFallbackTelemetryKeyRef = React.useRef<string>('')
   const navigationScopeKey = useMemo(
@@ -1043,6 +1054,20 @@ const MediaPageContent: React.FC = () => {
     showNavigationPanel
   ])
 
+  const markMediaApiUnavailable = useCallback((error?: unknown) => {
+    if (mediaApiUnavailableNotifiedRef.current) return
+    if (error && !isMediaEndpointMissingError(error)) return
+    mediaApiUnavailableNotifiedRef.current = true
+    setMediaApiUnavailable(true)
+    setMediaTotal(0)
+    message.warning(
+      t('review:mediaPage.mediaApiUnavailable', {
+        defaultValue:
+          'Media list/search endpoints are unavailable on this server. Media loading has been paused.'
+      })
+    )
+  }, [message, t])
+
   const runSearch = useCallback(async (): Promise<MediaResultItem[]> => {
     const results: MediaResultItem[] = []
     const hasTextQuery = query.trim().length > 0
@@ -1062,7 +1087,7 @@ const MediaPageContent: React.FC = () => {
     let actualMediaCount = 0
     let actualNotesCount = 0
 
-    if (kinds.media) {
+    if (kinds.media && !mediaApiUnavailable) {
       try {
         if (searchMode === 'metadata') {
           const normalizedFilters = normalizeMetadataSearchFilters(metadataFilters)
@@ -1311,9 +1336,18 @@ const MediaPageContent: React.FC = () => {
           }
         }
       } catch (err) {
-        console.error('Media search error:', err)
-        message.error(t('review:mediaPage.searchError', { defaultValue: 'Failed to search media' }))
+        if (isMediaEndpointMissingError(err)) {
+          markMediaApiUnavailable(err)
+          actualMediaCount = 0
+          setMediaTotal(0)
+        } else {
+          console.error('Media search error:', err)
+          message.error(t('review:mediaPage.searchError', { defaultValue: 'Failed to search media' }))
+        }
       }
+    } else if (kinds.media) {
+      setMediaTotal(0)
+      actualMediaCount = 0
     }
 
     // Fetch notes if enabled
@@ -1468,9 +1502,13 @@ const MediaPageContent: React.FC = () => {
     boostFields.content,
     metadataMatchMode,
     metadataFilters,
+    mediaApiUnavailable,
+    markMediaApiUnavailable,
+    message,
     page,
     pageSize,
-    availableMediaTypes
+    availableMediaTypes,
+    t
   ])
 
   const { data: results = [], refetch, isLoading, isFetching } = useQuery({
@@ -1779,7 +1817,13 @@ const MediaPageContent: React.FC = () => {
             await storage.set(MEDIA_TYPES_CACHE_KEY, cacheRecord)
           }
         }
-      } catch {}
+      } catch (error) {
+        if (isMediaEndpointMissingError(error)) {
+          mediaApiUnavailableNotifiedRef.current = true
+          setMediaApiUnavailable(true)
+          setMediaTotal(0)
+        }
+      }
 
       // Auto-browse: if there is no query or filters, fetch first page
       try {
@@ -1810,6 +1854,21 @@ const MediaPageContent: React.FC = () => {
         out.add(trimmed)
       }
       return Array.from(out)
+    }
+
+    if (mediaApiUnavailable) {
+      const keywordsFromResults = new Set<string>()
+      for (const result of results) {
+        if (!result.keywords) continue
+        for (const kw of result.keywords) {
+          if (!searchText || kw.toLowerCase().includes(searchText.toLowerCase())) {
+            keywordsFromResults.add(kw)
+          }
+        }
+      }
+      setKeywordOptions(Array.from(keywordsFromResults))
+      setKeywordSourceMode('results')
+      return
     }
 
     const now = Date.now()
@@ -1861,7 +1920,7 @@ const MediaPageContent: React.FC = () => {
     }
     setKeywordOptions(Array.from(keywordsFromResults))
     setKeywordSourceMode('results')
-  }, [results])
+  }, [mediaApiUnavailable, results])
 
   // Keep keyword suggestions in sync with results
   useEffect(() => {

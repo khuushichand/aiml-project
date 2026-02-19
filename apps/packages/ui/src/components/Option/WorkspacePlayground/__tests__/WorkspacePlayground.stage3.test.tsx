@@ -3,8 +3,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import axe from "axe-core"
 import { WorkspacePlayground } from "../index"
 
-const { mockGetMediaDetails } = vi.hoisted(() => ({
-  mockGetMediaDetails: vi.fn()
+const { mockGetMediaDetails, mockBgRequest } = vi.hoisted(() => ({
+  mockGetMediaDetails: vi.fn(),
+  mockBgRequest: vi.fn()
 }))
 
 const testState = {
@@ -13,12 +14,14 @@ const testState = {
   leftPaneCollapsed: false,
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
+  workspaceTag: "workspace:test",
   initializeWorkspace: vi.fn(),
   createNewWorkspace: vi.fn(),
   addSources: vi.fn(),
   setSelectedSourceIds: vi.fn(),
   captureToCurrentNote: vi.fn(),
   clearCurrentNote: vi.fn(),
+  loadNote: vi.fn(),
   selectedSourceIds: [] as string[],
   generatedArtifacts: [] as Array<{ id: string }>,
   setLeftPaneCollapsed: vi.fn(),
@@ -76,6 +79,10 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     getMediaDetails: mockGetMediaDetails
   }
+}))
+
+vi.mock("@/services/background-proxy", () => ({
+  bgRequest: mockBgRequest
 }))
 
 vi.mock("@/utils/workspace-playground-prefill", () => ({
@@ -140,6 +147,7 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     testState.leftPaneCollapsed = false
     testState.rightPaneCollapsed = false
     testState.workspaceId = "workspace-1"
+    testState.workspaceTag = "workspace:test"
     testState.selectedSourceIds = []
     testState.generatedArtifacts = []
     testState.sources = []
@@ -152,7 +160,15 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
       keywords: [],
       isDirty: false
     }
+    testState.loadNote = vi.fn()
     mockGetMediaDetails.mockResolvedValue({})
+    mockBgRequest.mockImplementation(async (request: { path: string }) => {
+      const path = String(request.path)
+      if (path.includes("/api/v1/notes/search/")) {
+        return []
+      }
+      return { notes: [] }
+    })
   })
 
   it("opens and closes workspace search with keyboard shortcuts", async () => {
@@ -326,6 +342,66 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Confidence tracker/ }))
 
     await waitFor(() => {
+      expect(testState.focusWorkspaceNote).toHaveBeenCalledWith("title")
+    })
+  })
+
+  it("loads and focuses non-current note results selected from global search", async () => {
+    testState.currentNote = {
+      id: 3,
+      title: "Current draft",
+      content: "Current draft content",
+      keywords: [],
+      isDirty: true
+    }
+
+    mockBgRequest.mockImplementation(async (request: { path: string }) => {
+      const path = String(request.path)
+      if (path.includes("/api/v1/notes/search/")) {
+        return [
+          {
+            id: 88,
+            title: "Workspace confidence note",
+            content: "Detailed confidence notes",
+            keywords: ["workspace:test", "confidence"]
+          }
+        ]
+      }
+      if (path.endsWith("/api/v1/notes/88")) {
+        return {
+          id: 88,
+          title: "Workspace confidence note",
+          content: "Detailed confidence notes",
+          keywords: [{ keyword: "workspace:test" }, { keyword: "confidence" }],
+          version: 2
+        }
+      }
+      return { notes: [] }
+    })
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+    const searchInput = await screen.findByPlaceholderText(
+      "Search sources, chat, and notes..."
+    )
+    fireEvent.change(searchInput, {
+      target: { value: "workspace confidence note" }
+    })
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Workspace confidence note/ })
+    )
+
+    await waitFor(() => {
+      expect(testState.loadNote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 88,
+          title: "Workspace confidence note",
+          content: "Detailed confidence notes",
+          keywords: ["workspace:test", "confidence"],
+          version: 2
+        })
+      )
       expect(testState.focusWorkspaceNote).toHaveBeenCalledWith("title")
     })
   })

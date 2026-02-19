@@ -796,6 +796,46 @@ describe('MediaReviewPage stage 1 selection limit clarity', () => {
     expect(attempts.get(1)).toBeGreaterThanOrEqual(2)
   })
 
+  it('prunes stale restored selections after 404 without retry loops', async () => {
+    let staleFetchAttempts = 0
+    mocks.getSetting
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([150])
+      .mockResolvedValueOnce(150)
+
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      const idMatch = path.match(/\/api\/v1\/media\/([^?]+)/)
+      const id = idMatch ? Number(idMatch[1]) : null
+      const numericId = id ?? 1
+      if (numericId === 150) {
+        staleFetchAttempts += 1
+        const notFoundError = new Error('Not Found') as Error & { status?: number }
+        notFoundError.status = 404
+        throw notFoundError
+      }
+      return {
+        id: numericId,
+        title: `Item ${numericId}`,
+        type: 'pdf',
+        content: `Content ${numericId}`
+      }
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(staleFetchAttempts).toBeGreaterThan(0)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('0 / 30 selected')).toBeInTheDocument()
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(staleFetchAttempts).toBe(1)
+  })
+
   it('forces list mode and hides sidebar by default on mobile viewports', async () => {
     setMobileViewport(true)
     render(<MediaReviewPage />)

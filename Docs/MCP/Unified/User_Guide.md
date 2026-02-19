@@ -2,375 +2,420 @@
 
 > Part of the MCP Unified documentation set. See `Docs/MCP/Unified/README.md` for the full guide index.
 
-## Table of Contents
-1. [Overview](#overview)
-2. [Getting Started](#getting-started)
-3. [Using the WebSocket Interface](#using-the-websocket-interface)
-4. [Using the HTTP API](#using-the-http-api)
-5. [Tool Discovery & Catalogs](#tool-discovery--catalogs)
-6. [Available Tools](#available-tools)
-7. [Authentication](#authentication)
-8. [Examples](#examples)
-9. [Troubleshooting](#troubleshooting)
+This guide is for users and integrators who want to run MCP Unified, connect clients, configure modules, and extend MCP with new modules/tools.
 
-## Overview
+## 1. What MCP Unified Is
 
-The Model Context Protocol (MCP) Unified module provides a standardized interface for interacting with TLDW's media processing, search, and analysis capabilities. It supports both WebSocket (for real-time communication) and HTTP (for simpler integrations).
+MCP Unified is the TLDW server's production Model Context Protocol surface. It supports:
 
-### Key Features
-- 🔍 **Media Search**: Search through ingested content
-- 📝 **Transcription Access**: Retrieve and search transcripts
-- 🤖 **AI Integration**: Leverage LLM capabilities for analysis
-- 📊 **RAG Search**: Advanced retrieval-augmented generation
-- 🔐 **Secure Access**: JWT-based authentication with role-based permissions
+- JSON-RPC over HTTP and WebSocket
+- Tool discovery and execution
+- Module-based tool loading
+- AuthNZ JWT / MCP JWT / API key auth paths
+- RBAC-aware tool permissions
+- Health and metrics endpoints
 
-## Getting Started
+Main base path: `http://127.0.0.1:8000/api/v1/mcp`
+
+## 2. Getting Started
 
 ### Prerequisites
-- TLDW server running with MCP Unified module enabled
-- API credentials (if authentication is enabled)
-- WebSocket or HTTP client
 
-### Quick Start
+- TLDW repo checked out locally
+- Virtual environment created
+- Dependencies installed
+- TLDW server configured (including AuthNZ if required)
 
-1. **Check Server Health**
-   ```bash
-   curl http://localhost:8000/api/v1/mcp/health
-   ```
-   Response: `{"status": "healthy"}`
+### Step 1: Start the server
 
-2. **Authenticate and List Tools**
-   Tools listing requires authentication. Use either a bearer token (AuthNZ or MCP demo token) or an API key.
-
-   - Bearer token:
-     ```bash
-     curl -H "Authorization: Bearer <token>" \
-       http://localhost:8000/api/v1/mcp/tools
-     ```
-   - Single-user API key:
-     ```bash
-     curl -H "X-API-KEY: <your_single_user_api_key>" \
-       http://localhost:8000/api/v1/mcp/tools
-     ```
-
-## Using the WebSocket Interface
-
-### Connection
-Connect to the WebSocket endpoint:
-```
-ws://localhost:8000/api/v1/mcp/ws
-```
-
-Auth for WebSocket:
-- Preferred: send `Authorization: Bearer <token>` (header) or use the subprotocol `bearer,<token>`.
-- Query tokens (`?token=...` or `?api_key=...`) are disabled by default; enable only for legacy clients (`MCP_WS_ALLOW_QUERY_AUTH=1`).
-
-Pass an optional `client_id` as a query parameter for observability.
-
-### Example WebSocket Client (JavaScript)
-```javascript
-// Subprotocol-based auth: results in header "Sec-WebSocket-Protocol: bearer,<token>"
-const token = "<jwt or access token>";
-const ws = new WebSocket('ws://localhost:8000/api/v1/mcp/ws?client_id=my-app', ['bearer', token]);
-
-ws.onopen = () => {
-    // Initialize connection
-    ws.send(JSON.stringify({
-        jsonrpc: "2.0",
-        method: "initialize",
-        params: {
-            clientInfo: {
-                name: "My Application",
-                version: "1.0.0"
-            }
-        },
-        id: 1
-    }));
-};
-
-ws.onmessage = (event) => {
-    const response = JSON.parse(event.data);
-    console.log('Received:', response);
-};
-
-// Call a tool
-function callTool(toolName, args) {
-    ws.send(JSON.stringify({
-        jsonrpc: "2.0",
-        method: "tools/call",
-        params: {
-            name: toolName,
-            arguments: args
-        },
-        id: Date.now()
-    }));
-}
-```
-
-### Example WebSocket Client (Python)
-```python
-import websocket
-import json
-
-def on_message(ws, message):
-    response = json.loads(message)
-    print(f"Received: {response}")
-
-def on_open(ws):
-    # Initialize connection
-    ws.send(json.dumps({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "clientInfo": {
-                "name": "Python Client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    }))
-
-headers = ["Authorization: Bearer <token>"]
-ws = websocket.WebSocketApp(
-    "ws://localhost:8000/api/v1/mcp/ws",
-    on_open=on_open,
-    on_message=on_message,
-    header=headers,
-)
-ws.run_forever()
-```
-
-## Using the HTTP API
-
-### Basic Request Format
-All HTTP requests use POST to `/api/v1/mcp/request`:
+From repo root:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/mcp/request \
+source .venv/bin/activate
+python -m uvicorn tldw_Server_API.app.main:app --reload
+```
+
+### Step 2: Confirm MCP is reachable
+
+`/status` will initialize MCP server state if needed:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/mcp/status
+```
+
+Then check health:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/mcp/health
+```
+
+### Step 3: Authenticate
+
+Recommended in production: use an AuthNZ access token.
+
+```bash
+curl -H "Authorization: Bearer <authnz_access_token>" \
+  http://127.0.0.1:8000/api/v1/mcp/tools
+```
+
+HTTP API key option:
+
+```bash
+curl -H "X-API-KEY: <api_key>" \
+  http://127.0.0.1:8000/api/v1/mcp/tools
+```
+
+Demo token endpoint (`POST /auth/token`) exists only for debug/test workflows and is disabled unless explicitly enabled with:
+
+- `MCP_ENABLE_DEMO_AUTH=1`
+- `MCP_DEMO_AUTH_SECRET=<strong-secret>`
+
+## 3. Endpoint Quick Reference
+
+| Endpoint | Method | Purpose | Auth |
+|---|---|---|---|
+| `/api/v1/mcp/ws` | WS | Full MCP over WebSocket | Usually required (`MCP_WS_AUTH_REQUIRED=1`) |
+| `/api/v1/mcp/request` | POST | Single JSON-RPC request | Method-dependent |
+| `/api/v1/mcp/request/batch` | POST | Batch JSON-RPC requests | Method-dependent |
+| `/api/v1/mcp/tools` | GET | List tools (RBAC filtered) | Recommended |
+| `/api/v1/mcp/tools/execute` | POST | Execute one tool via HTTP facade | Required |
+| `/api/v1/mcp/modules` | GET | List loaded modules | Recommended |
+| `/api/v1/mcp/modules/health` | GET | Module health details | `system.logs` or admin |
+| `/api/v1/mcp/resources` | GET | List MCP resources | Recommended |
+| `/api/v1/mcp/prompts` | GET | List MCP prompts | Recommended |
+| `/api/v1/mcp/tool_catalogs` | GET | List visible tool catalogs | Required |
+| `/api/v1/mcp/metrics` | GET | MCP metrics (JSON) | `system.logs` or admin |
+| `/api/v1/mcp/metrics/prometheus` | GET | Prometheus scrape output | `system.logs` or admin |
+| `/api/v1/mcp/status` | GET | Server status summary | Not required |
+| `/api/v1/mcp/health` | GET | Health probe | Not required |
+
+## 4. Using MCP Over HTTP
+
+### JSON-RPC request endpoint
+
+Send MCP requests to:
+
+- `POST /api/v1/mcp/request`
+- `POST /api/v1/mcp/request/batch`
+
+Example `initialize`:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/mcp/request \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
   -d '{
     "jsonrpc": "2.0",
-    "method": "tools/list",
-    "params": {},
+    "method": "initialize",
+    "params": {
+      "clientInfo": { "name": "example-client", "version": "1.0.0" }
+    },
     "id": 1
   }'
 ```
 
-### Convenience Endpoints
+Example `tools/list`:
 
-#### List Tools
 ```bash
-GET /api/v1/mcp/tools
-```
-
-Tips
-- 403 without auth indicates RBAC is enforced; pass `Authorization` or `X-API-KEY`.
-- Add `catalog` or `catalog_id` to filter discovery (see next section).
-
-#### Execute Tool
-```bash
-POST /api/v1/mcp/tools/execute
-{
-    "tool_name": "media.search",
-    "arguments": {
-        "query": "machine learning",
-        "limit": 10
-    }
-}
-```
-
-#### Server Status
-```bash
-GET /api/v1/mcp/status
-```
-
-## Available Tools
-
-The exact tool set depends on enabled modules. Common examples include:
-
-### Media
-- `media.search` - full-text search over media content
-- `media.get` - retrieve media content or snippet by id
-
-Example
-```json
-{
-  "tool_name": "media.search",
-  "arguments": { "query": "your search query", "limit": 10 }
-}
-```
-
-### Knowledge Tools (Unified)
-
-#### knowledge.search
-Unified FTS search across Notes, Media, Chats, Characters, and Prompts.
-```json
-{
-  "tool_name": "knowledge.search",
-  "arguments": {
-    "query": "topic or question",
-    "limit": 20,
-    "sources": ["notes", "media", "chats", "characters", "prompts"],
-    "snippet_length": 300,
-    "filters": { "media": { "media_types": ["pdf", "html"], "order_by": "relevance" } }
-  }
-}
-```
-
-#### knowledge.get
-Retrieve a specific item by source + id. Supports retrieval modes:
-`snippet`, `full`, `chunk`, `chunk_with_siblings`, and `auto`.
-```json
-{
-  "tool_name": "knowledge.get",
-  "arguments": {
-    "source": "media",
-    "id": 123,
-    "retrieval": { "mode": "chunk_with_siblings", "max_tokens": 6000, "chars_per_token": 4 }
-  }
-}
-```
-
-Notes:
-- When prechunked media exists, `media.search` attempts to return a precise `loc` with `chunk_index`.
-- `media.get` anchors by `chunk_index`/`chunk_uuid` when available and expands to sibling chunks under the token budget; otherwise it falls back to on-the-fly chunking.
-
-## Authentication
-
-### Getting a Token
-
-Production: obtain an AuthNZ JWT via the primary AuthNZ flow (outside MCP), or use an API key.
-
-Development/demo only: enable the MCP demo token endpoint, then request a token using the configured secret.
-```bash
-export MCP_ENABLE_DEMO_AUTH=1
-export MCP_DEMO_AUTH_SECRET='<strong-secret>'
-
-POST /api/v1/mcp/auth/token
-{ "username": "admin", "password": "<strong-secret>" }
-```
-
-### Using the Token
-
-#### WebSocket
-Prefer header or subprotocol:
-- Header: `Authorization: Bearer <token>`
-- Subprotocol: `Sec-WebSocket-Protocol: bearer,<token>`
-
-#### HTTP
-Include in Authorization header:
-```bash
-curl -H "Authorization: Bearer eyJ..." \
-  http://localhost:8000/api/v1/mcp/tools
-```
-
-## Examples
-
-### Example 1: Search and Retrieve
-
-```python
-import requests
-import json
-
-# Search across knowledge sources
-token = "<bearer token>"
-base = "http://localhost:8000/api/v1/mcp/tools/execute"
-headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-resp = requests.post(
-    base,
-    headers=headers,
-    json={
-        "tool_name": "knowledge.search",
-        "arguments": {"query": "artificial intelligence", "limit": 5}
-    },
-)
-results = resp.json()["result"]["results"]
-first = results[0]
-
-# Retrieve full content for the first hit (source + id)
-resp2 = requests.post(
-    base,
-    headers=headers,
-    json={
-        "tool_name": "knowledge.get",
-        "arguments": {"source": first["source"], "id": first["id"], "retrieval": {"mode": "full"}}
-    },
-)
-print(resp2.json()["result"])  # { meta, content, attachments }
-```
-
-### Example 2: Session Defaults via Safe Config
-
-You can provide per-session defaults (e.g., snippet lengths) via a base64-encoded JSON config.
-
-HTTP initialize with `mcp-session-id` negotiation and safe config:
-```bash
-cfg=$(printf '{"snippet_length": 200, "chars_per_token": 4}' | base64)
-curl -i -H "Authorization: Bearer <token>" \
-  "http://localhost:8000/api/v1/mcp/request?config=$cfg" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"clientInfo":{"name":"demo"}},"id":1}'
-```
-The response includes an `mcp-session-id` header. Reuse it on subsequent requests to apply the same safe config automatically.
-
-## Troubleshooting
-
-### Common Issues
-
-#### Connection Refused
-- **Check**: Is the server running?
-- **Solution**: Start the server with MCP module enabled
-- **Verify**: `curl http://localhost:8000/api/v1/mcp/health`
-
-#### Authentication Failed
-- **Check**: Are environment variables set?
-- **Solution**: Set `MCP_JWT_SECRET` and `MCP_API_KEY_SALT`; ensure you pass `Authorization` or `X-API-KEY`.
-- **Verify**: Check server logs for authentication errors
-
-#### Tool Not Found
-- **Check**: Is the module registered?
-- **Solution**: Verify module initialization in server logs
-- **List tools**: `GET /api/v1/mcp/tools`
-
-#### Rate Limit Exceeded
-- **Check**: Current rate limits
-- **Solution**: Implement exponential backoff
-- **Headers**: Check `X-RateLimit-Remaining` in response
-
-### Debug Mode
-Enable debug logging:
-```bash
-export MCP_LOG_LEVEL=DEBUG
-```
-
-### Support
-- Check server logs for detailed error messages
-- Review API documentation at `http://localhost:8000/docs`
-- Consult the Developer Guide for advanced usage
-## Tool Discovery & Catalogs
-
-Large deployments can organize tools into named catalogs to avoid dumping thousands of tools at once. Discovery accepts a catalog filter; RBAC still gates execution.
-
-- HTTP
-  - By name (resolved with precedence team > org > global):
-    ```bash
-    curl -H "Authorization: Bearer <token>" \
-      "http://localhost:8000/api/v1/mcp/tools?catalog=research"
-    ```
-  - By id (takes precedence over name):
-    ```bash
-    curl -H "Authorization: Bearer <token>" \
-      "http://localhost:8000/api/v1/mcp/tools?catalog_id=42"
-    ```
-
-- JSON-RPC
-  ```json
-  {
+curl -X POST http://127.0.0.1:8000/api/v1/mcp/request \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
     "jsonrpc": "2.0",
     "method": "tools/list",
-    "params": { "catalog": "research" },
-    "id": 1
-  }
-  ```
+    "params": {},
+    "id": 2
+  }'
+```
 
-Results include `canExecute` per tool to reflect your effective permissions. See `Docs/MCP/mcp_tool_catalogs.md` for creating and managing catalogs (global, org, team).
+Example `tools/call`:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/mcp/request \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "media.search",
+      "arguments": { "query": "retrieval augmented generation", "limit": 5 }
+    },
+    "id": 3
+  }'
+```
+
+### Convenience HTTP endpoints
+
+- `GET /api/v1/mcp/tools`
+- `POST /api/v1/mcp/tools/execute`
+- `GET /api/v1/mcp/modules`
+- `GET /api/v1/mcp/resources`
+- `GET /api/v1/mcp/prompts`
+
+The convenience endpoints map to MCP operations and keep the same RBAC behavior.
+
+### Sessions and safe config
+
+`/request` and `/request/batch` support:
+
+- `mcp-session-id` header
+- `config` query parameter (base64 JSON safe config)
+
+If `initialize` is sent without `mcp-session-id`, the server can return one in the response header. Reuse it on later requests.
+
+## 5. Using MCP Over WebSocket
+
+Endpoint:
+
+```text
+ws://127.0.0.1:8000/api/v1/mcp/ws
+```
+
+Recommended auth:
+
+- `Authorization: Bearer <token>` header
+- `X-API-KEY: <api_key>` header
+- `Sec-WebSocket-Protocol: bearer,<token>` subprotocol form
+
+Query auth (`?token=` or `?api_key=`) is disabled by default. Enable only for legacy clients with:
+
+- `MCP_WS_ALLOW_QUERY_AUTH=1`
+
+Minimal JavaScript example:
+
+```javascript
+const token = "<token>";
+const ws = new WebSocket(
+  "ws://127.0.0.1:8000/api/v1/mcp/ws?client_id=web-client",
+  ["bearer", token]
+);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    jsonrpc: "2.0",
+    method: "initialize",
+    params: { clientInfo: { name: "web-client", version: "1.0.0" } },
+    id: 1
+  }));
+};
+```
+
+## 6. Configure MCP Unified
+
+### Common environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MCP_JWT_SECRET` | auto-generated if missing | MCP JWT signing secret (set explicitly in production) |
+| `MCP_API_KEY_SALT` | auto-generated if missing | API key hashing salt |
+| `MCP_DATABASE_URL` | `sqlite+aiosqlite:///./Databases/mcp_unified.db` | MCP metadata storage |
+| `MCP_LOG_LEVEL` | `INFO` | MCP logging level |
+| `MCP_RATE_LIMIT_ENABLED` | `true` | Enables MCP rate limiting |
+| `MCP_RATE_LIMIT_RPM` | `60` | Requests/minute baseline |
+| `MCP_RATE_LIMIT_BURST` | `10` | Burst capacity |
+| `MCP_HTTP_MAX_BODY_BYTES` | `524288` | HTTP payload size guard |
+| `MCP_VALIDATE_INPUT_SCHEMA` | `true` | Schema validation for tool arguments |
+| `MCP_DISABLE_WRITE_TOOLS` | `false` | Global write-tool kill switch |
+| `MCP_IDEMPOTENCY_TTL_SECONDS` | `300` | Write idempotency cache TTL |
+| `MCP_WS_AUTH_REQUIRED` | `true` | Require auth on WS |
+| `MCP_WS_ALLOWED_ORIGINS` | local defaults | WS origin allowlist |
+| `MCP_ALLOWED_IPS` | `127.0.0.1,::1` | Allowed client IPs/CIDRs |
+| `MCP_BLOCKED_IPS` | empty | Explicit deny list |
+
+For full environment coverage, see `Docs/Operations/Env_Vars.md`.
+
+## 7. Configure Modules
+
+### YAML file (recommended)
+
+Default module config path:
+
+- `tldw_Server_API/Config_Files/mcp_modules.yaml`
+
+Override path:
+
+- `MCP_MODULES_CONFIG=/path/to/mcp_modules.yaml`
+
+Example:
+
+```yaml
+modules:
+  - id: media
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module:MediaModule
+    enabled: true
+    name: Media
+    version: "1.0.0"
+    department: media
+    timeout_seconds: 30
+    max_retries: 3
+    max_concurrent: 16
+    circuit_breaker_threshold: 3
+    circuit_breaker_timeout: 30
+    circuit_breaker_backoff_factor: 2.0
+    circuit_breaker_max_timeout: 180
+    settings:
+      db_path: Databases/user_databases/1/Media_DB_v2.db
+      cache_ttl: 300
+```
+
+### Environment variable registration (quick dev path)
+
+```bash
+export MCP_MODULES="my_module=tldw_Server_API.app.core.MCP_unified.modules.implementations.my_module:MyModule"
+```
+
+Optional default convenience flags:
+
+- `MCP_ENABLE_MEDIA_MODULE=true`
+- `MCP_ENABLE_SANDBOX_MODULE=true`
+
+### Module autoload safety rule
+
+Autoloaded module classes must be under:
+
+- `tldw_Server_API.app.core.MCP_unified.modules.implementations`
+
+Classes outside that namespace are ignored.
+
+## 8. Add a New Module
+
+### Step 1: Create module file
+
+Create a new implementation under:
+
+- `tldw_Server_API/app/core/MCP_unified/modules/implementations/`
+
+Use `template_module.py` as the starting pattern:
+
+```python
+from typing import Any
+
+from ..base import BaseModule, create_tool_definition
+
+
+class MyModule(BaseModule):
+    async def on_initialize(self) -> None:
+        return None
+
+    async def check_health(self) -> dict[str, bool]:
+        return {"initialized": True}
+
+    async def get_tools(self) -> list[dict[str, Any]]:
+        return [
+            create_tool_definition(
+                name="my.echo",
+                description="Echo message",
+                parameters={
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                },
+                metadata={"category": "read"},
+            )
+        ]
+
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
+        if tool_name == "my.echo":
+            return {"text": str(arguments.get("message", ""))}
+        raise ValueError(f"Unknown tool: {tool_name}")
+```
+
+### Step 2: Register module in YAML
+
+Add your module to `tldw_Server_API/Config_Files/mcp_modules.yaml`:
+
+```yaml
+modules:
+  - id: my_module
+    class: tldw_Server_API.app.core.MCP_unified.modules.implementations.my_module:MyModule
+    enabled: true
+    name: My Module
+    department: custom
+    settings: {}
+```
+
+### Step 3: Restart and verify
+
+Restart server, then verify:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://127.0.0.1:8000/api/v1/mcp/modules
+
+curl -H "Authorization: Bearer <token>" \
+  http://127.0.0.1:8000/api/v1/mcp/tools
+```
+
+If module loading fails, check server logs for import path or class resolution errors.
+
+## 9. Add Tools to an Existing Module
+
+When extending an existing module:
+
+1. Add tool schema in `get_tools()`
+2. Handle dispatch in `execute_tool(...)`
+3. Mark tool category in metadata (`read`, `ingestion`, `management`, etc.)
+4. For write tools, add strong validation in `validate_tool_arguments(...)`
+5. Add/adjust RBAC permission grants (`tools.execute:<tool_name>`)
+
+Detailed workflow: `Docs/MCP/Unified/Adding_Tools.md`
+
+## 10. Permissions and Tool Catalogs
+
+### Tool execution permissions
+
+Execution is controlled by per-tool permissions:
+
+- `tools.execute:<tool_name>`
+- `tools.execute:*` (wildcard)
+
+`POST /api/v1/mcp/tools/execute` requires authenticated context and permission.
+
+### Tool catalogs
+
+Catalogs reduce discovery noise by grouping tools. Use filters:
+
+- `GET /api/v1/mcp/tools?catalog=<name>`
+- `GET /api/v1/mcp/tools?catalog_id=<id>`
+- `GET /api/v1/mcp/tool_catalogs` (visible catalogs for current principal)
+
+Catalog membership affects discovery, not execution rights.
+
+Reference: `Docs/MCP/mcp_tool_catalogs.md`
+
+## 11. Troubleshooting
+
+### `503 Server not initialized` on `/health`
+
+- Call `/api/v1/mcp/status` first
+- Confirm server startup logs
+
+### `401 Authentication required` on tool execution
+
+- Pass `Authorization: Bearer <token>` or `X-API-KEY`
+- Check token/key validity and auth mode
+
+### `403 Permission denied` when calling a tool
+
+- Role likely lacks `tools.execute:<tool_name>`
+- Grant per-tool or wildcard permission
+
+### Tool missing from `/tools`
+
+- Confirm module is `enabled: true` in YAML
+- Confirm class path is under allowed implementations namespace
+- Restart server after config/module changes
+
+### WebSocket closes immediately
+
+- If close reason is auth related, verify token/key and `MCP_WS_AUTH_REQUIRED`
+- If close reason is origin/IP related, review `MCP_WS_ALLOWED_ORIGINS`, `MCP_ALLOWED_IPS`, and proxy setup
+
+## 12. Next Docs
+
+- Architecture and internals: `Docs/MCP/Unified/Developer_Guide.md`
+- Deployment and hardening: `Docs/MCP/Unified/System_Admin_Guide.md`
+- Module authoring: `Docs/MCP/Unified/Modules.md`
+- YAML module config details: `Docs/MCP/Unified/Using_Modules_YAML.md`
+- External federation module: `Docs/MCP/Unified/External_Federation.md`
+- Client snippets: `Docs/MCP/Unified/Client_Snippets.md`

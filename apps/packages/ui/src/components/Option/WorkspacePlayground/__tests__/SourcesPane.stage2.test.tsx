@@ -303,6 +303,20 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(screen.getByText("2 MB • 2m 5s")).toBeInTheDocument()
   })
 
+  it("prefers API-origin created date metadata when available", () => {
+    workspaceStoreState.sources = [
+      {
+        ...defaultSources[0],
+        sourceCreatedAt: new Date("2025-01-01T00:00:00.000Z")
+      }
+    ]
+
+    render(<SourcesPane />)
+
+    expect(screen.getByText("Created {{date}}")).toBeInTheDocument()
+    expect(screen.queryByText("Added {{date}}")).not.toBeInTheDocument()
+  })
+
   it("supports source preview annotations create, edit, and delete", async () => {
     render(<SourcesPane />)
 

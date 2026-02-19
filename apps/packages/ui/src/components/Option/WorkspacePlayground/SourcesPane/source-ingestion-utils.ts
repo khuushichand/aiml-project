@@ -44,6 +44,49 @@ const clampPositiveInt = (value: number): number | null => {
   return Math.floor(value)
 }
 
+const parseTimestampNumber = (value: number): number | null => {
+  if (!Number.isFinite(value) || value <= 0) return null
+  // Most APIs return UNIX seconds, milliseconds, or microseconds.
+  if (value > 1_000_000_000_000_000) return null
+  if (value >= 1_000_000_000_000) return Math.trunc(value)
+  if (value >= 1_000_000_000) return Math.trunc(value * 1000)
+  return null
+}
+
+export const parseSourceCreatedAt = (value: unknown): Date | undefined => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : value
+  }
+
+  if (typeof value === "number") {
+    const timestamp = parseTimestampNumber(value)
+    if (timestamp == null) return undefined
+    const parsed = new Date(timestamp)
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+
+    const numeric = Number(trimmed)
+    if (Number.isFinite(numeric)) {
+      const timestamp = parseTimestampNumber(numeric)
+      if (timestamp != null) {
+        const parsedFromNumeric = new Date(timestamp)
+        if (!Number.isNaN(parsedFromNumeric.getTime())) {
+          return parsedFromNumeric
+        }
+      }
+    }
+
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed
+  }
+
+  return undefined
+}
+
 export const resolveSourceUploadMaxSizeMb = (value: unknown): number => {
   if (typeof value === "number") {
     return clampPositiveInt(value) ?? DEFAULT_SOURCE_UPLOAD_MAX_SIZE_MB

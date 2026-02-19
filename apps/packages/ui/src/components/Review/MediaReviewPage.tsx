@@ -51,6 +51,21 @@ const getContent = (d: MediaDetail): string => {
   return extractMediaDetailContent(d)
 }
 
+const getErrorStatusCode = (error: unknown): number | null => {
+  if (!error || typeof error !== "object") return null
+  const candidate = error as Record<string, unknown>
+  const rawStatus =
+    candidate.status ??
+    (candidate.response &&
+    typeof candidate.response === "object" &&
+    (candidate.response as Record<string, unknown>).status != null
+      ? (candidate.response as Record<string, unknown>).status
+      : null) ??
+    candidate.statusCode
+  const parsed = Number(rawStatus)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 const MINIMAP_COLLAPSE_THRESHOLD = 8
 const SELECTION_WARNING_THRESHOLD = 25
 const UNDO_DURATION_SECONDS = 15
@@ -380,9 +395,17 @@ export const MediaReviewPage: React.FC = () => {
         next.delete(id)
         return next
       })
-    } catch {
+    } catch (error) {
       // Track failed fetch
       setFailedIds((prev) => new Set(prev).add(id))
+      const statusCode = getErrorStatusCode(error)
+      if (statusCode === 404 || statusCode === 410) {
+        setSelectedIds((prev) => {
+          const next = prev.filter((candidateId) => String(candidateId) !== String(id))
+          return next.length === prev.length ? prev : next
+        })
+        setFocusedId((prev) => (prev != null && String(prev) === String(id) ? null : prev))
+      }
     } finally {
       setDetailLoading((prev) => {
         const next = { ...prev }
@@ -391,6 +414,11 @@ export const MediaReviewPage: React.FC = () => {
       })
     }
   }, [data, detailLoading, details])
+
+  const ensureDetailRef = React.useRef(ensureDetail)
+  React.useEffect(() => {
+    ensureDetailRef.current = ensureDetail
+  }, [ensureDetail])
 
   const retryFetch = React.useCallback((id: string | number) => {
     // Clear from details to allow re-fetch
@@ -500,9 +528,9 @@ export const MediaReviewPage: React.FC = () => {
 
   React.useEffect(() => {
     selectedIds.forEach((id) => {
-      void ensureDetail(id)
+      void ensureDetailRef.current(id)
     })
-  }, [selectedIds, ensureDetail])
+  }, [selectedIds])
 
   const cardCls = orientation === 'vertical'
     ? 'border border-border rounded p-3 bg-surface w-full'

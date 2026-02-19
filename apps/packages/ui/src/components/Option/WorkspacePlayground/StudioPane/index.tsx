@@ -268,6 +268,9 @@ type ArtifactDiscussDetail = {
 const WORKSPACE_DISCUSS_EVENT = "workspace-playground:discuss-artifact"
 const VOICE_PREVIEW_TEXT =
   "This is a quick voice preview from your current audio settings."
+const OUTPUT_VIRTUALIZATION_THRESHOLD = 50
+const OUTPUT_VIRTUAL_ROW_HEIGHT = 150
+const OUTPUT_VIRTUAL_OVERSCAN = 4
 
 const isAbortLikeError = (error: unknown): boolean => {
   if ((error as { name?: string } | null)?.name === "AbortError") {
@@ -464,6 +467,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [outputsExpanded, setOutputsExpanded] = useState(true)
   const [notesExpanded, setNotesExpanded] = useState(true)
   const generationAbortRef = useRef<AbortController | null>(null)
+  const outputListContainerRef = useRef<HTMLDivElement | null>(null)
+  const [outputListScrollTop, setOutputListScrollTop] = useState(0)
+  const [outputListViewportHeight, setOutputListViewportHeight] = useState(320)
 
   const inferredTldwProviderKey = inferTldwProviderFromModel(audioSettings.model)
 
@@ -552,6 +558,37 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       { tokens: 0, costUsd: 0 }
     )
   }, [generatedArtifacts])
+  const useVirtualizedOutputs =
+    generatedArtifacts.length > OUTPUT_VIRTUALIZATION_THRESHOLD
+  const virtualOutputStartIndex = useVirtualizedOutputs
+    ? Math.max(
+        0,
+        Math.floor(outputListScrollTop / OUTPUT_VIRTUAL_ROW_HEIGHT) -
+          OUTPUT_VIRTUAL_OVERSCAN
+      )
+    : 0
+  const virtualOutputEndIndex = useVirtualizedOutputs
+    ? Math.min(
+        generatedArtifacts.length,
+        Math.ceil(
+          (outputListScrollTop + outputListViewportHeight) /
+            OUTPUT_VIRTUAL_ROW_HEIGHT
+        ) + OUTPUT_VIRTUAL_OVERSCAN
+      )
+    : generatedArtifacts.length
+  const visibleArtifacts = useVirtualizedOutputs
+    ? generatedArtifacts.slice(virtualOutputStartIndex, virtualOutputEndIndex)
+    : generatedArtifacts
+  const virtualOutputTopPadding = useVirtualizedOutputs
+    ? virtualOutputStartIndex * OUTPUT_VIRTUAL_ROW_HEIGHT
+    : 0
+  const virtualOutputBottomPadding = useVirtualizedOutputs
+    ? Math.max(
+        0,
+        (generatedArtifacts.length - virtualOutputEndIndex) *
+          OUTPUT_VIRTUAL_ROW_HEIGHT
+      )
+    : 0
 
   useEffect(() => {
     return () => {
@@ -571,6 +608,50 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       setNotesExpanded(true)
     }
   }, [noteFocusTarget, notesExpanded])
+
+  useEffect(() => {
+    const container = outputListContainerRef.current
+    if (!container) return
+
+    const syncViewportHeight = () => {
+      setOutputListViewportHeight(container.clientHeight || 320)
+    }
+
+    syncViewportHeight()
+
+    if (typeof ResizeObserver === "undefined") {
+      return
+    }
+
+    const observer = new ResizeObserver(() => {
+      syncViewportHeight()
+    })
+    observer.observe(container)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [outputsExpanded])
+
+  useEffect(() => {
+    if (!useVirtualizedOutputs) {
+      setOutputListScrollTop(0)
+      return
+    }
+
+    const container = outputListContainerRef.current
+    if (!container) return
+
+    const maxScrollTop = Math.max(
+      0,
+      generatedArtifacts.length * OUTPUT_VIRTUAL_ROW_HEIGHT - outputListViewportHeight
+    )
+
+    if (container.scrollTop > maxScrollTop) {
+      container.scrollTop = maxScrollTop
+      setOutputListScrollTop(maxScrollTop)
+    }
+  }, [generatedArtifacts.length, outputListViewportHeight, useVirtualizedOutputs])
 
   // Get voice options based on provider
   const getVoiceOptions = () => {
@@ -1598,9 +1679,20 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         </button>
         <div
           id="studio-generated-outputs-section"
+          ref={outputListContainerRef}
           hidden={!outputsExpanded}
           className="custom-scrollbar min-h-[10rem] overflow-y-auto px-4 pb-4"
           style={{ maxHeight: "40vh" }}
+          onScroll={(event) => {
+            if (!useVirtualizedOutputs) return
+            setOutputListScrollTop(event.currentTarget.scrollTop)
+          }}
+          data-virtualized={useVirtualizedOutputs ? "true" : "false"}
+          data-testid={
+            useVirtualizedOutputs
+              ? "generated-outputs-virtualized"
+              : "generated-outputs-standard"
+          }
         >
           {generatedArtifacts.length > 0 && (
             <div className="mb-2 rounded border border-border bg-surface/60 px-2.5 py-2 text-[11px] text-text-muted">
@@ -1624,8 +1716,18 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               }
             />
           ) : (
-            <div className="space-y-2">
-              {generatedArtifacts.map((artifact) => {
+            <div
+              className="space-y-2"
+              style={
+                useVirtualizedOutputs
+                  ? {
+                      paddingTop: virtualOutputTopPadding,
+                      paddingBottom: virtualOutputBottomPadding
+                    }
+                  : undefined
+              }
+            >
+              {visibleArtifacts.map((artifact) => {
                 const Icon = ARTIFACT_TYPE_ICONS[artifact.type] || FileText
                 const StatusConfig = STATUS_ICONS[artifact.status]
                 const StatusIcon = StatusConfig.icon

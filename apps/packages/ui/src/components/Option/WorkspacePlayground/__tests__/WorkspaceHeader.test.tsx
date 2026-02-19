@@ -14,6 +14,9 @@ const mockDeleteWorkspace = vi.fn()
 const mockSaveCurrentWorkspace = vi.fn()
 const mockSetWorkspaceName = vi.fn()
 const mockSetCurrentNote = vi.fn()
+const mockCreateWorkspaceExportZipBlob = vi.fn()
+const mockCreateWorkspaceExportZipFilename = vi.fn()
+const mockParseWorkspaceImportFile = vi.fn()
 
 const now = new Date("2026-02-18T12:00:00.000Z")
 
@@ -98,6 +101,21 @@ vi.mock("@/store/workspace", () => ({
   ) => selector(mockStoreState)
 }))
 
+vi.mock("@/store/workspace-bundle", async () => {
+  const actual = await vi.importActual<typeof import("@/store/workspace-bundle")>(
+    "@/store/workspace-bundle"
+  )
+  return {
+    ...actual,
+    createWorkspaceExportZipBlob: (...args: unknown[]) =>
+      mockCreateWorkspaceExportZipBlob(...args),
+    createWorkspaceExportZipFilename: (...args: unknown[]) =>
+      mockCreateWorkspaceExportZipFilename(...args),
+    parseWorkspaceImportFile: (...args: unknown[]) =>
+      mockParseWorkspaceImportFile(...args)
+  }
+})
+
 if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
     observe() {}
@@ -144,6 +162,44 @@ describe("WorkspaceHeader workspace browser modal", () => {
       }
     })
     mockImportWorkspaceBundle.mockReturnValue("workspace-imported")
+    mockCreateWorkspaceExportZipBlob.mockResolvedValue(
+      new Blob(["zip-bytes"], { type: "application/zip" })
+    )
+    mockCreateWorkspaceExportZipFilename.mockReturnValue("alpha.workspace.zip")
+    mockParseWorkspaceImportFile.mockResolvedValue({
+      format: "tldw.workspace-playground.bundle",
+      schemaVersion: 1,
+      exportedAt: "2026-02-18T12:00:00.000Z",
+      workspace: {
+        name: "Imported",
+        tag: "workspace:imported",
+        createdAt: "2026-02-18T10:00:00.000Z",
+        snapshot: {
+          workspaceName: "Imported",
+          workspaceTag: "workspace:imported",
+          workspaceCreatedAt: "2026-02-18T10:00:00.000Z",
+          sources: [],
+          selectedSourceIds: [],
+          generatedArtifacts: [],
+          notes: "",
+          currentNote: {
+            title: "",
+            content: "",
+            keywords: [],
+            isDirty: false
+          },
+          leftPaneCollapsed: false,
+          rightPaneCollapsed: false,
+          audioSettings: {
+            provider: "tldw",
+            model: "kokoro",
+            voice: "af_heart",
+            speed: 1,
+            format: "mp3"
+          }
+        }
+      }
+    })
   })
 
   it("opens view-all modal and filters workspaces by search query", async () => {
@@ -214,7 +270,43 @@ describe("WorkspaceHeader workspace browser modal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
     fireEvent.click(await screen.findByText("Export Workspace"))
 
-    expect(mockExportWorkspaceBundle).toHaveBeenCalledWith("workspace-alpha")
+    await waitFor(() => {
+      expect(mockExportWorkspaceBundle).toHaveBeenCalledWith("workspace-alpha")
+      expect(mockCreateWorkspaceExportZipBlob).toHaveBeenCalledTimes(1)
+      expect(mockCreateWorkspaceExportZipFilename).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it("falls back to JSON export when ZIP creation fails", async () => {
+    mockCreateWorkspaceExportZipBlob.mockRejectedValueOnce(
+      new Error("zip unavailable")
+    )
+    const createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:workspace-export")
+    const revokeObjectUrlSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined)
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Export Workspace"))
+
+    await waitFor(() => {
+      expect(createObjectUrlSpy).toHaveBeenCalled()
+    })
+
+    const exportedBlob = createObjectUrlSpy.mock.calls[0]?.[0] as Blob
+    expect(exportedBlob.type).toContain("application/json")
+    expect(revokeObjectUrlSpy).toHaveBeenCalledWith("blob:workspace-export")
   })
 
   it("exports workspace citations in BibTeX format", async () => {
@@ -276,51 +368,42 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     const input = screen.getByTestId("workspace-import-input")
-    const file = new File(
-      [
-        JSON.stringify({
-          format: "tldw.workspace-playground.bundle",
-          schemaVersion: 1,
-          exportedAt: "2026-02-18T12:00:00.000Z",
-          workspace: {
-            name: "Imported",
-            tag: "workspace:imported",
-            createdAt: "2026-02-18T10:00:00.000Z",
-            snapshot: {
-              workspaceName: "Imported",
-              workspaceTag: "workspace:imported",
-              workspaceCreatedAt: "2026-02-18T10:00:00.000Z",
-              sources: [],
-              selectedSourceIds: [],
-              generatedArtifacts: [],
-              notes: "",
-              currentNote: {
-                title: "",
-                content: "",
-                keywords: [],
-                isDirty: false
-              },
-              leftPaneCollapsed: false,
-              rightPaneCollapsed: false,
-              audioSettings: {
-                provider: "tldw",
-                model: "kokoro",
-                voice: "af_heart",
-                speed: 1,
-                format: "mp3"
-              }
-            }
-          }
-        })
-      ],
-      "workspace.json",
-      { type: "application/json" }
-    )
+    const file = new File(["{}"], "workspace.json", {
+      type: "application/json"
+    })
 
     fireEvent.change(input, { target: { files: [file] } })
 
     await waitFor(() => {
+      expect(mockParseWorkspaceImportFile).toHaveBeenCalledWith(file)
       expect(mockImportWorkspaceBundle).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it("accepts ZIP workspace imports via the hidden file input", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    const input = screen.getByTestId("workspace-import-input")
+    expect(input).toHaveAttribute(
+      "accept",
+      ".json,.workspace.json,.zip,.workspace.zip"
+    )
+
+    const zipFile = new File(["zip"], "workspace.workspace.zip", {
+      type: "application/zip"
+    })
+    fireEvent.change(input, { target: { files: [zipFile] } })
+
+    await waitFor(() => {
+      expect(mockParseWorkspaceImportFile).toHaveBeenCalledWith(zipFile)
+      expect(mockImportWorkspaceBundle).toHaveBeenCalled()
     })
   })
 })

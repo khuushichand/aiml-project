@@ -29,6 +29,7 @@ import {
 } from "@/utils/message-variants"
 import { PlaygroundMessage } from "@/components/Common/Playground/Message"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import { buildChatLorebookDebugPath } from "@/routes/route-paths"
 import {
   WORKSPACE_SOURCE_DRAG_TYPE,
   parseWorkspaceSourceDragPayload
@@ -54,7 +55,9 @@ type LorebookActivityTurn = {
 
 const LOREBOOK_ACTIVITY_PAGE_SIZE = 8
 const LOREBOOK_ACTIVITY_EXPORT_PAGE_SIZE = 200
-const LOREBOOK_DEBUG_ENTRYPOINT_HREF = "/playground?focus=lorebook-debug"
+const LOREBOOK_DEBUG_ENTRYPOINT_HREF = buildChatLorebookDebugPath({
+  from: "workspace-playground"
+})
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
@@ -630,6 +633,13 @@ type WorkspaceDiscussArtifactDetail = {
   content: string
 }
 
+type TemporarySourceScope = {
+  sourceId: string
+  sourceTitle: string
+  previousSelectedSourceIds: string[]
+  previousPreferredChatMode: ChatModePreference | null
+}
+
 const buildCapturedMessageTitle = (
   isBot: boolean,
   text: string,
@@ -720,6 +730,8 @@ export const ChatPane: React.FC = () => {
   const [showAdvancedRagSettings, setShowAdvancedRagSettings] = React.useState(
     false
   )
+  const [temporarySourceScope, setTemporarySourceScope] =
+    React.useState<TemporarySourceScope | null>(null)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
   const [lorebookActivityTurns, setLorebookActivityTurns] = React.useState<
     LorebookActivityTurn[]
@@ -739,6 +751,9 @@ export const ChatPane: React.FC = () => {
     {}
   )
   const previousSelectedSourcesRef = React.useRef<string[]>(selectedSourceIds)
+  const selectedSourceIdsRef = React.useRef<string[]>(selectedSourceIds)
+  const temporarySourceScopeRef = React.useRef<TemporarySourceScope | null>(null)
+  const suppressSourceContextWarningRef = React.useRef(false)
   const selectedSourcesInitializedRef = React.useRef(false)
   const workspaceSessionId = workspaceId || WORKSPACE_CONVERSATION_ID
 
@@ -865,9 +880,59 @@ export const ChatPane: React.FC = () => {
   }, [hasSelectedSources, showAdvancedRagSettings])
 
   React.useEffect(() => {
+    selectedSourceIdsRef.current = selectedSourceIds
+  }, [selectedSourceIds])
+
+  React.useEffect(() => {
+    temporarySourceScopeRef.current = temporarySourceScope
+  }, [temporarySourceScope])
+
+  React.useEffect(() => {
+    if (!temporarySourceScope) return
+    if (selectedSourceIds.includes(temporarySourceScope.sourceId)) return
+    setTemporarySourceScope(null)
+  }, [selectedSourceIds, temporarySourceScope])
+
+  const applyScopedSelection = React.useCallback(
+    (nextSelectedSourceIds: string[]) => {
+      suppressSourceContextWarningRef.current = true
+      setSelectedSourceIds(nextSelectedSourceIds)
+    },
+    [setSelectedSourceIds]
+  )
+
+  const restoreTemporaryScope = React.useCallback(
+    (reason: "manual" | "auto", explicitScope?: TemporarySourceScope) => {
+      const activeScope = explicitScope ?? temporarySourceScopeRef.current
+      if (!activeScope) return
+
+      applyScopedSelection(activeScope.previousSelectedSourceIds)
+      setPreferredChatMode(activeScope.previousPreferredChatMode)
+      setTemporarySourceScope(null)
+
+      if (reason === "manual") {
+        messageApi.info({
+          duration: 3,
+          content: t(
+            "playground:chat.dragScopedRestored",
+            "Restored your previous source selection."
+          )
+        })
+      }
+    },
+    [applyScopedSelection, messageApi, t]
+  )
+
+  React.useEffect(() => {
     if (!selectedSourcesInitializedRef.current) {
       previousSelectedSourcesRef.current = selectedSourceIds
       selectedSourcesInitializedRef.current = true
+      return
+    }
+
+    if (suppressSourceContextWarningRef.current) {
+      suppressSourceContextWarningRef.current = false
+      previousSelectedSourcesRef.current = selectedSourceIds
       return
     }
 
@@ -1015,6 +1080,15 @@ export const ChatPane: React.FC = () => {
     setSubmitError(null)
     try {
       await onSubmit({ message, image: "" })
+      const activeScope = temporarySourceScopeRef.current
+      if (activeScope) {
+        const selectedIds = selectedSourceIdsRef.current
+        const isStillScopedToDroppedSource =
+          selectedIds.length === 1 && selectedIds[0] === activeScope.sourceId
+        if (isStillScopedToDroppedSource) {
+          restoreTemporaryScope("auto", activeScope)
+        }
+      }
     } catch {
       setSubmitError(
         t(
@@ -1094,7 +1168,13 @@ export const ChatPane: React.FC = () => {
       )
       if (!payload) return
 
-      setSelectedSourceIds([payload.sourceId])
+      setTemporarySourceScope({
+        sourceId: payload.sourceId,
+        sourceTitle: payload.title,
+        previousSelectedSourceIds: [...selectedSourceIdsRef.current],
+        previousPreferredChatMode: preferredChatMode
+      })
+      applyScopedSelection([payload.sourceId])
       setPreferredChatMode("rag")
 
       const promptTemplate = t(
@@ -1112,7 +1192,7 @@ export const ChatPane: React.FC = () => {
         ).replace("{{title}}", payload.title)
       })
     },
-    [messageApi, setSelectedSourceIds, t]
+    [applyScopedSelection, messageApi, preferredChatMode, t]
   )
 
   const handleClearChat = () => {
@@ -1586,6 +1666,27 @@ export const ChatPane: React.FC = () => {
                 "playground:chat.dropZoneHint",
                 "Drop source to scope chat and start a source-specific question."
               )}
+            </div>
+          )}
+          {temporarySourceScope && (
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+              <p className="text-text">
+                {t(
+                  "playground:chat.dragScopedTemporary",
+                  'Temporarily scoped to "{{title}}".',
+                  { title: temporarySourceScope.sourceTitle }
+                ).replace("{{title}}", temporarySourceScope.sourceTitle)}
+              </p>
+              <button
+                type="button"
+                onClick={() => restoreTemporaryScope("manual")}
+                className="rounded border border-border bg-surface px-2 py-1 text-text-muted transition hover:text-text"
+              >
+                {t(
+                  "playground:chat.restorePreviousSelection",
+                  "Restore previous selection"
+                )}
+              </button>
             </div>
           )}
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

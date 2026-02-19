@@ -114,7 +114,13 @@ describe("AddSourceModal Stage 1 ingestion safety", () => {
     expect(screen.getByText("Uploading")).toBeInTheDocument()
 
     resolveUpload?.({
-      results: [{ media_id: 321, title: "Uploaded Report" }]
+      results: [
+        {
+          media_id: 321,
+          title: "Uploaded Report",
+          created_at: "2026-02-18T09:00:00.000Z"
+        }
+      ]
     })
 
     await waitFor(() => {
@@ -122,7 +128,8 @@ describe("AddSourceModal Stage 1 ingestion safety", () => {
         expect.objectContaining({
           mediaId: 321,
           title: "Uploaded Report",
-          status: "processing"
+          status: "processing",
+          sourceCreatedAt: expect.any(Date)
         })
       )
     })

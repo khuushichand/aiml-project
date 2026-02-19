@@ -597,7 +597,8 @@ const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
     ...source,
     status: source.status || "ready",
     statusMessage: source.statusMessage || undefined,
-    addedAt: reviveDateOrNull(source.addedAt) || new Date()
+    addedAt: reviveDateOrNull(source.addedAt) || new Date(),
+    sourceCreatedAt: reviveDateOrUndefined(source.sourceCreatedAt)
   }))
 
 const getWorkspaceSourceStatus = (

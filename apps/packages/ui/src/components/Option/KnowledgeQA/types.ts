@@ -4,6 +4,21 @@
 
 import type { RagSettings, RagPresetName } from "@/services/rag/unified-rag"
 
+export type QueryStage =
+  | "idle"
+  | "searching"
+  | "ranking"
+  | "generating"
+  | "verifying"
+  | "complete"
+  | "error"
+
+export type ScopeSnapshot = {
+  preset: RagPresetName
+  sources: string[]
+  webFallback: boolean
+}
+
 // Retrieved document with citation info
 export type RagResult = {
   id?: string
@@ -151,6 +166,10 @@ export type KnowledgeQAState = {
   // UI state
   settingsPanelOpen: boolean
   focusedSourceIndex: number | null
+  evidenceRailOpen: boolean
+  evidenceRailTab: "sources" | "details"
+  queryStage: QueryStage
+  lastSearchScope: ScopeSnapshot | null
 }
 
 // Actions for KnowledgeQA
@@ -185,6 +204,9 @@ export type KnowledgeQAActions = {
   setSettingsPanelOpen: (open: boolean) => void
   setHistorySidebarOpen: (open: boolean) => void
   focusSource: (index: number | null) => void
+  setEvidenceRailOpen: (open: boolean) => void
+  setEvidenceRailTab: (tab: "sources" | "details") => void
+  setQueryStage: (stage: QueryStage) => void
 
   // Citation actions
   persistRagContext: (messageId: string, context: RagContextData) => Promise<boolean>

@@ -444,10 +444,15 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
     if (fileSizeLabel) metadataParts.push(fileSizeLabel)
     if (durationLabel) metadataParts.push(durationLabel)
     if (pageCountLabel) metadataParts.push(pageCountLabel)
+    const sourceDate = source.sourceCreatedAt || source.addedAt
     metadataParts.push(
-      t("playground:sources.addedAt", "Added {{date}}", {
-        date: source.addedAt.toLocaleDateString()
-      })
+      source.sourceCreatedAt
+        ? t("playground:sources.createdAt", "Created {{date}}", {
+            date: sourceDate.toLocaleDateString()
+          })
+        : t("playground:sources.addedAt", "Added {{date}}", {
+            date: sourceDate.toLocaleDateString()
+          })
     )
     const metadataPreview = metadataParts.slice(0, 2).join(" • ")
     const metadataTooltip = metadataParts.join(" • ")

@@ -25,6 +25,13 @@ const BACKEND_UNREACHABLE_PATTERN =
 const errorLogHistory = new Map<string, number>()
 let lastBackendUnreachableEventAt = 0
 
+const normalizeKnownPathQuirks = <P extends PathOrUrl>(rawPath: P): P => {
+  if (typeof rawPath !== "string") return rawPath
+  return rawPath
+    .replace("/api/v1/media/?", "/api/v1/media?")
+    .replace("/api/v1/files/?", "/api/v1/files?") as P
+}
+
 const isRateLimitEntry = (entry: { status?: number; error?: string }): boolean => {
   if (entry.status === 429) return true
   const msg = String(entry.error || "").toLowerCase()
@@ -227,7 +234,7 @@ export async function bgRequest<
   M extends AllowedMethodFor<P> = AllowedMethodFor<P>
 >(init: BgRequestInit<P, M>): Promise<T> {
   const {
-    path,
+    path: rawPath,
     method = 'GET' as UpperLower<M>,
     headers = {},
     body,
@@ -237,6 +244,7 @@ export async function bgRequest<
     responseType,
     returnResponse
   } = init
+  const path = normalizeKnownPathQuirks(rawPath)
   const isAbsoluteUrl = typeof path === "string" && /^https?:/i.test(path)
   const noAuthExplicit = Object.prototype.hasOwnProperty.call(init, "noAuth")
   const resolvedNoAuth = noAuthExplicit ? noAuth : (noAuth || isAbsoluteUrl)

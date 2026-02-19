@@ -124,4 +124,28 @@ describe("PromptActionsMenu", () => {
     await user.click(quickTestItem)
     expect(onQuickTest).toHaveBeenCalledTimes(1)
   })
+
+  it("hides inline use button when inlineUseInChat is disabled and keeps overflow use action", async () => {
+    const user = userEvent.setup()
+    const onUseInChat = vi.fn()
+
+    render(
+      <PromptActionsMenu
+        promptId="p5"
+        syncStatus="local"
+        inlineUseInChat={false}
+        onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
+        onUseInChat={onUseInChat}
+        onDelete={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByTestId("prompt-use-p5")).not.toBeInTheDocument()
+
+    const useInChatItem = screen.getByTestId("menu-item-useInChat")
+    expect(useInChatItem).toBeInTheDocument()
+    await user.click(useInChatItem)
+    expect(onUseInChat).toHaveBeenCalledTimes(1)
+  })
 })

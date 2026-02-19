@@ -12,6 +12,49 @@ from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.config import settings as core_settings
 
 
+def test_session_key_path_defaults_to_api_storage(monkeypatch, tmp_path):
+    monkeypatch.delenv("SESSION_KEY_STORAGE", raising=False)
+    monkeypatch.setitem(core_settings, "PROJECT_ROOT", tmp_path)
+
+    manager = object.__new__(SessionManager)
+    assert manager._resolve_persisted_key_path() == manager._resolve_api_key_path()
+
+
+def test_session_key_path_supports_legacy_project_storage(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_KEY_STORAGE", "project")
+    monkeypatch.setitem(core_settings, "PROJECT_ROOT", tmp_path)
+
+    manager = object.__new__(SessionManager)
+    expected = (tmp_path / "Config_Files" / "session_encryption.key").resolve()
+    assert manager._resolve_persisted_key_path() == expected
+
+
+@pytest.mark.asyncio
+async def test_session_manager_default_storage_avoids_project_root_config_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("SESSION_KEY_STORAGE", raising=False)
+    project_root = tmp_path / "repo_root"
+    monkeypatch.setitem(core_settings, "PROJECT_ROOT", project_root)
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/auth.db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "default-storage-secret-key-abcdefghijklmnopqrstuvwxyz")
+    reset_settings()
+
+    api_key_path = tmp_path / "api_root" / "Config_Files" / "session_encryption.key"
+    monkeypatch.setattr(SessionManager, "_resolve_api_key_path", lambda self: api_key_path, raising=False)
+
+    try:
+        manager = SessionManager()
+        encrypted = manager.encrypt_token("default-path-check")
+        assert manager.decrypt_token(encrypted) == "default-path-check"
+        assert api_key_path.exists(), "Session key should be persisted to API storage by default"
+        assert not (project_root / "Config_Files").exists(), "Project-root Config_Files should not be created by default"
+    finally:
+        await reset_session_manager()
+        for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY", "SESSION_KEY_STORAGE"):
+            monkeypatch.delenv(env_key, raising=False)
+        reset_settings()
+
+
 @pytest.mark.asyncio
 async def test_session_manager_accepts_configured_fernet_key(monkeypatch):
     key = Fernet.generate_key().decode("utf-8")
@@ -105,6 +148,7 @@ async def test_session_manager_uses_secondary_secret_on_rotation(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_session_manager_rejects_symlink_persistence(monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSION_KEY_STORAGE", "project")
     monkeypatch.setitem(core_settings, "PROJECT_ROOT", tmp_path)
     key_path = tmp_path / "Config_Files" / "session_encryption.key"
     key_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +170,7 @@ async def test_session_manager_rejects_insecure_key_permissions(monkeypatch, tmp
         pytest.skip("OS does not expose uid/gid for permission enforcement")
 
     monkeypatch.setitem(core_settings, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("SESSION_KEY_STORAGE", "project")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/auth.db")
     monkeypatch.setenv("JWT_SECRET_KEY", "perm-test-secret-key-0123456789abcdef0123456789abcdef")
@@ -146,6 +191,6 @@ async def test_session_manager_rejects_insecure_key_permissions(monkeypatch, tmp
         assert mode & (stat.S_IRWXG | stat.S_IRWXO) == 0
     finally:
         await reset_session_manager()
-        for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY"):
+        for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY", "SESSION_KEY_STORAGE"):
             monkeypatch.delenv(env_key, raising=False)
         reset_settings()

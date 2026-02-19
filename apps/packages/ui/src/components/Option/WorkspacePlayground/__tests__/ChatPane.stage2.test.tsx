@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ConnectionPhase } from "@/types/connection"
 import { ChatPane } from "../ChatPane"
@@ -59,6 +59,16 @@ const workspaceStoreState = {
   saveWorkspaceChatSession: mockSaveWorkspaceChatSession,
   getWorkspaceChatSession: mockGetWorkspaceChatSession
 }
+
+const deriveSelectedSources = () =>
+  workspaceStoreState.sources.filter((source) =>
+    workspaceStoreState.selectedSourceIds.includes(source.id)
+  )
+
+const deriveSelectedMediaIds = () =>
+  deriveSelectedSources()
+    .map((source) => source.mediaId)
+    .filter((mediaId): mediaId is number => Number.isFinite(mediaId))
 
 const messageOptionState = {
   messages: [] as Array<{
@@ -267,13 +277,16 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
     workspaceStoreState.workspaceChatReferenceId = "workspace-a"
     workspaceStoreState.sources = []
     workspaceStoreState.selectedSourceIds = []
-    workspaceStoreState.getSelectedSources = () => []
-    workspaceStoreState.getSelectedMediaIds = () => []
+    workspaceStoreState.getSelectedSources = deriveSelectedSources
+    workspaceStoreState.getSelectedMediaIds = deriveSelectedMediaIds
     workspaceStoreState.chatFocusTarget = null
 
     mockFocusSourceById.mockReturnValue(true)
     mockFocusSourceByMediaId.mockReturnValue(true)
     mockSetSelectedSourceIds.mockReset()
+    mockSetSelectedSourceIds.mockImplementation((ids: string[]) => {
+      workspaceStoreState.selectedSourceIds = [...ids]
+    })
     mockGetWorkspaceChatSession.mockReturnValue(null)
 
     messageOptionState.messages = []
@@ -446,9 +459,159 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
     fireEvent.drop(dropZone, { dataTransfer })
 
     expect(mockSetSelectedSourceIds).toHaveBeenCalledWith(["source-drag"])
-    const input = screen.getByPlaceholderText("Type a message...") as HTMLTextAreaElement
+    const input = screen.getByPlaceholderText(
+      "Ask about your sources..."
+    ) as HTMLTextAreaElement
     expect(input.value).toContain("Dragged Source")
+    expect(
+      screen.getByRole("button", { name: "Restore previous selection" })
+    ).toBeInTheDocument()
     expect(mockMessageInfo).toHaveBeenCalled()
+  })
+
+  it("restores previous source selection with explicit restore action", () => {
+    workspaceStoreState.selectedSourceIds = ["source-a", "source-b"]
+    workspaceStoreState.sources = [
+      {
+        id: "source-a",
+        mediaId: 71,
+        title: "Source A",
+        type: "pdf"
+      },
+      {
+        id: "source-b",
+        mediaId: 72,
+        title: "Source B",
+        type: "pdf"
+      },
+      {
+        id: "source-drag",
+        mediaId: 77,
+        title: "Dragged Source",
+        type: "pdf"
+      }
+    ]
+
+    render(<ChatPane />)
+
+    const dropZone = screen.getByTestId("chat-drop-zone")
+    const dataTransfer = {
+      types: [WORKSPACE_SOURCE_DRAG_TYPE],
+      getData: (type: string) =>
+        type === WORKSPACE_SOURCE_DRAG_TYPE
+          ? JSON.stringify({
+              sourceId: "source-drag",
+              mediaId: 77,
+              title: "Dragged Source",
+              type: "pdf"
+            })
+          : "",
+      dropEffect: ""
+    }
+
+    fireEvent.dragOver(dropZone, { dataTransfer })
+    fireEvent.drop(dropZone, { dataTransfer })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore previous selection" })
+    )
+
+    expect(mockSetSelectedSourceIds).toHaveBeenNthCalledWith(1, ["source-drag"])
+    expect(mockSetSelectedSourceIds).toHaveBeenNthCalledWith(2, [
+      "source-a",
+      "source-b"
+    ])
+  })
+
+  it("auto-restores previous source selection after sending with temporary scope", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-a", "source-b"]
+    workspaceStoreState.sources = [
+      {
+        id: "source-a",
+        mediaId: 71,
+        title: "Source A",
+        type: "pdf"
+      },
+      {
+        id: "source-b",
+        mediaId: 72,
+        title: "Source B",
+        type: "pdf"
+      },
+      {
+        id: "source-drag",
+        mediaId: 77,
+        title: "Dragged Source",
+        type: "pdf"
+      }
+    ]
+    workspaceStoreState.getSelectedSources = () => [
+      {
+        id: "source-a",
+        mediaId: 71,
+        title: "Source A",
+        type: "pdf"
+      },
+      {
+        id: "source-b",
+        mediaId: 72,
+        title: "Source B",
+        type: "pdf"
+      }
+    ]
+    workspaceStoreState.getSelectedMediaIds = () => [71, 72]
+    messageOptionState.messages = [
+      {
+        id: "m1",
+        isBot: true,
+        name: "Assistant",
+        message: "Previous response",
+        sources: []
+      }
+    ]
+
+    render(<ChatPane />)
+
+    const dropZone = screen.getByTestId("chat-drop-zone")
+    const dataTransfer = {
+      types: [WORKSPACE_SOURCE_DRAG_TYPE],
+      getData: (type: string) =>
+        type === WORKSPACE_SOURCE_DRAG_TYPE
+          ? JSON.stringify({
+              sourceId: "source-drag",
+              mediaId: 77,
+              title: "Dragged Source",
+              type: "pdf"
+            })
+          : "",
+      dropEffect: ""
+    }
+
+    fireEvent.dragOver(dropZone, { dataTransfer })
+    fireEvent.drop(dropZone, { dataTransfer })
+
+    const input = screen.getByPlaceholderText("Ask about your sources...")
+    fireEvent.change(input, { target: { value: "Question scoped to dropped source" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalledWith({
+        message: "Question scoped to dropped source",
+        image: ""
+      })
+    })
+
+    await waitFor(() => {
+      expect(mockSetSelectedSourceIds).toHaveBeenLastCalledWith([
+        "source-a",
+        "source-b"
+      ])
+    })
+
+    expect(mockMessageInfo).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "workspace-playground:source-context-warning"
+      })
+    )
   })
 
   it("shows a context change warning when sources are deselected mid-thread", () => {

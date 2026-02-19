@@ -44,7 +44,6 @@ import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
 import OptionChat from "./option-chat"
-import OptionWorkspacePlayground from "./option-workspace-playground"
 import OptionMediaMulti from "./option-media-multi"
 import OptionMedia from "./option-media"
 
@@ -196,7 +195,8 @@ const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
-// OptionWorkspacePlayground and OptionChat are eagerly imported above
+const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
+// OptionChat is eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   { kind: "options", path: "/", element: <OptionIndex /> },

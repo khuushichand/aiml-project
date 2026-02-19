@@ -49,10 +49,10 @@ const getStorageFlag = async (key: string): Promise<boolean> => {
 
 const getOfflineBypassFlag = async (): Promise<boolean> => {
   // Build-time flag for Playwright/CI: VITE_TLDW_E2E_ALLOW_OFFLINE=true
-  const meta = import.meta as unknown as {
-    env?: { VITE_TLDW_E2E_ALLOW_OFFLINE?: string }
-  }
-  if (meta?.env?.VITE_TLDW_E2E_ALLOW_OFFLINE === "true") {
+  const env = import.meta.env as
+    | { VITE_TLDW_E2E_ALLOW_OFFLINE?: string }
+    | undefined
+  if (env?.VITE_TLDW_E2E_ALLOW_OFFLINE === "true") {
     return true
   }
 

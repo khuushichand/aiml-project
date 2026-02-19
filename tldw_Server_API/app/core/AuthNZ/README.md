@@ -67,10 +67,10 @@ Note: This README follows the project-wide template to help contributors quickly
 - Purpose: Encrypts session tokens at rest using Fernet.
 - Configure explicitly with `SESSION_ENCRYPTION_KEY` (urlsafe base64, 32-byte key when decoded). If not set, a key is persisted to disk.
 - Persistence locations (searched in order):
-  - Default: `PROJECT_ROOT/Config_Files/session_encryption.key` (tests set `core_settings["PROJECT_ROOT"]`).
-  - Fallback/alternate: `tldw_Server_API/Config_Files/session_encryption.key`.
-- Force API path storage: set `SESSION_KEY_STORAGE=api` to persist and prefer `tldw_Server_API/Config_Files/session_encryption.key`.
-  - On startup, if a valid key exists at project root and the API path is missing/invalid, the manager migrates the key to the API path (0600 perms) and logs a notice.
+  - Default: `tldw_Server_API/Config_Files/session_encryption.key`.
+  - Legacy fallback: `PROJECT_ROOT/Config_Files/session_encryption.key`.
+- Legacy storage opt-in: set `SESSION_KEY_STORAGE=project` to persist and prefer `PROJECT_ROOT/Config_Files/session_encryption.key`.
+  - In API mode (default), if a valid key exists at project root and the API path is missing/invalid, the manager migrates the key to the API path (0600 perms) and logs a notice.
 - Security: file must be a regular file, owned by the current user, and is written with `0600` permissions; symlinks and invalid contents are rejected.
 - Concurrency & Performance:
   - Async DB paths for asyncpg/aiosqlite; Redis-backed counters when available.

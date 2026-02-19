@@ -32,9 +32,14 @@ const SUGGESTION_SOURCE_LABELS: Record<QuerySuggestion["source"], string> = {
 type SearchBarProps = {
   className?: string
   autoFocus?: boolean
+  showWebToggle?: boolean
 }
 
-export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
+export function SearchBar({
+  className,
+  autoFocus = true,
+  showWebToggle = true,
+}: SearchBarProps) {
   const {
     query,
     setQuery,
@@ -390,22 +395,24 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
               Stop
             </button>
           )}
-          <button
-            type="button"
-            onClick={() =>
-              updateSetting("enable_web_fallback", !settings.enable_web_fallback)
-            }
-            className={cn(
-              "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
-              settings.enable_web_fallback
-                ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border hover:bg-muted"
-            )}
-            aria-pressed={settings.enable_web_fallback}
-            title="Falls back to web search when local source relevance is below threshold (configurable in settings)."
-          >
-            Web search {settings.enable_web_fallback ? "on" : "off"}
-          </button>
+          {showWebToggle ? (
+            <button
+              type="button"
+              onClick={() =>
+                updateSetting("enable_web_fallback", !settings.enable_web_fallback)
+              }
+              className={cn(
+                "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
+                settings.enable_web_fallback
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border hover:bg-muted"
+              )}
+              aria-pressed={settings.enable_web_fallback}
+              title="Falls back to web search when local source relevance is below threshold (configurable in settings)."
+            >
+              Web search {settings.enable_web_fallback ? "on" : "off"}
+            </button>
+          ) : null}
         </div>
       </div>
 

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
 import { ConnectionPhase } from "@/types/connection"
+import { CHAT_PATH, LOREBOOK_DEBUG_FOCUS } from "@/routes/route-paths"
 import { ChatPane } from "../ChatPane"
 
 const mockCheckConnectionOnce = vi.fn()
@@ -359,5 +360,30 @@ describe("ChatPane Stage 1 reliability and controls", () => {
       preserveServerChatId: true
     })
     expect(mockSetServerChatId).toHaveBeenCalledWith("server-chat-b")
+  })
+
+  it("renders full diagnostics link to a valid chat route", () => {
+    messageOptionState.messages = [
+      {
+        id: "m1",
+        isBot: true,
+        name: "Assistant",
+        message: "Diagnostics available",
+        sources: []
+      }
+    ]
+
+    render(<ChatPane />)
+
+    const link = screen.getByRole("link", {
+      name: "Open full lorebook diagnostics"
+    })
+    const href = link.getAttribute("href")
+    expect(href).toBeTruthy()
+
+    const parsed = new URL(String(href), "https://example.local")
+    expect(parsed.pathname).toBe(CHAT_PATH)
+    expect(parsed.searchParams.get("focus")).toBe(LOREBOOK_DEBUG_FOCUS)
+    expect(parsed.searchParams.get("from")).toBe("workspace-playground")
   })
 })
