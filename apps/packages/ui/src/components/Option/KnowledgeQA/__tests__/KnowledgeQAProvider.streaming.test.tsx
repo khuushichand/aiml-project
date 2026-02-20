@@ -146,10 +146,28 @@ describe("KnowledgeQAProvider streaming search", () => {
       results: [{ id: "fallback-doc", metadata: { title: "Fallback" } }],
       answer: "Fallback answer",
       expanded_queries: ["fallback path alt"],
+      faithfulness: {
+        faithfulness_score: "87",
+        total_claims: "5",
+        supported_claims: "4",
+        unsupported_claims: "1",
+      },
+      verification_report: {
+        total_claims: "5",
+        verified_count: "4",
+        verification_rate: 80,
+        coverage: "75",
+      },
       metadata: {
         web_fallback: {
           triggered: true,
           engine_used: "duckduckgo",
+        },
+        retrieval_metrics: {
+          documents_considered: "25",
+          also_considered: [
+            { id: "cand-1", title: "Near miss", score: 41, reason: "below threshold" },
+          ],
         },
       },
     })
@@ -182,6 +200,24 @@ describe("KnowledgeQAProvider streaming search", () => {
         expandedQueries: ["fallback path alt"],
         webFallbackTriggered: true,
         webFallbackEngine: "duckduckgo",
+        faithfulnessScore: 0.87,
+        faithfulnessTotalClaims: 5,
+        faithfulnessSupportedClaims: 4,
+        faithfulnessUnsupportedClaims: 1,
+        verificationRate: 0.8,
+        verificationCoverage: 0.75,
+        verificationReportAvailable: true,
+        candidatesConsidered: 25,
+        candidatesReturned: 1,
+        candidatesRejected: 24,
+        alsoConsidered: [
+          expect.objectContaining({
+            id: "cand-1",
+            title: "Near miss",
+            score: 0.41,
+            reason: "below threshold",
+          }),
+        ],
       })
     )
     expect(trackMetricMock).toHaveBeenCalledWith(
@@ -190,6 +226,90 @@ describe("KnowledgeQAProvider streaming search", () => {
         used_streaming: false,
         has_answer: true,
       })
+    )
+  })
+
+  it("surfaces query-length warning when a submitted query exceeds backend limits", async () => {
+    ragSearchStreamMock.mockImplementation(async function* () {
+      throw new Error("stream endpoint unavailable")
+    })
+    ragSearchMock.mockResolvedValue({
+      results: [{ id: "fallback-doc", metadata: { title: "Fallback" } }],
+      answer: "Fallback answer",
+      metadata: {},
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+    await act(async () => {
+      await latestContext!.selectThread("local-long-query-warning")
+    })
+
+    act(() => {
+      latestContext!.setQuery("x".repeat(21000))
+    })
+
+    await act(async () => {
+      await latestContext!.search()
+    })
+
+    expect(latestContext!.queryWarning).toBe(
+      "Query exceeded 20,000 characters and was shortened before search."
+    )
+
+    act(() => {
+      latestContext!.setQuery("short query")
+    })
+    expect(latestContext!.queryWarning).toBeNull()
+  })
+
+  it("merges pinned source filters into rag search options", async () => {
+    ragSearchStreamMock.mockImplementation(async function* () {
+      throw new Error("stream endpoint unavailable")
+    })
+    ragSearchMock.mockResolvedValue({
+      results: [],
+      answer: "Pinned filter check",
+      metadata: {},
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+    await act(async () => {
+      await latestContext!.selectThread("local-pinned-filter-test")
+    })
+
+    act(() => {
+      latestContext!.updateSetting("include_media_ids", [7])
+      latestContext!.updateSetting("include_note_ids", ["note-base"])
+      latestContext!.setPinnedSourceFilters({
+        mediaIds: [42],
+        noteIds: ["note-pinned"],
+      })
+      latestContext!.setQuery("pinned filters query")
+    })
+
+    await act(async () => {
+      await latestContext!.search()
+    })
+
+    expect(ragSearchMock).toHaveBeenCalledTimes(1)
+    const ragOptions = ragSearchMock.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(ragOptions.include_media_ids).toEqual(
+      expect.arrayContaining([7, 42])
+    )
+    expect(ragOptions.include_note_ids).toEqual(
+      expect.arrayContaining(["note-base", "note-pinned"])
     )
   })
 })

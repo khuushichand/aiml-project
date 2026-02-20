@@ -24,6 +24,7 @@ export type WebSearch = {
 }
 
 export type ToolChoice = "auto" | "none" | "required"
+export type CompareContinuationMode = "winner" | "compare"
 
 export type ReplyTarget = {
   id: string
@@ -225,6 +226,11 @@ export type State = {
   ) => void
   compareCanonicalByCluster: Record<string, string | null>
   setCompareCanonicalForCluster: (clusterId: string, messageId: string | null) => void
+  compareContinuationModeByCluster: Record<string, CompareContinuationMode>
+  setCompareContinuationModeForCluster: (
+    clusterId: string,
+    mode: CompareContinuationMode
+  ) => void
   // Split-off chats per compare cluster/model
   compareSplitChats: Record<string, Record<string, string>>
   setCompareSplitChat: (clusterId: string, modelKey: string, historyId: string) => void

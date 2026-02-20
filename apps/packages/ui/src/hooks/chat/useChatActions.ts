@@ -1235,11 +1235,21 @@ export const useChatActions = ({
       setStreaming(false)
     } catch (e) {
       const assistantContent = buildAssistantErrorContent(fullText, e)
+      const interruptionReason =
+        e instanceof Error ? e.message : t("somethingWentWrong")
       if (generateMessageId) {
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === generateMessageId
-              ? updateActiveVariant(msg, { message: assistantContent })
+              ? updateActiveVariant(msg, {
+                  message: assistantContent,
+                  generationInfo: {
+                    ...(msg.generationInfo || {}),
+                    interrupted: true,
+                    interruptionReason,
+                    interruptedAt: Date.now()
+                  }
+                })
               : msg
           )
         )

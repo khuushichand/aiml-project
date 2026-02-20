@@ -47,5 +47,7 @@ describe("SourceList accessibility semantics", () => {
     const list = screen.getByRole("list", { name: "Retrieved sources" })
     const items = within(list).getAllByRole("listitem")
     expect(items).toHaveLength(2)
+    expect(items[0]).toHaveAttribute("tabindex", "0")
+    expect(items[1]).not.toHaveAttribute("tabindex")
   })
 })

@@ -2,6 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { SourcesPane } from "../SourcesPane"
 import { WORKSPACE_SOURCE_DRAG_TYPE } from "../drag-source"
+const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
+  () => ({
+    mockScheduleWorkspaceUndoAction: vi.fn(),
+    mockUndoWorkspaceAction: vi.fn()
+  })
+)
 
 const mockToggleSourceSelection = vi.fn()
 const mockSelectAllSources = vi.fn()
@@ -75,9 +81,27 @@ vi.mock("../SourcesPane/AddSourceModal", () => ({
   AddSourceModal: () => <div data-testid="add-source-modal" />
 }))
 
+vi.mock("../undo-manager", () => ({
+  WORKSPACE_UNDO_WINDOW_MS: 10000,
+  scheduleWorkspaceUndoAction: mockScheduleWorkspaceUndoAction,
+  undoWorkspaceAction: mockUndoWorkspaceAction
+}))
+
 describe("SourcesPane Stage 2 source highlighting", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUndoWorkspaceAction.mockReturnValue(true)
+    mockScheduleWorkspaceUndoAction.mockImplementation(
+      ({
+        apply
+      }: {
+        apply: () => void
+        undo: () => void
+      }) => {
+        apply()
+        return { id: "undo-1", expiresAt: Date.now() + 10000 }
+      }
+    )
     workspaceStoreState.sources = [...defaultSources]
     workspaceStoreState.sourceSearchQuery = ""
     workspaceStoreState.sourceFocusTarget = null
@@ -288,6 +312,23 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(checkboxInput?.disabled).toBe(true)
   })
 
+  it("surfaces backend processing detail text when available", () => {
+    workspaceStoreState.sources = [
+      defaultSources[0],
+      {
+        ...defaultSources[1],
+        status: "processing" as const,
+        statusMessage: "Processing... chunks extracted: 45/120"
+      }
+    ]
+
+    render(<SourcesPane />)
+
+    expect(
+      screen.getByText("Processing... chunks extracted: 45/120")
+    ).toBeInTheDocument()
+  })
+
   it("surfaces source metadata preview when metadata is available", () => {
     workspaceStoreState.sources = [
       {
@@ -301,6 +342,21 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     render(<SourcesPane />)
 
     expect(screen.getByText("2 MB • 2m 5s")).toBeInTheDocument()
+  })
+
+  it("renders source thumbnail previews when thumbnail metadata is available", () => {
+    workspaceStoreState.sources = [
+      {
+        ...defaultSources[0],
+        thumbnailUrl: "https://example.com/thumb.jpg"
+      }
+    ]
+
+    render(<SourcesPane />)
+
+    const thumbnail = screen.getByTestId("source-thumbnail-s1")
+    expect(thumbnail).toBeInTheDocument()
+    expect(thumbnail).toHaveAttribute("src", "https://example.com/thumb.jpg")
   })
 
   it("prefers API-origin created date metadata when available", () => {
@@ -317,7 +373,7 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     expect(screen.queryByText("Added {{date}}")).not.toBeInTheDocument()
   })
 
-  it("supports source preview annotations create, edit, and delete", async () => {
+  it("supports source preview annotations create, edit, and delete with undo parity", async () => {
     render(<SourcesPane />)
 
     fireEvent.click(screen.getByTestId("preview-source-s1"))
@@ -350,6 +406,17 @@ describe("SourcesPane Stage 2 source highlighting", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }))
     await waitFor(() => {
       expect(screen.getByText("No annotations yet.")).toBeInTheDocument()
+    })
+
+    expect(mockScheduleWorkspaceUndoAction).toHaveBeenCalledTimes(1)
+    const scheduledConfig = mockScheduleWorkspaceUndoAction.mock.calls[0]?.[0] as
+      | { undo: () => void }
+      | undefined
+    expect(scheduledConfig).toBeDefined()
+    scheduledConfig?.undo()
+
+    await waitFor(() => {
+      expect(screen.getByText("Edited annotation")).toBeInTheDocument()
     })
   })
 

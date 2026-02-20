@@ -145,7 +145,7 @@ export const CharactersWorkspace: React.FC = () => {
   }
 
   return (
-    <PageShell className="space-y-4">
+    <PageShell className="space-y-4 pb-[15px]">
       <div className="space-y-1">
         <h1 className="text-lg font-semibold text-text">
           {t("option:header.modeCharacters", "Characters")}

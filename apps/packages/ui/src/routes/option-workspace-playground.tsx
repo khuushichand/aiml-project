@@ -4,7 +4,7 @@ import { WorkspacePlayground } from "@/components/Option/WorkspacePlayground"
 const OptionWorkspacePlayground = () => {
   return (
     <OptionLayout>
-      <div className="h-full w-full overflow-hidden">
+      <div className="w-full">
         <WorkspacePlayground />
       </div>
     </OptionLayout>

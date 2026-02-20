@@ -97,4 +97,77 @@ describe("KnowledgeQAProvider focused source lifecycle", () => {
     })
     expect(latestContext!.focusedSourceIndex).toBeNull()
   })
+
+  it("scrolls to first matching answer citation marker when requested", async () => {
+    const answerContent = document.createElement("div")
+    answerContent.id = "knowledge-answer-content"
+    const citationButton = document.createElement("button")
+    citationButton.setAttribute("data-knowledge-citation-index", "2")
+    citationButton.scrollIntoView = vi.fn()
+    citationButton.focus = vi.fn()
+    answerContent.appendChild(citationButton)
+    document.body.appendChild(answerContent)
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    act(() => {
+      latestContext!.scrollToCitation(2)
+    })
+
+    expect(citationButton.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+    })
+    expect(citationButton.focus).toHaveBeenCalled()
+
+    document.body.removeChild(answerContent)
+  })
+
+  it("targets a specific citation occurrence when provided", async () => {
+    const answerContent = document.createElement("div")
+    answerContent.id = "knowledge-answer-content"
+
+    const firstCitation = document.createElement("button")
+    firstCitation.setAttribute("data-knowledge-citation-index", "2")
+    firstCitation.setAttribute("data-knowledge-citation-occurrence", "1")
+    firstCitation.scrollIntoView = vi.fn()
+    firstCitation.focus = vi.fn()
+    answerContent.appendChild(firstCitation)
+
+    const secondCitation = document.createElement("button")
+    secondCitation.setAttribute("data-knowledge-citation-index", "2")
+    secondCitation.setAttribute("data-knowledge-citation-occurrence", "2")
+    secondCitation.scrollIntoView = vi.fn()
+    secondCitation.focus = vi.fn()
+    answerContent.appendChild(secondCitation)
+
+    document.body.appendChild(answerContent)
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    act(() => {
+      latestContext!.scrollToCitation(2, 2)
+    })
+
+    expect(secondCitation.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+    })
+    expect(secondCitation.focus).toHaveBeenCalled()
+    expect(firstCitation.scrollIntoView).not.toHaveBeenCalled()
+
+    document.body.removeChild(answerContent)
+  })
 })

@@ -4,6 +4,11 @@ import { ConnectionPhase } from "@/types/connection"
 import { ChatPane } from "../ChatPane"
 import { WORKSPACE_SOURCE_DRAG_TYPE } from "../drag-source"
 
+const hoistedMocks = vi.hoisted(() => ({
+  setSelectedModel: vi.fn(),
+  getModels: vi.fn()
+}))
+
 const mockCheckConnectionOnce = vi.fn()
 const mockSaveWorkspaceChatSession = vi.fn()
 const mockGetWorkspaceChatSession = vi.fn()
@@ -149,6 +154,8 @@ vi.mock("@/store/option", () => ({
       setRagTopK: (value: number | null) => void
       ragAdvancedOptions: Record<string, unknown>
       setRagAdvancedOptions: (opts: Record<string, unknown>) => void
+      setSelectedModel: (model: string | null) => void
+      selectedModel: string | null
     }) => unknown
   ) =>
     selector({
@@ -158,7 +165,9 @@ vi.mock("@/store/option", () => ({
       ragTopK: 8,
       setRagTopK: vi.fn(),
       ragAdvancedOptions: {},
-      setRagAdvancedOptions: vi.fn()
+      setRagAdvancedOptions: vi.fn(),
+      setSelectedModel: hoistedMocks.setSelectedModel,
+      selectedModel: null
     })
 }))
 
@@ -235,6 +244,7 @@ vi.mock("../source-location-copy", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
+    getModels: hoistedMocks.getModels,
     getChatLorebookDiagnostics: vi.fn(async () => ({
       chat_id: "chat",
       total_turns_with_diagnostics: 0,
@@ -288,6 +298,8 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
       workspaceStoreState.selectedSourceIds = [...ids]
     })
     mockGetWorkspaceChatSession.mockReturnValue(null)
+    hoistedMocks.setSelectedModel.mockReset()
+    hoistedMocks.getModels.mockResolvedValue([])
 
     messageOptionState.messages = []
     messageOptionState.history = []
@@ -389,12 +401,26 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
         isBot: true,
         name: "Assistant",
         message: "Diagnostics response",
-        sources: [{ name: "Doc A", metadata: { media_id: 10, score: 0.71 } }],
+        sources: [
+          { name: "Doc A", metadata: { media_id: 10, score: 0.71 } },
+          { name: "Doc B", metadata: { media_id: 11, score: 0.68 } },
+          { name: "Doc C", metadata: { media_id: 12, score: 0.66 } },
+          { name: "Doc D", metadata: { media_id: 13, score: 0.65 } }
+        ],
         generationInfo: {
           retrieval: {
             chunks_retrieved: 4,
-            source_count: 1,
+            source_count: 4,
             avg_relevance_score: 0.87
+          },
+          usage: {
+            prompt_tokens: 120,
+            completion_tokens: 240,
+            total_tokens: 360,
+            total_cost_usd: 0.012
+          },
+          faithfulness: {
+            score: 0.91
           }
         }
       }
@@ -405,7 +431,39 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
     expect(screen.getByText("Retrieval info")).toBeInTheDocument()
     expect(screen.getByText(/Chunks retrieved/i)).toBeInTheDocument()
     expect(screen.getByText(/Sources used/i)).toBeInTheDocument()
+    expect(screen.getByText(/Source list/i)).toBeInTheDocument()
     expect(screen.getByText(/Avg relevance score/i)).toBeInTheDocument()
+    expect(screen.getByText(/120 prompt \+ 240 completion = 360 tokens/i)).toBeInTheDocument()
+    expect(screen.getByText("$0.012")).toBeInTheDocument()
+    expect(screen.getByText(/Faithfulness score/i)).toBeInTheDocument()
+    expect(screen.getByText(/Confidence/i)).toBeInTheDocument()
+    expect(screen.getByText("High")).toBeInTheDocument()
+    expect(screen.getByText(/Doc A, Doc B, Doc C \+1 more/)).toBeInTheDocument()
+  })
+
+  it("renders model picker options and updates selected model", async () => {
+    hoistedMocks.getModels.mockResolvedValue([
+      {
+        id: "gpt-4o",
+        name: "GPT-4o",
+        provider: "openai"
+      },
+      {
+        id: "claude-3-5-sonnet",
+        name: "Claude 3.5 Sonnet",
+        provider: "anthropic"
+      }
+    ])
+
+    render(<ChatPane />)
+
+    const modelSelect = await screen.findByRole("combobox", {
+      name: "Select model"
+    })
+    fireEvent.change(modelSelect, { target: { value: "gpt-4o" } })
+
+    expect(hoistedMocks.setSelectedModel).toHaveBeenCalledWith("gpt-4o")
+    expect(screen.getByRole("option", { name: /openai/i })).toBeInTheDocument()
   })
 
   it("handles partial retrieval metadata by inferring diagnostics from sources", () => {
@@ -426,6 +484,51 @@ describe("ChatPane Stage 2 citation traceability and retrieval transparency", ()
 
     expect(screen.getByText("Retrieval info")).toBeInTheDocument()
     expect(screen.getByText("0.600")).toBeInTheDocument()
+  })
+
+  it("shows token and cost diagnostics when usage metadata is present without retrieval fields", () => {
+    messageOptionState.messages = [
+      {
+        id: "bot-usage-only",
+        isBot: true,
+        name: "Assistant",
+        message: "Usage only response",
+        sources: [],
+        generationInfo: {
+          usage: {
+            prompt_tokens: 30,
+            completion_tokens: 70,
+            total_cost_usd: 0.006
+          }
+        }
+      }
+    ]
+
+    render(<ChatPane />)
+
+    expect(screen.getByText("Retrieval info")).toBeInTheDocument()
+    expect(screen.getByText(/30 prompt \+ 70 completion = 100 tokens/i)).toBeInTheDocument()
+    expect(screen.getByText("$0.0060")).toBeInTheDocument()
+  })
+
+  it("normalizes percent-style faithfulness scores and marks low confidence", () => {
+    messageOptionState.messages = [
+      {
+        id: "bot-4b",
+        isBot: true,
+        name: "Assistant",
+        message: "Percent style confidence",
+        sources: [{ name: "Doc X", metadata: { score: 0.21 } }],
+        generationInfo: {
+          faithfulness_score: 35
+        }
+      }
+    ]
+
+    render(<ChatPane />)
+
+    expect(screen.getByText("0.350")).toBeInTheDocument()
+    expect(screen.getByText("Low")).toBeInTheDocument()
   })
 
   it("scopes chat to dropped source and seeds a prompt template", () => {

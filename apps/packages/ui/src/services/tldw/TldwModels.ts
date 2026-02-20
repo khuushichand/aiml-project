@@ -26,6 +26,7 @@ export class TldwModelsService {
   private lastFetchTime: number = 0
   private readonly CACHE_DURATION = 15 * 60 * 1000 // 15 minutes
   private readonly CACHE_KEY = "tldwModelsCache"
+  private readonly CACHE_SCHEMA_VERSION = 2
   private storage = createSafeStorage({ area: "local" })
   private storageLoaded = false
   private storageInitPromise: Promise<void> | null = null
@@ -38,7 +39,13 @@ export class TldwModelsService {
       this.storageInitPromise = (async () => {
         try {
           const cached = (await this.storage.get<any>(this.CACHE_KEY)) || null
-          if (cached?.models && Array.isArray(cached.models)) {
+          const cacheVersion =
+            typeof cached?.version === "number" ? cached.version : 0
+          if (
+            cacheVersion === this.CACHE_SCHEMA_VERSION &&
+            cached?.models &&
+            Array.isArray(cached.models)
+          ) {
             this.cachedModels = cached.models as ModelInfo[]
             this.lastFetchTime = Number(cached.timestamp || 0)
             this.cacheScopeKey =
@@ -57,6 +64,7 @@ export class TldwModelsService {
   private async persistCache() {
     try {
       await this.storage.set(this.CACHE_KEY, {
+        version: this.CACHE_SCHEMA_VERSION,
         models: this.cachedModels,
         timestamp: this.lastFetchTime,
         scope: this.cacheScopeKey

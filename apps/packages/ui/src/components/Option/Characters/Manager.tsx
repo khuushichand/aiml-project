@@ -1611,7 +1611,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [updatedToDate, setUpdatedToDate] = React.useState("")
   const [hasConversationsOnly, setHasConversationsOnly] = React.useState(false)
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
-  const [advancedFiltersOpen, setAdvancedFiltersOpen] = React.useState(true)
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = React.useState(false)
   const [showEditAdvanced, setShowEditAdvanced] = React.useState(false)
   const [showCreateAdvanced, setShowCreateAdvanced] = React.useState(false)
   const [createAdvancedSections, setCreateAdvancedSections] = React.useState<AdvancedSectionState>(
@@ -4075,7 +4075,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       deleted_only: characterListScope === "deleted" ? true : undefined,
       sort_by: serverSortBy,
       sort_order: serverSortOrder,
-      include_image_base64: false
+      include_image_base64: true
     }),
     [
       characterListScope,
@@ -4134,7 +4134,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           deleted_only: characterListScope === "deleted" ? true : undefined,
           sort_by: serverSortBy,
           sort_order: serverSortOrder,
-          include_image_base64: false
+          include_image_base64: true
         })
 
         const candidate = response as
@@ -4688,11 +4688,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   )
 
   React.useEffect(() => {
+    if (status !== "success") return
     const maxPage = Math.max(1, Math.ceil(totalCharacters / pageSize))
     if (currentPage > maxPage) {
       setCurrentPage(maxPage)
     }
-  }, [totalCharacters, currentPage, pageSize])
+  }, [status, totalCharacters, currentPage, pageSize])
 
   const pagedGalleryData = data
 

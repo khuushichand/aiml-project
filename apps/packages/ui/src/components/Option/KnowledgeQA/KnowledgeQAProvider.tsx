@@ -26,6 +26,7 @@ import type {
   SearchRuntimeDetails,
   QueryStage,
   ScopeSnapshot,
+  PinnedSourceFilters,
 } from "./types"
 import {
   DEFAULT_RAG_SETTINGS,
@@ -44,6 +45,7 @@ import { truncateAnswerPreview } from "./historyUtils"
 
 const LOCAL_THREAD_PREFIX = "local-"
 const DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
+const RAG_QUERY_MAX_LENGTH = 20000
 type CreateThreadOptions = {
   parentConversationId?: string
   forkedFromMessageId?: string
@@ -65,6 +67,7 @@ const initialState: KnowledgeQAState = {
   citations: [],
   searchDetails: null,
   error: null,
+  queryWarning: null,
 
   currentThreadId: null,
   isLocalOnlyThread: false,
@@ -84,6 +87,10 @@ const initialState: KnowledgeQAState = {
   evidenceRailTab: "sources",
   queryStage: "idle",
   lastSearchScope: null,
+  pinnedSourceFilters: {
+    mediaIds: [],
+    noteIds: [],
+  },
 }
 
 const isLocalThreadId = (id: string | null | undefined) =>
@@ -113,6 +120,7 @@ function sliceMessagesForBranch(
 // Action types
 type Action =
   | { type: "SET_QUERY"; payload: string }
+  | { type: "SET_QUERY_WARNING"; payload: string | null }
   | { type: "SET_SEARCHING"; payload: boolean }
   | { type: "SET_RESULTS"; payload: { results: RagResult[]; answer: string | null; citations: CitationRef[] } }
   | { type: "SET_PARTIAL_RESULTS"; payload: { results: RagResult[]; answer: string | null; citations: CitationRef[] } }
@@ -145,12 +153,15 @@ type Action =
   | { type: "SET_EVIDENCE_RAIL_TAB"; payload: "sources" | "details" }
   | { type: "SET_QUERY_STAGE"; payload: QueryStage }
   | { type: "SET_LAST_SEARCH_SCOPE"; payload: ScopeSnapshot | null }
+  | { type: "SET_PINNED_SOURCE_FILTERS"; payload: PinnedSourceFilters }
 
 // Reducer
 function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
   switch (action.type) {
     case "SET_QUERY":
-      return { ...state, query: action.payload }
+      return { ...state, query: action.payload, queryWarning: null }
+    case "SET_QUERY_WARNING":
+      return { ...state, queryWarning: action.payload }
     case "SET_SEARCHING":
       return {
         ...state,
@@ -194,8 +205,13 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
         citations: [],
         searchDetails: null,
         error: null,
+        queryWarning: null,
         hasSearched: false,
         queryStage: "idle",
+        pinnedSourceFilters: {
+          mediaIds: [],
+          noteIds: [],
+        },
       }
     case "SET_THREAD_ID":
       return { ...state, currentThreadId: action.payload }
@@ -281,6 +297,8 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
       return { ...state, queryStage: action.payload }
     case "SET_LAST_SEARCH_SCOPE":
       return { ...state, lastSearchScope: action.payload }
+    case "SET_PINNED_SOURCE_FILTERS":
+      return { ...state, pinnedSourceFilters: action.payload }
     default:
       return state
   }
@@ -485,8 +503,25 @@ function extractRagResponse(response: any): {
     : []
   const metadata =
     response?.metadata && typeof response.metadata === "object"
-      ? (response.metadata as Record<string, unknown>)
+      ? ({ ...(response.metadata as Record<string, unknown>) } as Record<string, unknown>)
       : {}
+  if (response?.faithfulness && typeof response.faithfulness === "object" && !metadata.faithfulness) {
+    metadata.faithfulness = response.faithfulness
+  }
+  if (
+    response?.verification_report &&
+    typeof response.verification_report === "object" &&
+    !metadata.verification_report
+  ) {
+    metadata.verification_report = response.verification_report
+  }
+  if (
+    response?.retrieval_metrics &&
+    typeof response.retrieval_metrics === "object" &&
+    !metadata.retrieval_metrics
+  ) {
+    metadata.retrieval_metrics = response.retrieval_metrics
+  }
   if (typeof response?.feedback_id === "string" && !metadata.feedback_id) {
     metadata.feedback_id = response.feedback_id
   }
@@ -581,6 +616,311 @@ function extractTokenAndCostDetails(metadata: Record<string, unknown>): {
   }
 }
 
+function normalizeIntegerMetric(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.round(value))
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value)
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.round(parsed))
+    }
+  }
+  return null
+}
+
+function normalizeProbabilityMetric(value: unknown): number | null {
+  let numericValue: number | null = null
+  if (typeof value === "number" && Number.isFinite(value)) {
+    numericValue = value
+  } else if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value)
+    if (Number.isFinite(parsed)) {
+      numericValue = parsed
+    }
+  }
+
+  if (numericValue == null) return null
+
+  const normalized = numericValue > 1 && numericValue <= 100
+    ? numericValue / 100
+    : numericValue
+  return Math.max(0, Math.min(1, normalized))
+}
+
+function extractFaithfulnessDetails(metadata: Record<string, unknown>): {
+  faithfulnessScore: number | null
+  totalClaims: number | null
+  supportedClaims: number | null
+  unsupportedClaims: number | null
+} {
+  const faithfulness =
+    metadata?.faithfulness && typeof metadata.faithfulness === "object"
+      ? (metadata.faithfulness as Record<string, unknown>)
+      : null
+
+  const scoreCandidate =
+    typeof faithfulness?.faithfulness_score === "number" ||
+    typeof faithfulness?.faithfulness_score === "string"
+      ? faithfulness.faithfulness_score
+      : typeof faithfulness?.score === "number" ||
+          typeof faithfulness?.score === "string"
+        ? faithfulness.score
+        : null
+  const faithfulnessScore = normalizeProbabilityMetric(scoreCandidate)
+
+  const totalClaims = normalizeIntegerMetric(
+    faithfulness?.total_claims ?? faithfulness?.claims_total
+  )
+  const supportedClaims = normalizeIntegerMetric(
+    faithfulness?.supported_claims ?? faithfulness?.supported_count
+  )
+  const unsupportedClaims = normalizeIntegerMetric(
+    faithfulness?.unsupported_claims ?? faithfulness?.unsupported_count
+  )
+
+  return {
+    faithfulnessScore,
+    totalClaims,
+    supportedClaims,
+    unsupportedClaims,
+  }
+}
+
+function extractVerificationDetails(metadata: Record<string, unknown>): {
+  verificationRate: number | null
+  verificationCoverage: number | null
+  totalClaims: number | null
+  verifiedClaims: number | null
+  reportAvailable: boolean
+} {
+  const verificationReport =
+    metadata?.verification_report && typeof metadata.verification_report === "object"
+      ? (metadata.verification_report as Record<string, unknown>)
+      : null
+
+  const verificationRateCandidate =
+    typeof verificationReport?.verification_rate === "number" ||
+    typeof verificationReport?.verification_rate === "string"
+      ? verificationReport.verification_rate
+      : typeof verificationReport?.precision === "number" ||
+          typeof verificationReport?.precision === "string"
+        ? verificationReport.precision
+        : null
+  const coverageCandidate =
+    typeof verificationReport?.coverage === "number" ||
+    typeof verificationReport?.coverage === "string"
+      ? verificationReport.coverage
+      : null
+  const verificationRate = normalizeProbabilityMetric(verificationRateCandidate)
+  const verificationCoverage = normalizeProbabilityMetric(coverageCandidate)
+
+  const totalClaims = normalizeIntegerMetric(
+    verificationReport?.total_claims ?? verificationReport?.claims_total
+  )
+  const verifiedClaims = normalizeIntegerMetric(
+    verificationReport?.verified_count ?? verificationReport?.supported_count
+  )
+
+  return {
+    verificationRate,
+    verificationCoverage,
+    totalClaims,
+    verifiedClaims,
+    reportAvailable:
+      Boolean(verificationReport) &&
+      Object.keys(verificationReport as Record<string, unknown>).length > 0,
+  }
+}
+
+function normalizeAlsoConsideredCandidate(
+  value: unknown,
+  fallbackIndex: number
+): {
+  id: string
+  title: string
+  score: number | null
+  reason: string | null
+} | null {
+  if (!value || typeof value !== "object") return null
+  const candidate = value as Record<string, unknown>
+  const idRaw = candidate.id ?? candidate.doc_id ?? candidate.document_id
+  const id =
+    typeof idRaw === "string" && idRaw.trim().length > 0
+      ? idRaw.trim()
+      : `candidate-${fallbackIndex + 1}`
+  const titleRaw =
+    candidate.title ?? candidate.name ?? candidate.source ?? candidate.document_title
+  const title =
+    typeof titleRaw === "string" && titleRaw.trim().length > 0
+      ? titleRaw.trim()
+      : `Candidate ${fallbackIndex + 1}`
+  const score =
+    normalizeProbabilityMetric(candidate.score ?? candidate.relevance)
+  const reasonRaw = candidate.reason ?? candidate.exclusion_reason
+  const reason =
+    typeof reasonRaw === "string" && reasonRaw.trim().length > 0
+      ? reasonRaw.trim()
+      : null
+  return { id, title, score, reason }
+}
+
+function extractCandidateTransparency(
+  metadata: Record<string, unknown>,
+  returnedCount: number
+): {
+  candidatesConsidered: number | null
+  candidatesRejected: number | null
+  alsoConsidered: Array<{
+    id: string
+    title: string
+    score: number | null
+    reason: string | null
+  }>
+} {
+  const documentGrading =
+    metadata?.document_grading && typeof metadata.document_grading === "object"
+      ? (metadata.document_grading as Record<string, unknown>)
+      : null
+  const retrievalMetrics =
+    metadata?.retrieval_metrics && typeof metadata.retrieval_metrics === "object"
+      ? (metadata.retrieval_metrics as Record<string, unknown>)
+      : null
+
+  const candidatesConsidered = (
+    [
+      metadata?.candidates_considered,
+      metadata?.candidate_count,
+      metadata?.total_candidates,
+      metadata?.documents_retrieved,
+      documentGrading?.total_graded,
+      retrievalMetrics?.candidates_considered,
+      retrievalMetrics?.total_candidates,
+      retrievalMetrics?.documents_retrieved,
+      retrievalMetrics?.documents_considered,
+      retrievalMetrics?.chunks_considered,
+    ] as unknown[]
+  )
+    .map((value) => normalizeIntegerMetric(value))
+    .find((value): value is number => value != null) ?? null
+
+  const removedByGrading = normalizeIntegerMetric(documentGrading?.removed_count)
+  const computedRejected =
+    typeof candidatesConsidered === "number" && candidatesConsidered >= returnedCount
+      ? candidatesConsidered - returnedCount
+      : removedByGrading
+  const candidatesRejected =
+    typeof computedRejected === "number" && Number.isFinite(computedRejected)
+      ? Math.max(0, computedRejected)
+      : null
+
+  const rawAlsoConsidered =
+    (Array.isArray(metadata?.also_considered)
+      ? metadata.also_considered
+      : Array.isArray(metadata?.candidates_below_threshold)
+        ? metadata.candidates_below_threshold
+        : Array.isArray(metadata?.excluded_candidates)
+          ? metadata.excluded_candidates
+          : Array.isArray(retrievalMetrics?.also_considered)
+            ? retrievalMetrics?.also_considered
+            : Array.isArray(retrievalMetrics?.excluded_candidates)
+              ? retrievalMetrics?.excluded_candidates
+          : []) as unknown[]
+  const alsoConsidered = rawAlsoConsidered
+    .map((candidate, index) => normalizeAlsoConsideredCandidate(candidate, index))
+    .filter(
+      (
+        candidate
+      ): candidate is {
+        id: string
+        title: string
+        score: number | null
+        reason: string | null
+      } => candidate != null
+    )
+
+  const derivedCandidatesConsidered =
+    candidatesConsidered != null
+      ? candidatesConsidered
+      : alsoConsidered.length > 0
+        ? returnedCount + alsoConsidered.length
+        : null
+
+  return {
+    candidatesConsidered: derivedCandidatesConsidered,
+    candidatesRejected:
+      derivedCandidatesConsidered != null && derivedCandidatesConsidered >= returnedCount
+        ? derivedCandidatesConsidered - returnedCount
+        : candidatesRejected,
+    alsoConsidered,
+  }
+}
+
+function extractRetrievalCoverage(
+  metadata: Record<string, unknown>,
+  returnedCount: number
+): {
+  retrievalLatencyMs: number | null
+  documentsConsidered: number | null
+  chunksConsidered: number | null
+  documentsReturned: number
+} {
+  const retrievalMetrics =
+    metadata?.retrieval_metrics && typeof metadata.retrieval_metrics === "object"
+      ? (metadata.retrieval_metrics as Record<string, unknown>)
+      : null
+
+  const retrievalLatencyMs = (
+    [
+      retrievalMetrics?.retrieval_latency_ms,
+      retrievalMetrics?.latency_ms,
+      retrievalMetrics?.retrieval_ms,
+      metadata?.retrieval_latency_ms,
+      metadata?.latency_ms,
+      metadata?.retrieval_ms,
+    ] as unknown[]
+  )
+    .map((value) => normalizeIntegerMetric(value))
+    .find((value): value is number => value != null) ?? null
+
+  const documentsConsidered = (
+    [
+      retrievalMetrics?.documents_considered,
+      retrievalMetrics?.documents_retrieved,
+      retrievalMetrics?.total_candidates,
+      metadata?.documents_considered,
+      metadata?.documents_retrieved,
+      metadata?.candidate_count,
+      metadata?.candidates_considered,
+      metadata?.total_candidates,
+    ] as unknown[]
+  )
+    .map((value) => normalizeIntegerMetric(value))
+    .find((value): value is number => value != null) ?? null
+
+  const chunksConsidered = (
+    [
+      retrievalMetrics?.chunks_considered,
+      retrievalMetrics?.chunks_scanned,
+      retrievalMetrics?.total_chunks_scanned,
+      retrievalMetrics?.chunks_examined,
+      metadata?.chunks_considered,
+      metadata?.chunks_scanned,
+      metadata?.total_chunks_scanned,
+      metadata?.chunks_examined,
+    ] as unknown[]
+  )
+    .map((value) => normalizeIntegerMetric(value))
+    .find((value): value is number => value != null) ?? null
+
+  return {
+    retrievalLatencyMs,
+    documentsConsidered,
+    chunksConsidered,
+    documentsReturned: returnedCount,
+  }
+}
+
 function buildSearchDetailsFromResponse(
   response: {
     expandedQueries: string[]
@@ -601,6 +941,16 @@ function buildSearchDetailsFromResponse(
       : null
   const { tokensUsed, estimatedCostUsd } = extractTokenAndCostDetails(
     response.metadata
+  )
+  const faithfulness = extractFaithfulnessDetails(response.metadata)
+  const verification = extractVerificationDetails(response.metadata)
+  const candidateTransparency = extractCandidateTransparency(
+    response.metadata,
+    results.length
+  )
+  const retrievalCoverage = extractRetrievalCoverage(
+    response.metadata,
+    results.length
   )
 
   return {
@@ -633,6 +983,24 @@ function buildSearchDetailsFromResponse(
           freshness: normalizeMetric(whyTheseSourcesMetadata.freshness),
         }
       : null,
+    faithfulnessScore: faithfulness.faithfulnessScore,
+    faithfulnessTotalClaims: faithfulness.totalClaims,
+    faithfulnessSupportedClaims: faithfulness.supportedClaims,
+    faithfulnessUnsupportedClaims: faithfulness.unsupportedClaims,
+    verificationRate: verification.verificationRate,
+    verificationCoverage: verification.verificationCoverage,
+    verificationTotalClaims: verification.totalClaims,
+    verificationVerifiedClaims: verification.verifiedClaims,
+    verificationReportAvailable: verification.reportAvailable,
+    retrievalLatencyMs: retrievalCoverage.retrievalLatencyMs,
+    documentsConsidered:
+      retrievalCoverage.documentsConsidered ?? candidateTransparency.candidatesConsidered,
+    chunksConsidered: retrievalCoverage.chunksConsidered,
+    documentsReturned: retrievalCoverage.documentsReturned,
+    candidatesConsidered: candidateTransparency.candidatesConsidered,
+    candidatesReturned: results.length,
+    candidatesRejected: candidateTransparency.candidatesRejected,
+    alsoConsidered: candidateTransparency.alsoConsidered,
   }
 }
 
@@ -667,6 +1035,23 @@ function buildSearchDetailsFromStreaming(
           freshness: normalizeMetric(why.freshness),
         }
       : null,
+    faithfulnessScore: null,
+    faithfulnessTotalClaims: null,
+    faithfulnessSupportedClaims: null,
+    faithfulnessUnsupportedClaims: null,
+    verificationRate: null,
+    verificationCoverage: null,
+    verificationTotalClaims: null,
+    verificationVerifiedClaims: null,
+    verificationReportAvailable: false,
+    retrievalLatencyMs: null,
+    documentsConsidered: null,
+    chunksConsidered: null,
+    documentsReturned: results.length,
+    candidatesConsidered: null,
+    candidatesReturned: results.length,
+    candidatesRejected: null,
+    alsoConsidered: [],
   }
 }
 
@@ -679,6 +1064,36 @@ function buildScopeSnapshot(
     sources: [...settings.sources],
     webFallback: Boolean(settings.enable_web_fallback),
   }
+}
+
+function mergeNumberFilters(
+  ...values: Array<Array<number | null | undefined> | undefined>
+): number[] {
+  const merged = new Set<number>()
+  for (const group of values) {
+    if (!Array.isArray(group)) continue
+    for (const candidate of group) {
+      if (typeof candidate !== "number" || !Number.isFinite(candidate)) continue
+      merged.add(Math.round(candidate))
+    }
+  }
+  return Array.from(merged)
+}
+
+function mergeStringFilters(
+  ...values: Array<Array<string | null | undefined> | undefined>
+): string[] {
+  const merged = new Set<string>()
+  for (const group of values) {
+    if (!Array.isArray(group)) continue
+    for (const candidate of group) {
+      if (typeof candidate !== "string") continue
+      const normalized = candidate.trim()
+      if (!normalized) continue
+      merged.add(normalized)
+    }
+  }
+  return Array.from(merged)
 }
 
 // Provider component
@@ -902,6 +1317,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SET_THREAD_ID", payload: threadId })
         dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
         dispatch({ type: "SET_MESSAGES", payload: [] })
+        dispatch({
+          type: "SET_PINNED_SOURCE_FILTERS",
+          payload: { mediaIds: [], noteIds: [] },
+        })
 
         return threadId
       } catch (error) {
@@ -911,6 +1330,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SET_THREAD_ID", payload: localId })
         dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: true })
         dispatch({ type: "SET_MESSAGES", payload: [] })
+        dispatch({
+          type: "SET_PINNED_SOURCE_FILTERS",
+          payload: { mediaIds: [], noteIds: [] },
+        })
         return localId
       }
     },
@@ -1039,6 +1462,13 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     ) => {
       const trimmedQuery = question.trim()
       if (!trimmedQuery) return
+      const queryWasTruncated = trimmedQuery.length > RAG_QUERY_MAX_LENGTH
+      dispatch({
+        type: "SET_QUERY_WARNING",
+        payload: queryWasTruncated
+          ? "Query exceeded 20,000 characters and was shortened before search."
+          : null,
+      })
 
       const searchStartedAt = Date.now()
       const abortController = new AbortController()
@@ -1046,9 +1476,20 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "SET_SEARCHING", payload: true })
       dispatch({ type: "SET_QUERY_STAGE", payload: "searching" })
       dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+      const overrideSettings = settingsOverrides || {}
       const effectiveSettings: RagSettings = {
         ...state.settings,
-        ...(settingsOverrides || {}),
+        ...overrideSettings,
+        include_media_ids: mergeNumberFilters(
+          state.settings.include_media_ids,
+          overrideSettings.include_media_ids,
+          state.pinnedSourceFilters.mediaIds
+        ),
+        include_note_ids: mergeStringFilters(
+          state.settings.include_note_ids,
+          overrideSettings.include_note_ids,
+          state.pinnedSourceFilters.noteIds
+        ),
       }
 
       let threadId = state.currentThreadId
@@ -1319,6 +1760,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       state.currentThreadId,
       state.settings,
       state.preset,
+      state.pinnedSourceFilters,
       createNewThread,
       persistChatMessage,
       persistRagContext,
@@ -1384,6 +1826,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const selectThread = useCallback(async (threadId: string) => {
     dispatch({ type: "SET_THREAD_ID", payload: threadId })
     dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: isLocalThreadId(threadId) })
+    dispatch({
+      type: "SET_PINNED_SOURCE_FILTERS",
+      payload: { mediaIds: [], noteIds: [] },
+    })
 
     if (isLocalThreadId(threadId)) {
       dispatch({ type: "SET_MESSAGES", payload: [] })
@@ -1465,6 +1911,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
         dispatch({ type: "SET_MESSAGES", payload: messages })
         dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+        dispatch({
+          type: "SET_PINNED_SOURCE_FILTERS",
+          payload: { mediaIds: [], noteIds: [] },
+        })
 
         const hydration = deriveThreadHydrationState(messages)
         if (hydration?.query) {
@@ -1488,6 +1938,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
         dispatch({ type: "SET_MESSAGES", payload: [] })
         dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+        dispatch({
+          type: "SET_PINNED_SOURCE_FILTERS",
+          payload: { mediaIds: [], noteIds: [] },
+        })
         dispatch({ type: "CLEAR_RESULTS" })
         dispatch({
           type: "SET_ERROR",
@@ -1559,6 +2013,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: isLocalThreadId(branchThreadId) })
       dispatch({ type: "SET_MESSAGES", payload: branchedMessages })
       dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
+      dispatch({
+        type: "SET_PINNED_SOURCE_FILTERS",
+        payload: { mediaIds: [], noteIds: [] },
+      })
 
       const hydration = deriveThreadHydrationState(branchedMessages)
       if (hydration?.query) {
@@ -1718,15 +2176,29 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
   const restoreFromHistory = useCallback(
     async (item: SearchHistoryItem) => {
-      dispatch({ type: "SET_QUERY", payload: item.query })
+      const restoredQuery = item.query.trim()
+      if (restoredQuery.length > 0) {
+        dispatch({ type: "SET_QUERY", payload: restoredQuery })
+      }
       if (item.preset) {
         dispatch({ type: "SET_PRESET", payload: item.preset })
       }
       if (item.conversationId) {
+        if (isLocalThreadId(item.conversationId)) {
+          if (restoredQuery.length > 0) {
+            await runKnowledgeQuery(restoredQuery, false)
+          }
+          return
+        }
         await selectThread(item.conversationId)
+        return
+      }
+
+      if (restoredQuery.length > 0) {
+        await runKnowledgeQuery(restoredQuery, false)
       }
     },
-    [selectThread]
+    [runKnowledgeQuery, selectThread]
   )
 
   const toggleHistoryPin = useCallback((id: string) => {
@@ -1817,11 +2289,45 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_QUERY_STAGE", payload: stage })
   }, [])
 
+  const setPinnedSourceFilters = useCallback((filters: PinnedSourceFilters) => {
+    const normalized: PinnedSourceFilters = {
+      mediaIds: mergeNumberFilters(filters.mediaIds),
+      noteIds: mergeStringFilters(filters.noteIds),
+    }
+    dispatch({ type: "SET_PINNED_SOURCE_FILTERS", payload: normalized })
+  }, [])
+
   const scrollToSource = useCallback((index: number) => {
     const element = document.getElementById(`source-card-${index}`)
     if (element) {
       element.scrollIntoView({ behavior: "smooth", block: "center" })
       dispatch({ type: "SET_FOCUSED_SOURCE", payload: index })
+    }
+  }, [])
+
+  const scrollToCitation = useCallback((citationIndex: number, occurrence = 1) => {
+    if (!Number.isFinite(citationIndex) || citationIndex < 1) return
+    const normalizedIndex = Math.floor(citationIndex)
+    const normalizedOccurrence =
+      Number.isFinite(occurrence) && occurrence >= 1 ? Math.floor(occurrence) : 1
+    const selector = `[data-knowledge-citation-index="${normalizedIndex}"]`
+    const occurrenceSelector = `${selector}[data-knowledge-citation-occurrence="${normalizedOccurrence}"]`
+    const inlineCitationByOccurrence = document.querySelector(
+      `#knowledge-answer-content ${occurrenceSelector}`
+    ) as HTMLElement | null
+    const inlineCitationElement = document.querySelector(
+      `#knowledge-answer-content ${selector}`
+    ) as HTMLElement | null
+    const targetElement =
+      inlineCitationByOccurrence ??
+      inlineCitationElement ??
+      (document.querySelector(selector) as HTMLElement | null)
+
+    if (targetElement) {
+      targetElement.scrollIntoView({ behavior: "smooth", block: "center" })
+      if (typeof targetElement.focus === "function") {
+        targetElement.focus()
+      }
     }
   }, [])
 
@@ -1915,8 +2421,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       setEvidenceRailOpen,
       setEvidenceRailTab,
       setQueryStage,
+      setPinnedSourceFilters,
       persistRagContext,
       scrollToSource,
+      scrollToCitation,
     }),
     [
       state,
@@ -1944,8 +2452,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       setEvidenceRailOpen,
       setEvidenceRailTab,
       setQueryStage,
+      setPinnedSourceFilters,
       persistRagContext,
       scrollToSource,
+      scrollToCitation,
     ]
   )
 

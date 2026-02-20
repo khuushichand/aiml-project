@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SourceList } from "../SourceList"
 
 const state = {
@@ -9,7 +9,13 @@ const state = {
   focusSource: vi.fn(),
   setQuery: vi.fn(),
   query: "source test query",
+  answer: "First claim cites [3]. Second claim cites [8]. Third claim revisits [3].",
+  searchDetails: {
+    expandedQueries: ["evidence source"],
+  } as { expandedQueries: string[] } | null,
   currentThreadId: "thread-source-test" as string | null,
+  scrollToCitation: vi.fn(),
+  setPinnedSourceFilters: vi.fn(),
   messages: [{ id: "assistant-1", role: "assistant" }] as Array<{
     id: string
     role: string
@@ -24,7 +30,11 @@ vi.mock("../KnowledgeQAProvider", () => ({
     focusSource: state.focusSource,
     setQuery: state.setQuery,
     query: state.query,
+    answer: state.answer,
+    searchDetails: state.searchDetails,
     currentThreadId: state.currentThreadId,
+    scrollToCitation: state.scrollToCitation,
+    setPinnedSourceFilters: state.setPinnedSourceFilters,
     messages: state.messages,
   }),
 }))
@@ -45,12 +55,15 @@ vi.mock("@/utils/knowledge-qa-search-metrics", () => ({
 }))
 
 function makeResult(index: number, overrides: Partial<Record<string, unknown>> = {}) {
+  const sourceType = index % 2 === 0 ? "media_db" : "notes"
   return {
     id: `source-${index}`,
     content: `Body for source ${index}`,
     metadata: {
       title: `Source ${index}`,
-      source_type: index % 2 === 0 ? "media_db" : "notes",
+      source_type: sourceType,
+      media_id: sourceType === "media_db" ? index : undefined,
+      note_id: sourceType === "notes" ? `note-${index}` : undefined,
       created_at: `2026-02-${String(10 + index).padStart(2, "0")}T12:00:00.000Z`,
       page_number: index,
       url: `https://example.com/source-${index}`,
@@ -64,9 +77,18 @@ function makeResult(index: number, overrides: Partial<Record<string, unknown>> =
 describe("SourceList researcher workflows", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
     state.focusedSourceIndex = null
     state.results = Array.from({ length: 12 }, (_, idx) => makeResult(idx + 1))
     state.citations = [{ index: 3 }, { index: 8 }]
+    state.answer = "First claim cites [3]. Second claim cites [8]. Third claim revisits [3]."
+    state.currentThreadId = "thread-source-test"
+    state.scrollToCitation = vi.fn()
+    state.setPinnedSourceFilters = vi.fn()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it("supports source-type filter chips with counts", () => {
@@ -82,6 +104,57 @@ describe("SourceList researcher workflows", () => {
     )
   })
 
+  it("supports content-type facet chips", () => {
+    state.results = [
+      makeResult(1, {
+        metadata: {
+          title: "Source 1",
+          source_type: "media_db",
+          file_type: "pdf",
+          media_id: 1,
+          created_at: "2026-02-11T12:00:00.000Z",
+          page_number: 1,
+          url: "https://example.com/source-1.pdf",
+          chunk_id: "chunk_1_of_20",
+        },
+      }),
+      makeResult(2, {
+        metadata: {
+          title: "Source 2",
+          source_type: "media_db",
+          file_type: "transcript",
+          media_id: 2,
+          created_at: "2026-02-12T12:00:00.000Z",
+          page_number: 2,
+          url: "https://example.com/source-2.txt",
+          chunk_id: "chunk_2_of_20",
+        },
+      }),
+      makeResult(3, {
+        metadata: {
+          title: "Source 3",
+          source_type: "media_db",
+          mime_type: "video/mp4",
+          media_id: 3,
+          created_at: "2026-02-13T12:00:00.000Z",
+          page_number: 3,
+          url: "https://example.com/source-3.mp4",
+          chunk_id: "chunk_3_of_20",
+        },
+      }),
+    ]
+
+    render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("button", { name: /PDF\s*1/i }))
+
+    const list = screen.getByRole("list", { name: "Retrieved sources" })
+    const headings = within(list)
+      .getAllByRole("heading", { level: 4 })
+      .map((heading) => heading.textContent)
+    expect(headings).toEqual(["Source 1"])
+  })
+
   it("uses compact source-card defaults for mobile density", () => {
     render(<SourceList />)
 
@@ -93,9 +166,300 @@ describe("SourceList researcher workflows", () => {
     expect(headerRow!.className).toContain("p-3")
     expect(headerRow!.className).toContain("sm:p-4")
 
-    const excerpt = screen.getByText("Body for source 1")
+    const excerpt = screen.getByText((_, element) => {
+      if (!element) return false
+      if (element.tagName.toLowerCase() !== "p") return false
+      return (element.textContent || "").trim() === "Body for source 1"
+    })
     expect(excerpt.className).toContain("text-xs")
     expect(excerpt.className).toContain("sm:text-sm")
+  })
+
+  it("highlights query-aligned terms in source excerpts", () => {
+    render(<SourceList />)
+
+    const highlightedTerms = document.querySelectorAll("mark")
+    expect(highlightedTerms.length).toBeGreaterThan(0)
+    expect(
+      Array.from(highlightedTerms).some((element) =>
+        /source/i.test(element.textContent || "")
+      )
+    ).toBe(true)
+  })
+
+  it("shows freshness badges for stale sources", () => {
+    state.results = [
+      makeResult(1, {
+        metadata: {
+          title: "Source 1",
+          source_type: "media_db",
+          media_id: 1,
+          created_at: "2018-02-01T12:00:00.000Z",
+          page_number: 1,
+          url: "https://example.com/source-1",
+          chunk_id: "chunk_1_of_20",
+        },
+      }),
+    ]
+    state.citations = [{ index: 1 }]
+
+    render(<SourceList />)
+
+    const freshnessBadge = screen.getByText("From 2018")
+    expect(freshnessBadge).toBeInTheDocument()
+    expect(freshnessBadge.className).toContain("text-danger")
+  })
+
+  it("supports keyword and date-range filtering within sources", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-03-01T00:00:00.000Z"))
+
+    state.results = [
+      makeResult(1, {
+        content: "Legacy archive analysis and migration notes",
+        metadata: {
+          title: "Source 1",
+          source_type: "media_db",
+          media_id: 1,
+          created_at: "2018-02-01T12:00:00.000Z",
+          page_number: 1,
+          url: "https://example.com/source-1",
+          chunk_id: "chunk_1_of_20",
+        },
+      }),
+      makeResult(2, {
+        content: "Recent release update and roadmap",
+        metadata: {
+          title: "Source 2",
+          source_type: "media_db",
+          media_id: 2,
+          created_at: "2026-02-25T12:00:00.000Z",
+          page_number: 2,
+          url: "https://example.com/source-2",
+          chunk_id: "chunk_2_of_20",
+        },
+      }),
+    ]
+    state.citations = [{ index: 1 }]
+
+    render(<SourceList />)
+
+    fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
+      target: { value: "archive migration" },
+    })
+    fireEvent.change(screen.getByLabelText("Filter sources by date range"), {
+      target: { value: "older_365d" },
+    })
+
+    const list = screen.getByRole("list", { name: "Retrieved sources" })
+    const headings = within(list)
+      .getAllByRole("heading", { level: 4 })
+      .map((heading) => heading.textContent)
+    expect(headings).toEqual(["Source 1"])
+
+    fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
+      target: { value: "release roadmap" },
+    })
+    expect(screen.getByText("No sources match the selected filters.")).toBeInTheDocument()
+  })
+
+  it("resets all source filters to defaults", () => {
+    render(<SourceList />)
+
+    fireEvent.change(screen.getByLabelText("Sort sources"), {
+      target: { value: "date" },
+    })
+    fireEvent.change(screen.getByLabelText("Filter sources by date range"), {
+      target: { value: "older_365d" },
+    })
+    fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
+      target: { value: "source 1" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Notes\s*6/i }))
+    fireEvent.click(screen.getByRole("button", { name: /Note\s*6/i }))
+
+    expect(screen.getByText("5 filters active")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset source filters" }))
+
+    expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe(
+      "relevance"
+    )
+    expect(
+      (screen.getByLabelText("Filter sources by date range") as HTMLSelectElement).value
+    ).toBe("all")
+    expect(
+      (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+    ).toBe("")
+    expect(
+      screen.getByRole("button", { name: /All\s*12/i })
+    ).toHaveAttribute("aria-pressed", "true")
+    expect(
+      screen.getByRole("button", { name: /Any type\s*12/i })
+    ).toHaveAttribute("aria-pressed", "true")
+    expect(screen.queryByText("5 filters active")).not.toBeInTheDocument()
+  })
+
+  it("persists filter controls per thread and restores when switching back", async () => {
+    const { rerender } = render(<SourceList />)
+
+    const sourceTypeGroup = screen.getByLabelText("Source type filters")
+    const contentTypeGroup = screen.getByLabelText("Content type filters")
+    const sortSelect = screen.getByLabelText("Sort sources") as HTMLSelectElement
+    const dateSelect = screen.getByLabelText(
+      "Filter sources by date range"
+    ) as HTMLSelectElement
+    const keywordInput = screen.getByLabelText(
+      "Filter sources by keyword"
+    ) as HTMLInputElement
+
+    fireEvent.change(sortSelect, { target: { value: "date" } })
+    fireEvent.change(dateSelect, { target: { value: "older_365d" } })
+    fireEvent.change(keywordInput, { target: { value: "source 1" } })
+    fireEvent.click(
+      within(sourceTypeGroup).getByRole("button", { name: /Notes\s*6/i })
+    )
+    fireEvent.click(
+      within(contentTypeGroup).getByRole("button", { name: /Note\s*6/i })
+    )
+
+    state.currentThreadId = "thread-other"
+    rerender(<SourceList />)
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe(
+        "relevance"
+      )
+      expect(
+        (
+          screen.getByLabelText(
+            "Filter sources by date range"
+          ) as HTMLSelectElement
+        ).value
+      ).toBe("all")
+      expect(
+        (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+      ).toBe("")
+    })
+
+    fireEvent.change(screen.getByLabelText("Sort sources"), {
+      target: { value: "title" },
+    })
+    fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
+      target: { value: "source 2" },
+    })
+
+    state.currentThreadId = "thread-source-test"
+    rerender(<SourceList />)
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe(
+        "date"
+      )
+      expect(
+        (
+          screen.getByLabelText(
+            "Filter sources by date range"
+          ) as HTMLSelectElement
+        ).value
+      ).toBe("older_365d")
+      expect(
+        (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+      ).toBe("source 1")
+      expect(
+        within(screen.getByLabelText("Source type filters")).getByRole("button", {
+          name: /Notes\s*6/i,
+        })
+      ).toHaveAttribute("aria-pressed", "true")
+      expect(
+        within(screen.getByLabelText("Content type filters")).getByRole("button", {
+          name: /Note\s*6/i,
+        })
+      ).toHaveAttribute("aria-pressed", "true")
+    })
+  })
+
+  it("supports reverse citation jump from cited source badges", () => {
+    render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to citation 3 in answer" }))
+
+    expect(state.scrollToCitation).toHaveBeenCalledWith(3, 1)
+    expect(state.focusSource).toHaveBeenCalledWith(2)
+  })
+
+  it("supports reverse citation jump from cited source card activation", () => {
+    render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("heading", { name: "Source 3" }))
+
+    expect(state.scrollToCitation).toHaveBeenCalledWith(3, 1)
+    expect(state.focusSource).toHaveBeenCalledWith(2)
+
+    const citedCard = document.getElementById("source-card-2")
+    expect(citedCard).not.toBeNull()
+    expect(citedCard).toHaveAttribute("tabindex", "0")
+
+    fireEvent.keyDown(citedCard!, { key: "Enter" })
+
+    expect(state.scrollToCitation).toHaveBeenLastCalledWith(3, 1)
+  })
+
+  it("shows sentence-level usage anchors for cited sources", () => {
+    render(<SourceList />)
+
+    const sentenceChip = screen.getByRole("button", {
+      name: /Jump to citation 3 in answer sentence 3:/i,
+    })
+
+    expect(sentenceChip).toHaveAttribute(
+      "title",
+      "Sentence 3: Third claim revisits [3]."
+    )
+
+    fireEvent.click(sentenceChip)
+
+    expect(state.scrollToCitation).toHaveBeenCalledWith(3, 2)
+    expect(state.focusSource).toHaveBeenCalledWith(2)
+  })
+
+  it("supports pinning sources and prioritizes pinned cards in ordering", () => {
+    render(<SourceList />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Pin source 10" }))
+
+    expect(screen.getByText("1 pinned")).toBeInTheDocument()
+
+    const list = screen.getByRole("list", { name: "Retrieved sources" })
+    const titlesAfterPin = within(list)
+      .getAllByRole("heading", { level: 4 })
+      .map((heading) => heading.textContent)
+    expect(titlesAfterPin[0]).toBe("Source 10")
+    expect(state.setPinnedSourceFilters).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mediaIds: expect.arrayContaining([10]),
+      })
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Unpin source 10" }))
+
+    const titlesAfterUnpin = within(list)
+      .getAllByRole("heading", { level: 4 })
+      .map((heading) => heading.textContent)
+    expect(titlesAfterUnpin[0]).toBe("Source 1")
+  })
+
+  it("syncs focused source on hover for citation back-link highlighting", () => {
+    render(<SourceList />)
+
+    const firstCard = document.getElementById("source-card-0")
+    expect(firstCard).not.toBeNull()
+
+    fireEvent.mouseEnter(firstCard!)
+    expect(state.focusSource).toHaveBeenCalledWith(0)
+
+    fireEvent.mouseLeave(firstCard!)
+    expect(state.focusSource).toHaveBeenCalledWith(null)
   })
 
   it("adds sort modes including date and cited-first", () => {

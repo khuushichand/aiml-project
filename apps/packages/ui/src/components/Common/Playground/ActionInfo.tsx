@@ -69,7 +69,10 @@ export const LoadingStatus = ({
 }: LoadingStatusProps) => {
   const { t } = useTranslation("common")
   const [completionAnnouncement, setCompletionAnnouncement] = React.useState<string | null>(null)
+  const [liveAnnouncement, setLiveAnnouncement] = React.useState<string | null>(null)
   const wasActiveRef = React.useRef(false)
+  const previousActionRef = React.useRef<string | null>(null)
+  const progressCheckpointRef = React.useRef(0)
 
   // Determine the current action based on state
   let currentAction: string | null = null
@@ -88,6 +91,50 @@ export const LoadingStatus = ({
 
   const isActive = currentAction !== null
 
+  React.useEffect(() => {
+    if (!currentAction) {
+      setLiveAnnouncement(null)
+      progressCheckpointRef.current = 0
+      previousActionRef.current = null
+      return
+    }
+    if (previousActionRef.current === currentAction) {
+      return
+    }
+    previousActionRef.current = currentAction
+    const startedLabel = t("actionInfo.started", "{{label}} started", {
+      label: t(
+        actionConfig[currentAction]?.labelKey || `actionInfo.${currentAction}`,
+        actionConfig[currentAction]?.defaultLabel || currentAction
+      )
+    })
+    setLiveAnnouncement(startedLabel)
+  }, [currentAction, t])
+
+  React.useEffect(() => {
+    if (!isStreaming || !isActive) {
+      progressCheckpointRef.current = 0
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      progressCheckpointRef.current += 1
+      setLiveAnnouncement(
+        t(
+          "actionInfo.progressCheckpoint",
+          "Still generating response (checkpoint {{count}}).",
+          {
+            count: progressCheckpointRef.current
+          }
+        )
+      )
+    }, 5000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [isActive, isStreaming, t])
+
   // Announce completion when transitioning from active to inactive
   React.useEffect(() => {
     if (wasActiveRef.current && !isActive) {
@@ -102,6 +149,10 @@ export const LoadingStatus = ({
 
   return (
     <>
+      {/* Live updates for start/progress checkpoints */}
+      {liveAnnouncement && (
+        <SrAnnouncement message={liveAnnouncement} />
+      )}
       {/* Screen reader announcement for completion */}
       {completionAnnouncement && (
         <SrAnnouncement message={completionAnnouncement} />

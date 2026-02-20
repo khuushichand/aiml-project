@@ -25,12 +25,17 @@ const state = {
         estimatedCostUsd?: number | null
         webFallbackTriggered?: boolean
         webFallbackEngine?: string | null
+        faithfulnessScore?: number | null
+        verificationRate?: number | null
+        verificationReportAvailable?: boolean
+        verificationTotalClaims?: number | null
       }
     | null,
   query: "What does this source say?",
   currentThreadId: "thread-1" as string | null,
   messages: [] as Array<{ id: string; role: string }>,
   scrollToSource: vi.fn(),
+  focusedSourceIndex: null as number | null,
 }
 
 vi.mock("@/services/feedback", () => ({
@@ -77,6 +82,7 @@ vi.mock("../KnowledgeQAProvider", () => ({
     preset: state.preset,
     rerunWithTokenLimit: state.rerunWithTokenLimit,
     scrollToSource: state.scrollToSource,
+    focusedSourceIndex: state.focusedSourceIndex,
   })
 }))
 
@@ -96,6 +102,7 @@ describe("AnswerPanel state guardrails", () => {
     state.query = "What does this source say?"
     state.currentThreadId = "thread-1"
     state.messages = []
+    state.focusedSourceIndex = null
     submitExplicitFeedbackMock.mockResolvedValue({ ok: true })
     trackMetricMock.mockResolvedValue(undefined)
   })
@@ -135,6 +142,69 @@ describe("AnswerPanel state guardrails", () => {
     expect(jumpButton.className).toContain("min-w-8")
     expect(jumpButton.className).toContain("h-8")
     expect(jumpButton.className).toContain("dark:text-slate-900")
+  })
+
+  it("highlights citation chips when a matching source card is focused", () => {
+    state.answer = "Use method [1] for better recall."
+    state.citations = [{ index: 1 }]
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.focusedSourceIndex = 0
+
+    render(<AnswerPanel />)
+
+    const inlineCitationButton = screen.getByTitle("Jump to source 1")
+    expect(inlineCitationButton).toHaveAttribute("aria-current", "true")
+    expect(inlineCitationButton.className).toContain("ring-primary/40")
+
+    const summaryCitationButton = screen.getAllByRole("button", {
+      name: "Jump to source 1",
+    })[1]
+    expect(summaryCitationButton).toHaveAttribute("aria-current", "true")
+    expect(summaryCitationButton.className).toContain("border-primary/60")
+  })
+
+  it("shows grounding coverage and highlights uncited paragraphs", () => {
+    state.answer = "This statement is grounded [1].\n\nThis sentence has no citation."
+    state.citations = [{ index: 1 }]
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+
+    render(<AnswerPanel />)
+
+    expect(screen.getByText("Grounding: 50% cited")).toBeInTheDocument()
+    expect(screen.getByText("This sentence has no citation.").className).toContain(
+      "bg-amber-500/10"
+    )
+  })
+
+  it("renders trust badges from server verification metadata", () => {
+    state.answer = "Claim one [1]. Claim two [1]."
+    state.citations = [{ index: 1 }]
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.searchDetails = {
+      faithfulnessScore: 0.92,
+      verificationReportAvailable: true,
+      verificationTotalClaims: 3,
+    }
+
+    render(<AnswerPanel />)
+
+    expect(screen.getByText("Verified: High")).toBeInTheDocument()
+    expect(screen.getByText("Verification report (3 claims)")).toBeInTheDocument()
+  })
+
+  it("uses verification rate as trust badge fallback when faithfulness is missing", () => {
+    state.answer = "Claim [1]."
+    state.citations = [{ index: 1 }]
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.searchDetails = {
+      verificationRate: 0.82,
+      verificationReportAvailable: true,
+    }
+
+    render(<AnswerPanel />)
+
+    expect(screen.getByText("Verified: Medium")).toBeInTheDocument()
+    expect(screen.getByText("Verification report")).toBeInTheDocument()
   })
 
   it("collapses very long answers with a show-more toggle", () => {

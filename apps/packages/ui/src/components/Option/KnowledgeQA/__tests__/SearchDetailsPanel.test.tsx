@@ -5,12 +5,14 @@ import { SearchDetailsPanel } from "../SearchDetailsPanel"
 const state = {
   searchDetails: null as any,
   isSearching: false,
+  results: [] as Array<{ score?: number }>,
 }
 
 vi.mock("../KnowledgeQAProvider", () => ({
   useKnowledgeQA: () => ({
     searchDetails: state.searchDetails,
     isSearching: state.isSearching,
+    results: state.results,
   }),
 }))
 
@@ -18,6 +20,7 @@ describe("SearchDetailsPanel", () => {
   beforeEach(() => {
     state.searchDetails = null
     state.isSearching = false
+    state.results = []
   })
 
   it("does not render without search detail data", () => {
@@ -26,6 +29,10 @@ describe("SearchDetailsPanel", () => {
   })
 
   it("renders collapsible runtime search details", () => {
+    state.results = [
+      { score: 0.84 },
+      { score: 0.62 },
+    ]
     state.searchDetails = {
       expandedQueries: ["q1 variation", "q1 synonym"],
       rerankingEnabled: true,
@@ -34,6 +41,28 @@ describe("SearchDetailsPanel", () => {
       webFallbackEnabled: true,
       webFallbackTriggered: true,
       webFallbackEngine: "duckduckgo",
+      faithfulnessScore: 0.91,
+      faithfulnessTotalClaims: 4,
+      faithfulnessSupportedClaims: 3,
+      faithfulnessUnsupportedClaims: 1,
+      verificationRate: 0.88,
+      verificationCoverage: 0.75,
+      verificationReportAvailable: true,
+      retrievalLatencyMs: 182,
+      documentsConsidered: 42,
+      chunksConsidered: 318,
+      documentsReturned: 10,
+      candidatesConsidered: 42,
+      candidatesReturned: 10,
+      candidatesRejected: 32,
+      alsoConsidered: [
+        {
+          id: "cand-1",
+          title: "Candidate source 1",
+          score: 0.41,
+          reason: "Below threshold",
+        },
+      ],
       whyTheseSources: {
         topicality: 0.91,
         diversity: 0.45,
@@ -48,5 +77,22 @@ describe("SearchDetailsPanel", () => {
     expect(screen.getByText(/Enabled \(hybrid\)/)).toBeInTheDocument()
     expect(screen.getByText("84%")).toBeInTheDocument()
     expect(screen.getByText(/Triggered \(duckduckgo\)/)).toBeInTheDocument()
+    expect(screen.getByText(/faithfulness 91%/i)).toBeInTheDocument()
+    expect(screen.getByText(/supported 3/i)).toBeInTheDocument()
+    expect(screen.getByText(/unsupported 1/i)).toBeInTheDocument()
+    const candidatesLine = screen.getByText(/Candidates considered:/i).closest("div")
+    expect(candidatesLine).not.toBeNull()
+    expect(candidatesLine?.textContent).toContain("returned 10")
+    expect(candidatesLine?.textContent).toContain("rejected 32")
+    expect(candidatesLine?.textContent).toContain("retained 24%")
+    expect(
+      screen.getByText(/considered 42 documents • 318 chunks scanned • returned 10 sources/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/182 ms/i)).toBeInTheDocument()
+    expect(screen.getByText("Candidate source 1")).toBeInTheDocument()
+    expect(screen.getByText("Threshold")).toBeInTheDocument()
+    expect(
+      screen.getByText(/\(41% • -21 pts vs weakest included\) — Below threshold/i)
+    ).toBeInTheDocument()
   })
 })

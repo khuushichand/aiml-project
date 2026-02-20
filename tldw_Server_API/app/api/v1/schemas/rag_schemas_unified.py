@@ -52,7 +52,7 @@ class UnifiedRAGRequest(BaseModel):
         ...,
         description="The search query",
         min_length=1,
-        max_length=2000,
+        max_length=20000,
         example="What is machine learning?"
     )
 

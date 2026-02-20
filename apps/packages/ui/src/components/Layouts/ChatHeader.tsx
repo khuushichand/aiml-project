@@ -1,7 +1,16 @@
 import React from "react"
 import type { TFunction } from "i18next"
 import { Tooltip, Input } from "antd"
-import { CogIcon, Menu, Moon, Search, Signpost, SquarePen, Sun } from "lucide-react"
+import {
+  CogIcon,
+  Menu,
+  Moon,
+  Search,
+  Signpost,
+  SquarePen,
+  Sun,
+  UserCircle2
+} from "lucide-react"
 import { HeaderShortcuts } from "./HeaderShortcuts"
 import logoImage from "~/assets/icon.png"
 
@@ -22,6 +31,12 @@ type ChatHeaderProps = {
   onToggleTheme?: () => void
   themeMode?: "system" | "dark" | "light"
   onClearChat: () => void
+  onStartSavedChat?: () => void
+  onStartTemporaryChat?: () => void
+  onStartCharacterChat?: () => void
+  activeCharacterName?: string | null
+  showChatTitle?: boolean
+  showSessionModeBadge?: boolean
   shortcutsExpanded: boolean
   onToggleShortcuts: (next?: boolean) => void
   commandKeyLabel: string
@@ -44,6 +59,12 @@ export function ChatHeader({
   onToggleTheme,
   themeMode = "dark",
   onClearChat,
+  onStartSavedChat,
+  onStartTemporaryChat,
+  onStartCharacterChat,
+  activeCharacterName,
+  showChatTitle = true,
+  showSessionModeBadge = true,
   shortcutsExpanded,
   onToggleShortcuts,
   commandKeyLabel
@@ -59,11 +80,18 @@ export function ChatHeader({
   const shortcutsToggleLabel = shortcutsExpanded
     ? t("option:header.hideShortcuts", "Hide shortcuts")
     : t("option:header.showShortcuts", "Show shortcuts")
-  const canEditTitle = !temporaryChat && historyId && historyId !== "temp"
+  const canEditTitle =
+    showChatTitle && !temporaryChat && historyId && historyId !== "temp"
   const isDarkTheme = themeMode !== "light"
   const themeToggleLabel = isDarkTheme
     ? t("common:theme.switchToLight", "Switch to light theme")
     : t("common:theme.switchToDark", "Switch to dark theme")
+  const startSavedChat =
+    onStartSavedChat ?? onClearChat
+  const startTemporaryChat =
+    onStartTemporaryChat ?? onClearChat
+  const startCharacterChat =
+    onStartCharacterChat ?? onClearChat
   const focusRingClasses =
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
@@ -139,6 +167,47 @@ export function ChatHeader({
               )}
             </div>
           )}
+          {showSessionModeBadge ? (
+            <div className="flex items-center gap-1">
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                  temporaryChat
+                    ? "border-warn/50 bg-warn/10 text-warn"
+                    : "border-success/40 bg-success/10 text-success"
+                }`}
+                title={
+                  temporaryChat
+                    ? (t(
+                        "playground:header.modeTemporaryHelp",
+                        "Temporary chat. Messages are not saved."
+                      ) as string)
+                    : (t(
+                        "playground:header.modeSavedHelp",
+                        "Saved chat. History is persisted."
+                      ) as string)
+                }
+              >
+                {temporaryChat
+                  ? t("playground:header.modeTemporary", "Temporary")
+                  : t("playground:header.modeSaved", "Saved")}
+              </span>
+              {activeCharacterName ? (
+                <span
+                  className="inline-flex max-w-[180px] items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primaryStrong"
+                  title={t(
+                    "playground:header.modeCharacterHelp",
+                    "Character mode is active."
+                  ) as string}
+                >
+                  <UserCircle2 className="size-3" aria-hidden="true" />
+                  <span className="truncate">
+                    {t("playground:header.modeCharacter", "Character")}:{" "}
+                    {activeCharacterName}
+                  </span>
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -153,16 +222,38 @@ export function ChatHeader({
               {commandKeyLabel}K
             </span>
           </button>
-          <Tooltip title={t("common:newChat", "New chat")}>
+          <Tooltip title={t("playground:header.newSavedChat", "New saved chat")}>
             <button
               type="button"
-              onClick={onClearChat}
-              aria-label={t("common:newChat", "New chat") as string}
+              onClick={startSavedChat}
+              aria-label={t("playground:header.newSavedChat", "New saved chat") as string}
               className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
-              title={t("common:newChat", "New chat")}
+              title={t("playground:header.newSavedChat", "New saved chat")}
               data-testid="new-chat-button"
             >
               <SquarePen className="size-4" aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <Tooltip title={t("playground:header.newTemporaryChat", "Temporary chat (not saved)")}>
+            <button
+              type="button"
+              onClick={startTemporaryChat}
+              aria-label={t("playground:header.newTemporaryChat", "Temporary chat (not saved)") as string}
+              className={`inline-flex items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+              title={t("playground:header.newTemporaryChat", "Temporary chat (not saved)")}
+            >
+              {t("playground:header.temporaryShort", "Temp")}
+            </button>
+          </Tooltip>
+          <Tooltip title={t("playground:header.newCharacterChat", "Character chat")}>
+            <button
+              type="button"
+              onClick={startCharacterChat}
+              aria-label={t("playground:header.newCharacterChat", "Character chat") as string}
+              className={`inline-flex items-center justify-center rounded-md px-2 py-1.5 text-[11px] font-medium text-text-muted hover:bg-surface2 hover:text-text ${focusRingClasses}`}
+              title={t("playground:header.newCharacterChat", "Character chat")}
+            >
+              {t("playground:header.characterShort", "Character")}
             </button>
           </Tooltip>
           <Tooltip title={t("sidepanel:header.settingsShortLabel", "Settings")}>

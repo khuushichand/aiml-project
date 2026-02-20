@@ -19,6 +19,7 @@ import {
   Loader2,
   Trash2,
   UploadCloud,
+  User,
   Download
 } from 'lucide-react'
 import React, { useState, useEffect, Suspense, useMemo, useRef, useCallback } from 'react'
@@ -3302,6 +3303,18 @@ export function ContentViewer({
                 </button>
               </Tooltip>
             )}
+            {!isNote && (
+              <Tooltip title={t('review:mediaPage.analyzeButtonTooltip', { defaultValue: 'Generate AI analysis of this content' })}>
+                <button
+                  onClick={() => setAnalysisModalOpen(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-primaryStrong bg-primary/10 hover:bg-primary/20 rounded transition-colors"
+                  aria-label={t('review:mediaPage.analyzeButton', { defaultValue: 'Analyze' })}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {t('review:mediaPage.analyzeButton', { defaultValue: 'Analyze' })}
+                </button>
+              </Tooltip>
+            )}
             <Dropdown
               menu={{ items: actionMenuItems }}
               trigger={['click']}
@@ -3355,6 +3368,34 @@ export function ContentViewer({
             {selectedMedia.meta?.source && (
               <span className="truncate max-w-[200px]" title={selectedMedia.meta.source}>
                 {selectedMedia.meta.source}
+              </span>
+            )}
+            {selectedMedia.meta?.author && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                data-testid="media-author"
+                title={selectedMedia.meta.author}
+              >
+                <User className="w-3 h-3" />
+                <span className="truncate max-w-[200px]">{selectedMedia.meta.author}</span>
+              </span>
+            )}
+            {selectedMedia.meta?.published_at && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                data-testid="media-published-date"
+              >
+                {t('review:mediaPage.publishedLabel', { defaultValue: 'Published' })}{' '}
+                {(() => {
+                  try {
+                    const d = new Date(selectedMedia.meta.published_at)
+                    return Number.isNaN(d.getTime())
+                      ? selectedMedia.meta.published_at
+                      : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
+                  } catch {
+                    return selectedMedia.meta.published_at
+                  }
+                })()}
               </span>
             )}
             {(() => {
@@ -3424,6 +3465,30 @@ export function ContentViewer({
                 })}
               </span>
             )}
+            {/* Transcription model */}
+            {(() => {
+              const model =
+                mediaDetail?.transcription_model ??
+                mediaDetail?.metadata?.transcription_model ??
+                mediaDetail?.safe_metadata?.transcription_model ??
+                mediaDetail?.processing?.transcription_model ??
+                selectedMedia?.meta?.transcription_model
+              if (typeof model !== 'string' || !model.trim()) return null
+              return (
+                <span
+                  className="inline-flex items-center gap-1 rounded bg-surface2 px-1.5 py-0.5"
+                  data-testid="media-transcription-model"
+                  title={t('review:mediaPage.transcriptionModelTooltip', {
+                    defaultValue: 'Transcription model used'
+                  })}
+                >
+                  {t('review:mediaPage.transcriptionModelBadge', {
+                    defaultValue: 'STT: {{model}}',
+                    model: model.trim()
+                  })}
+                </span>
+              )
+            })()}
             {processingStatusBadges.map((badge) => (
               <span
                 key={badge.key}

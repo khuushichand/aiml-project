@@ -23,6 +23,12 @@ const mockOnSubmit = vi.fn()
 const mockRegenerateLastMessage = vi.fn()
 const mockDeleteMessage = vi.fn()
 const mockEditMessage = vi.fn()
+const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
+  () => ({
+    mockScheduleWorkspaceUndoAction: vi.fn(),
+    mockUndoWorkspaceAction: vi.fn()
+  })
+)
 
 const connectionStoreState = {
   state: {
@@ -137,6 +143,7 @@ vi.mock("@/store/option", () => ({
       setRagTopK: (value: number | null) => void
       ragAdvancedOptions: Record<string, unknown>
       setRagAdvancedOptions: (opts: Record<string, unknown>) => void
+      selectedModel: string | null
     }) => unknown
   ) =>
     selector({
@@ -146,8 +153,15 @@ vi.mock("@/store/option", () => ({
       ragTopK: 8,
       setRagTopK: vi.fn(),
       ragAdvancedOptions: {},
-      setRagAdvancedOptions: vi.fn()
+      setRagAdvancedOptions: vi.fn(),
+      selectedModel: null
     })
+}))
+
+vi.mock("@/store/model", () => ({
+  useStoreChatModelSettings: (
+    selector: (state: { apiProvider?: string }) => unknown
+  ) => selector({ apiProvider: undefined })
 }))
 
 vi.mock("@/hooks/useMessageOption", () => ({
@@ -155,13 +169,38 @@ vi.mock("@/hooks/useMessageOption", () => ({
 }))
 
 vi.mock("@/components/Common/Playground/Message", () => ({
-  PlaygroundMessage: ({ message }: { message: string }) => (
-    <div data-testid="playground-message">{message}</div>
+  PlaygroundMessage: ({
+    message,
+    onDeleteMessage,
+    currentMessageIndex
+  }: {
+    message: string
+    onDeleteMessage?: () => Promise<void> | void
+    currentMessageIndex?: number
+  }) => (
+    <div data-testid="playground-message">
+      <span>{message}</span>
+      {onDeleteMessage && (
+        <button
+          type="button"
+          aria-label={`delete-message-${currentMessageIndex ?? -1}`}
+          onClick={() => void onDeleteMessage()}
+        >
+          Delete
+        </button>
+      )}
+    </div>
   )
 }))
 
 vi.mock("@/components/Common/FeatureEmptyState", () => ({
   default: ({ title }: { title: string }) => <div>{title}</div>
+}))
+
+vi.mock("../undo-manager", () => ({
+  WORKSPACE_UNDO_WINDOW_MS: 10000,
+  scheduleWorkspaceUndoAction: mockScheduleWorkspaceUndoAction,
+  undoWorkspaceAction: mockUndoWorkspaceAction
 }))
 
 vi.mock("../source-location-copy", () => ({
@@ -185,6 +224,18 @@ describe("ChatPane Stage 1 reliability and controls", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     workspaceSessions.clear()
+    mockUndoWorkspaceAction.mockReturnValue(true)
+    mockScheduleWorkspaceUndoAction.mockImplementation(
+      ({
+        apply
+      }: {
+        apply: () => void
+        undo: () => void
+      }) => {
+        apply()
+        return { id: "undo-1", expiresAt: Date.now() + 10000 }
+      }
+    )
 
     connectionStoreState.state.phase = ConnectionPhase.CONNECTED
     connectionStoreState.state.isChecking = false
@@ -239,6 +290,14 @@ describe("ChatPane Stage 1 reliability and controls", () => {
     })
   })
 
+  it("caps transcript growth at roughly two viewport heights before scrolling", () => {
+    render(<ChatPane />)
+
+    const transcript = screen.getByRole("log", { name: "Chat messages" })
+    expect((transcript as HTMLElement).style.maxHeight).toContain("200vh")
+    expect((transcript as HTMLElement).className).toContain("overflow-y-auto")
+  })
+
   it("clears chat with confirmation and persists empty session state", () => {
     messageOptionState.messages = [
       {
@@ -273,12 +332,159 @@ describe("ChatPane Stage 1 reliability and controls", () => {
       preserveServerChatId: true
     })
     expect(mockSetServerChatId).toHaveBeenCalledWith(null)
+    expect(mockScheduleWorkspaceUndoAction).toHaveBeenCalledTimes(1)
     expect(mockSaveWorkspaceChatSession).toHaveBeenCalledWith("workspace-a", {
       messages: [],
       history: [],
       historyId: null,
       serverChatId: null
     })
+  })
+
+  it("restores previous chat session when clear-chat undo runs", () => {
+    messageOptionState.messages = [
+      {
+        id: "m1",
+        isBot: false,
+        name: "You",
+        message: "hello",
+        sources: []
+      }
+    ]
+    messageOptionState.history = [{ role: "user", content: "hello" }]
+    messageOptionState.historyId = "history-a"
+    messageOptionState.serverChatId = "server-chat-a"
+
+    const confirmSpy = vi
+      .spyOn(Modal, "confirm")
+      .mockImplementation((config) => {
+        config.onOk?.()
+        return {
+          destroy: vi.fn(),
+          update: vi.fn()
+        } as any
+      })
+
+    render(<ChatPane />)
+    fireEvent.click(screen.getByRole("button", { name: "Clear chat" }))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    const scheduledConfig = mockScheduleWorkspaceUndoAction.mock.calls[0]?.[0] as
+      | { undo: () => void }
+      | undefined
+    expect(scheduledConfig).toBeDefined()
+
+    scheduledConfig?.undo()
+
+    expect(mockSetMessages).toHaveBeenLastCalledWith([
+      {
+        id: "m1",
+        isBot: false,
+        name: "You",
+        message: "hello",
+        sources: []
+      }
+    ])
+    expect(mockSetHistory).toHaveBeenLastCalledWith([
+      { role: "user", content: "hello" }
+    ])
+    expect(mockSetHistoryId).toHaveBeenLastCalledWith("history-a", {
+      preserveServerChatId: true
+    })
+    expect(mockSetServerChatId).toHaveBeenLastCalledWith("server-chat-a")
+    expect(mockSaveWorkspaceChatSession).toHaveBeenLastCalledWith("workspace-a", {
+      messages: [
+        {
+          id: "m1",
+          isBot: false,
+          name: "You",
+          message: "hello",
+          sources: []
+        }
+      ],
+      history: [{ role: "user", content: "hello" }],
+      historyId: "history-a",
+      serverChatId: "server-chat-a"
+    })
+  })
+
+  it("routes message deletion through undo-managed restore flow", async () => {
+    messageOptionState.messages = [
+      {
+        id: "m1",
+        isBot: false,
+        name: "You",
+        message: "First",
+        sources: []
+      },
+      {
+        id: "m2",
+        isBot: true,
+        name: "Assistant",
+        message: "Second",
+        sources: []
+      }
+    ]
+    messageOptionState.history = [
+      { role: "user", content: "First" },
+      { role: "assistant", content: "Second" }
+    ]
+    messageOptionState.historyId = "history-a"
+    messageOptionState.serverChatId = "server-chat-a"
+    mockDeleteMessage.mockResolvedValue(undefined)
+
+    render(<ChatPane />)
+    fireEvent.click(screen.getByRole("button", { name: "delete-message-0" }))
+
+    await waitFor(() => {
+      expect(mockDeleteMessage).toHaveBeenCalledWith(0)
+      expect(mockScheduleWorkspaceUndoAction).toHaveBeenCalledTimes(1)
+      expect(mockSaveWorkspaceChatSession).toHaveBeenCalledWith("workspace-a", {
+        messages: [
+          {
+            id: "m2",
+            isBot: true,
+            name: "Assistant",
+            message: "Second",
+            sources: []
+          }
+        ],
+        history: [{ role: "assistant", content: "Second" }],
+        historyId: "history-a",
+        serverChatId: "server-chat-a"
+      })
+    })
+
+    const scheduledConfig = mockScheduleWorkspaceUndoAction.mock.calls[0]?.[0] as
+      | { undo: () => void }
+      | undefined
+    expect(scheduledConfig).toBeDefined()
+    scheduledConfig?.undo()
+
+    expect(mockSetMessages).toHaveBeenLastCalledWith([
+      {
+        id: "m1",
+        isBot: false,
+        name: "You",
+        message: "First",
+        sources: []
+      },
+      {
+        id: "m2",
+        isBot: true,
+        name: "Assistant",
+        message: "Second",
+        sources: []
+      }
+    ])
+    expect(mockSetHistory).toHaveBeenLastCalledWith([
+      { role: "user", content: "First" },
+      { role: "assistant", content: "Second" }
+    ])
+    expect(mockSetHistoryId).toHaveBeenLastCalledWith("history-a", {
+      preserveServerChatId: true
+    })
+    expect(mockSetServerChatId).toHaveBeenLastCalledWith("server-chat-a")
   })
 
   it("shows connection banner and retries connection check", () => {

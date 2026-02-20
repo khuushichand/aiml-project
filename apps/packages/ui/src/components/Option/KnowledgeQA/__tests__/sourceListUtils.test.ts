@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest"
 import {
+  buildCitationUsageAnchors,
+  buildSourceContentFacetCounts,
+  buildHighlightTerms,
   buildSourceTypeCounts,
+  detectSourceContentFacet,
+  filterItemsByContentFacet,
+  filterItemsByDateRange,
+  filterItemsByKeyword,
   filterItemsBySourceType,
   formatChunkPosition,
   formatSourceDate,
+  getFreshnessDescriptor,
   getRelevanceDescriptor,
   getSourceTypeLabel,
   normalizeSourceType,
+  splitTextByHighlights,
   sortSourceItems,
   type SourceListItem,
 } from "../sourceListUtils"
@@ -49,6 +58,86 @@ describe("sourceListUtils", () => {
     expect(filterItemsBySourceType(items, "notes").map((item) => item.result.id)).toEqual([
       "b",
       "c",
+    ])
+  })
+
+  it("detects and filters content-type facets", () => {
+    const items = [
+      makeItem("pdf", 0, {
+        metadata: { source_type: "media_db", title: "Spec", file_type: "pdf" },
+      }),
+      makeItem("video", 1, {
+        metadata: {
+          source_type: "media_db",
+          title: "Demo",
+          mime_type: "video/mp4",
+        },
+      }),
+      makeItem("note", 2, {
+        metadata: { source_type: "notes", title: "Research note" },
+      }),
+    ]
+
+    expect(detectSourceContentFacet(items[0].result)).toBe("pdf")
+    expect(detectSourceContentFacet(items[1].result)).toBe("video")
+    expect(detectSourceContentFacet(items[2].result)).toBe("note")
+
+    const counts = buildSourceContentFacetCounts(items.map((item) => item.result))
+    expect(counts.pdf).toBe(1)
+    expect(counts.video).toBe(1)
+    expect(counts.note).toBe(1)
+
+    expect(filterItemsByContentFacet(items, "pdf").map((item) => item.result.id)).toEqual([
+      "pdf",
+    ])
+  })
+
+  it("filters source items by keyword terms", () => {
+    const items = [
+      makeItem("alpha", 0, {
+        content: "Neural retrieval baseline report",
+        metadata: { source_type: "media_db", title: "Alpha report" },
+      }),
+      makeItem("beta", 1, {
+        content: "Product launch memo",
+        metadata: { source_type: "notes", title: "Beta notes" },
+      }),
+    ]
+
+    const filtered = filterItemsByKeyword(items, "retrieval baseline")
+    expect(filtered.map((item) => item.result.id)).toEqual(["alpha"])
+  })
+
+  it("filters source items by date range", () => {
+    const now = Date.parse("2026-02-20T00:00:00.000Z")
+    const items = [
+      makeItem("recent", 0, {
+        metadata: {
+          source_type: "media_db",
+          title: "Recent",
+          created_at: "2026-02-15T00:00:00.000Z",
+        },
+      }),
+      makeItem("old", 1, {
+        metadata: {
+          source_type: "media_db",
+          title: "Old",
+          created_at: "2023-01-01T00:00:00.000Z",
+        },
+      }),
+      makeItem("no-date", 2, {
+        metadata: {
+          source_type: "media_db",
+          title: "No date",
+        },
+      }),
+    ]
+
+    expect(filterItemsByDateRange(items, "last_30d", now).map((item) => item.result.id)).toEqual([
+      "recent",
+    ])
+    expect(filterItemsByDateRange(items, "older_365d", now).map((item) => item.result.id)).toEqual([
+      "old",
     ])
   })
 
@@ -120,5 +209,88 @@ describe("sourceListUtils", () => {
     const formatted = formatSourceDate(dated.result)
     expect(formatted).toContain("2026")
   })
-})
 
+  it("classifies source freshness into recent, aging, and stale bands", () => {
+    const now = Date.parse("2026-02-20T00:00:00.000Z")
+    const recent = makeItem("recent", 0, {
+      metadata: {
+        source_type: "media_db",
+        title: "Recent source",
+        created_at: "2026-02-18T00:00:00.000Z",
+      },
+    })
+    const aging = makeItem("aging", 1, {
+      metadata: {
+        source_type: "media_db",
+        title: "Aging source",
+        created_at: "2024-10-01T00:00:00.000Z",
+      },
+    })
+    const stale = makeItem("stale", 2, {
+      metadata: {
+        source_type: "media_db",
+        title: "Stale source",
+        created_at: "2021-01-01T00:00:00.000Z",
+      },
+    })
+
+    expect(getFreshnessDescriptor(recent.result, now)?.label).toBe("Updated 2d ago")
+    expect(getFreshnessDescriptor(aging.result, now)?.className).toContain("text-warn")
+    expect(getFreshnessDescriptor(stale.result, now)?.label).toBe("From 2021")
+    expect(getFreshnessDescriptor(stale.result, now)?.className).toContain("text-danger")
+  })
+
+  it("builds highlight terms and splits excerpts into highlight segments", () => {
+    const terms = buildHighlightTerms("compare source confidence", [
+      "confidence thresholds",
+    ])
+    expect(terms).toContain("source")
+    expect(terms).toContain("confidence")
+
+    const segments = splitTextByHighlights(
+      "This source has high confidence according to ranking.",
+      terms
+    )
+    expect(segments.some((segment) => segment.highlight)).toBe(true)
+    expect(
+      segments.some(
+        (segment) => segment.highlight && segment.text.toLowerCase() === "source"
+      )
+    ).toBe(true)
+  })
+
+  it("applies word-boundary highlighting for single tokens", () => {
+    const segments = splitTextByHighlights("Storage systems improve search", ["rag"])
+    expect(
+      segments.some(
+        (segment) => segment.highlight && segment.text.toLowerCase() === "rag"
+      )
+    ).toBe(false)
+  })
+
+  it("builds sentence-level citation usage anchors with occurrences", () => {
+    const answer =
+      "First claim cites [3]. Second claim cites [8]. Third sentence revisits [3] and [3]."
+    const usage = buildCitationUsageAnchors(answer)
+
+    expect(usage[3]).toEqual([
+      {
+        sentenceNumber: 1,
+        occurrence: 1,
+        sentencePreview: "First claim cites [3].",
+      },
+      {
+        sentenceNumber: 3,
+        occurrence: 2,
+        sentencePreview: "Third sentence revisits [3] and [3].",
+      },
+    ])
+    expect(usage[8]).toEqual([
+      {
+        sentenceNumber: 2,
+        occurrence: 1,
+        sentencePreview: "Second claim cites [8].",
+      },
+    ])
+  })
+})

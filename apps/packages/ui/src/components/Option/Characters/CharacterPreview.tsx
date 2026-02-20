@@ -11,6 +11,7 @@ interface CharacterPreviewProps {
   system_prompt?: string
   greeting?: string
   tags?: string[]
+  expandedMetadata?: boolean
 }
 
 
@@ -21,7 +22,8 @@ export function CharacterPreview({
   image_base64,
   system_prompt,
   greeting,
-  tags
+  tags,
+  expandedMetadata = false
 }: CharacterPreviewProps) {
   const { t } = useTranslation(["settings", "common"])
   const [avatarImgError, setAvatarImgError] = useState(false)
@@ -74,20 +76,30 @@ export function CharacterPreview({
             {displayName}
           </div>
           {description && (
-            <div className="text-sm text-text-muted line-clamp-2">
+            <div
+              className={`text-sm ${
+                expandedMetadata
+                  ? "text-text whitespace-pre-wrap break-words"
+                  : "text-text-muted line-clamp-2"
+              }`}
+            >
               {description}
             </div>
           )}
           {tags && tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {tags.slice(0, 4).map((tag, i) => (
+              {(expandedMetadata ? tags : tags.slice(0, 4)).map((tag, i) => (
                 <span
                   key={`${tag}-${i}`}
-                  className="inline-flex items-center rounded-full bg-surface2 px-2 py-0.5 text-xs text-text-muted">
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
+                    expandedMetadata
+                      ? "border border-border bg-surface text-text"
+                      : "bg-surface2 text-text-muted"
+                  }`}>
                   {tag}
                 </span>
               ))}
-              {tags.length > 4 && (
+              {!expandedMetadata && tags.length > 4 && (
                 <span className="text-xs text-text-subtle">
                   +{tags.length - 4}
                 </span>

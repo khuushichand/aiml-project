@@ -195,6 +195,8 @@ vi.mock("@/hooks/chat/useCompareMode", () => ({
     setCompareParentForHistory: vi.fn(),
     compareCanonicalByCluster: {},
     setCompareCanonicalForCluster: vi.fn(),
+    compareContinuationModeByCluster: {},
+    setCompareContinuationModeForCluster: vi.fn(),
     compareSplitChats: {},
     setCompareSplitChat: vi.fn(),
     compareMaxModels: 4,

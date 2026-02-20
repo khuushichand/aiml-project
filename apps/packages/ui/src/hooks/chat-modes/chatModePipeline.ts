@@ -519,10 +519,22 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
   } catch (e) {
     cancelStreamingUpdate()
     const assistantContent = buildAssistantErrorContent(fullText, e)
+    const interruptionReason =
+      e instanceof Error && e.message.trim().length > 0
+        ? e.message
+        : "Something went wrong."
     setMessagesWithTransition((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId
-          ? updateActiveVariant(msg, { message: assistantContent })
+          ? updateActiveVariant(msg, {
+              message: assistantContent,
+              generationInfo: {
+                ...(msg.generationInfo || {}),
+                interrupted: true,
+                interruptionReason,
+                interruptedAt: Date.now()
+              }
+            })
           : msg
       )
     )

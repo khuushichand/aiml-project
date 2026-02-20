@@ -2,6 +2,7 @@ import React, { useEffect, useMemo } from "react"
 import { Download } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
+import { isKnowledgeQaHistoryItem, sortHistoryNewestFirst } from "../historyUtils"
 import { HistoryPane } from "../history/HistoryPane"
 import { KnowledgeContextBar } from "../context/KnowledgeContextBar"
 import { KnowledgeComposer } from "../composer/KnowledgeComposer"
@@ -21,8 +22,26 @@ const READY_STATE_SUGGESTIONS = [
   "Compare conclusions across my documents",
 ]
 
+const READY_STATE_ONBOARDING_SUGGESTIONS = [
+  "How do I add my first source?",
+  "What file types can I search here?",
+  "Try a web-first search about this topic",
+  "Show me an example of a cited answer",
+]
+
 function normalizeSourceSet(values: string[]): string {
   return [...values].sort((left, right) => left.localeCompare(right)).join("|")
+}
+
+function hasConversationId(item: { conversationId?: string }): boolean {
+  return (
+    typeof item.conversationId === "string" &&
+    item.conversationId.trim().length > 0
+  )
+}
+
+function hasQueryText(item: { query?: string }): boolean {
+  return typeof item.query === "string" && item.query.trim().length > 0
 }
 
 export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
@@ -56,16 +75,36 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   const setEvidenceRailTab = knowledgeQa.setEvidenceRailTab ?? (() => undefined)
   const lastSearchScope = knowledgeQa.lastSearchScope ?? null
   const focusSource = knowledgeQa.focusSource ?? (() => undefined)
+  const settingsPanelOpen = knowledgeQa.settingsPanelOpen ?? false
 
   const hasResults = results.length > 0 || Boolean(answer)
   const showNoResultsState =
     hasSearched && !isSearching && !error && results.length === 0 && !answer
   const hasVisibleResultsArea =
     hasResults || showNoResultsState || Boolean(error) || isSearching
-  const recentHistoryItem = searchHistory[0] || null
+  const recentHistoryItem = useMemo(() => {
+    const sortedHistory = sortHistoryNewestFirst(searchHistory)
+    const recentKnowledgeThreadItem = sortedHistory.find(
+      (item) => isKnowledgeQaHistoryItem(item) && hasConversationId(item)
+    )
+    const recentKnowledgeQueryItem = sortedHistory.find(
+      (item) => isKnowledgeQaHistoryItem(item) && hasQueryText(item)
+    )
+    return (
+      recentKnowledgeThreadItem ||
+      recentKnowledgeQueryItem ||
+      sortedHistory.find(hasConversationId) ||
+      sortedHistory.find(hasQueryText) ||
+      null
+    )
+  }, [searchHistory])
   const isEvidenceRailOpen = canControlEvidence
     ? evidenceRailOpen
     : hasVisibleResultsArea
+  const readyStateSuggestions =
+    settings.sources.length > 0
+      ? READY_STATE_SUGGESTIONS
+      : READY_STATE_ONBOARDING_SUGGESTIONS
 
   const contextChangedSinceLastRun = useMemo(() => {
     if (!lastSearchScope) return false
@@ -81,6 +120,12 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
       setEvidenceRailOpen(true)
     }
   }, [hasResults, evidenceRailOpen, setEvidenceRailOpen])
+
+  useEffect(() => {
+    if (settingsPanelOpen && evidenceRailOpen) {
+      setEvidenceRailOpen(false)
+    }
+  }, [settingsPanelOpen, evidenceRailOpen, setEvidenceRailOpen])
 
   const focusSearchInput = () => {
     const input = document.getElementById(
@@ -115,6 +160,10 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     }
   }
 
+  const handleOpenSourceSelector = () => {
+    setSettingsPanelOpen(true)
+  }
+
   return (
     <div className="relative flex h-full min-h-0">
       <a
@@ -136,7 +185,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
               "px-4 transition-all duration-300 md:px-6",
               hasVisibleResultsArea
                 ? "pt-6 pb-4"
-                : "flex flex-1 items-center justify-center py-6"
+                : "pt-6 pb-4"
             )}
           >
             <div className="mx-auto w-full max-w-4xl space-y-4">
@@ -144,7 +193,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                 preset={preset}
                 onPresetChange={setPreset}
                 sources={settings.sources}
-                onOpenSources={() => setSettingsPanelOpen(true)}
+                onSourcesChange={(sources) => updateSetting("sources", sources)}
                 webEnabled={settings.enable_web_fallback}
                 onToggleWeb={() =>
                   updateSetting("enable_web_fallback", !settings.enable_web_fallback)
@@ -155,14 +204,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
 
               {!hasVisibleResultsArea ? (
                 <KnowledgeReadyState
-                  suggestedPrompts={READY_STATE_SUGGESTIONS}
+                  suggestedPrompts={readyStateSuggestions}
                   onPromptClick={handleSuggestedPrompt}
                   onContinueRecent={() => {
                     if (recentHistoryItem) {
                       void restoreFromHistory(recentHistoryItem)
                     }
                   }}
-                  onSelectSources={() => setSettingsPanelOpen(true)}
+                  onSelectSources={handleOpenSourceSelector}
                   hasSources={settings.sources.length > 0}
                   hasRecentSession={Boolean(recentHistoryItem)}
                 />
@@ -185,7 +234,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   <div className="flex justify-end">
                     <button
                       onClick={onExportClick}
-                      className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+                      className="flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-subtle hover:bg-hover hover:text-text transition-colors"
                     >
                       <Download className="h-4 w-4" />
                       Export

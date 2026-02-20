@@ -8,6 +8,13 @@ const { mockGetMediaDetails, mockBgRequest } = vi.hoisted(() => ({
   mockBgRequest: vi.fn()
 }))
 
+const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
+  () => ({
+    mockScheduleWorkspaceUndoAction: vi.fn(),
+    mockUndoWorkspaceAction: vi.fn()
+  })
+)
+
 const testState = {
   isMobile: false,
   storeHydrated: true,
@@ -21,9 +28,12 @@ const testState = {
   setSelectedSourceIds: vi.fn(),
   captureToCurrentNote: vi.fn(),
   clearCurrentNote: vi.fn(),
+  setCurrentNote: vi.fn(),
   loadNote: vi.fn(),
   selectedSourceIds: [] as string[],
   generatedArtifacts: [] as Array<{ id: string }>,
+  isGeneratingOutput: false,
+  generatingOutputType: null as string | null,
   setLeftPaneCollapsed: vi.fn(),
   setRightPaneCollapsed: vi.fn(),
   focusSourceById: vi.fn(() => true),
@@ -90,6 +100,12 @@ vi.mock("@/utils/workspace-playground-prefill", () => ({
   buildKnowledgeQaSeedNote: vi.fn().mockReturnValue("")
 }))
 
+vi.mock("../undo-manager", () => ({
+  WORKSPACE_UNDO_WINDOW_MS: 10000,
+  scheduleWorkspaceUndoAction: mockScheduleWorkspaceUndoAction,
+  undoWorkspaceAction: mockUndoWorkspaceAction
+}))
+
 vi.mock("../WorkspaceHeader", () => ({
   WorkspaceHeader: () => <div data-testid="workspace-header" />
 }))
@@ -142,6 +158,13 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUndoWorkspaceAction.mockReturnValue(true)
+    mockScheduleWorkspaceUndoAction.mockImplementation(
+      (config: { apply?: () => void }) => {
+        config.apply?.()
+        return { id: "workspace-undo-1", expiresAt: Date.now() + 10000 }
+      }
+    )
     testState.isMobile = false
     testState.storeHydrated = true
     testState.leftPaneCollapsed = false
@@ -150,6 +173,8 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     testState.workspaceTag = "workspace:test"
     testState.selectedSourceIds = []
     testState.generatedArtifacts = []
+    testState.isGeneratingOutput = false
+    testState.generatingOutputType = null
     testState.sources = []
     testState.setSourceStatusByMediaId = vi.fn()
     testState.workspaceChatSessions = {}
@@ -221,6 +246,29 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     expect(testState.clearCurrentNote).toHaveBeenCalledTimes(1)
     return waitFor(() => {
       expect(testState.focusWorkspaceNote).toHaveBeenCalledWith("title")
+    })
+  })
+
+  it("uses undo-managed clear flow for non-empty notes from Cmd/Ctrl+N", async () => {
+    testState.currentNote = {
+      id: 9,
+      title: "Draft note",
+      content: "Important draft",
+      keywords: ["draft"],
+      isDirty: true
+    }
+
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true })
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New note" })
+    )
+
+    await waitFor(() => {
+      expect(mockScheduleWorkspaceUndoAction).toHaveBeenCalledTimes(1)
+      expect(testState.clearCurrentNote).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -463,6 +511,28 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
         "ready"
       )
     })
+  })
+
+  it("shows an activity rail when sources are processing or outputs are generating", () => {
+    testState.sources = [
+      {
+        id: "source-processing",
+        mediaId: 808,
+        title: "Queued Source",
+        type: "pdf",
+        status: "processing",
+        addedAt: new Date("2026-02-18T12:00:00.000Z")
+      }
+    ]
+    testState.isGeneratingOutput = true
+    testState.generatingOutputType = "summary"
+
+    render(<WorkspacePlayground />)
+
+    const rail = screen.getByTestId("workspace-activity-rail")
+    expect(rail).toBeInTheDocument()
+    expect(rail).toHaveTextContent("Processing 1 source")
+    expect(rail).toHaveTextContent("Generating summary")
   })
 
   it("marks processing sources as error after repeated non-transient polling failures", async () => {

@@ -12,6 +12,8 @@ type FollowUpInputProps = {
   className?: string
 }
 
+const MAX_FOLLOW_UP_LENGTH = 20000
+
 export function FollowUpInput({ className }: FollowUpInputProps) {
   const { askFollowUp, isSearching, createNewThread, results, answer } =
     useKnowledgeQA()
@@ -20,6 +22,8 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
   const shouldShow = isSearching || results.length > 0 || Boolean(answer)
   const isQueuedState = isSearching && results.length === 0 && !answer
   const useStickyMobileLayout = isMobile
+  const showCharacterCount = input.length >= Math.floor(MAX_FOLLOW_UP_LENGTH * 0.8)
+  const hitCharacterLimit = input.length >= MAX_FOLLOW_UP_LENGTH
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -66,7 +70,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             type="button"
             onClick={handleNewTopic}
             aria-label="Start new topic"
-            className="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-border hover:border-primary/30 hover:bg-muted/50 transition-colors"
+            className="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="Start new topic"
           >
             <Plus className="w-4 h-4 text-text-muted" />
@@ -78,7 +82,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             <input
               type="text"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => setInput(e.target.value.slice(0, MAX_FOLLOW_UP_LENGTH))}
               placeholder={
                 isQueuedState
                   ? "Current search in progress..."
@@ -86,6 +90,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
               }
               aria-label="Ask a follow-up question"
               disabled={isSearching}
+              maxLength={MAX_FOLLOW_UP_LENGTH}
               className={cn(
                 "w-full pl-4 pr-12 py-3",
                 "bg-surface border border-border rounded-lg",
@@ -128,6 +133,20 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             ? "Follow-up input unlocks when the current search completes."
             : "Follow-up questions maintain context. Click \"New Topic\" to start fresh."}
         </p>
+        {showCharacterCount ? (
+          <p
+            className={cn(
+              "mt-1 text-right text-xs",
+              useStickyMobileLayout && "mx-auto max-w-4xl",
+              hitCharacterLimit ? "text-warn" : "text-text-muted"
+            )}
+          >
+            {input.length}/{MAX_FOLLOW_UP_LENGTH}
+            {hitCharacterLimit
+              ? " • Max length reached. Extra text will not be included."
+              : ""}
+          </p>
+        ) : null}
       </div>
     </>
   )

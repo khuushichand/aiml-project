@@ -34,6 +34,7 @@ import type {
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
+const RAG_QUERY_MAX_LENGTH = 20000
 
 const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
   ...schedule,
@@ -605,6 +606,22 @@ export class TldwApiClient {
     return "tldw server API key is missing. Open Settings → tldw server and configure an API key before continuing."
   }
 
+  private normalizeRagQuery(rawQuery: string): string {
+    const normalized =
+      typeof rawQuery === "string" ? rawQuery : String(rawQuery ?? "")
+    if (normalized.length <= RAG_QUERY_MAX_LENGTH) {
+      return normalized
+    }
+
+    // Keep client behavior resilient to backend schema limits.
+    const truncated = normalized.slice(0, RAG_QUERY_MAX_LENGTH).trimEnd()
+    console.warn(
+      `[tldw:rag] query exceeded ${RAG_QUERY_MAX_LENGTH} characters; truncating before request`,
+      { originalLength: normalized.length, truncatedLength: truncated.length }
+    )
+    return truncated
+  }
+
   private getChatMessagesCacheKey(chatId: string, query: string): string {
     return `${chatId}${query || ""}`
   }
@@ -1022,65 +1039,92 @@ export class TldwApiClient {
           ? (meta as any).models
           : []
 
-    return list.map((m: any) => ({
-      id: String(m.id || m.model || m.name),
-      name: String(m.name || m.id || m.model),
-      provider: String(m.provider || "default"),
-      description: m.description,
-      capabilities: Array.isArray(m.capabilities)
-        ? m.capabilities
-        : Array.isArray(m.features)
-          ? m.features
-          : typeof m.capabilities === "object"
-            ? m.capabilities
-            : undefined,
-      context_length:
-        typeof m.context_length === "number"
-          ? m.context_length
-          : typeof m.context_window === "number"
-            ? m.context_window
-            : typeof m.contextLength === "number"
-              ? m.contextLength
+    const toNonEmptyString = (value: unknown): string | null => {
+      if (typeof value !== "string") return null
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+    const isLikelyModelId = (value: string): boolean => {
+      if (/\s/.test(value)) return false
+      return /[/:._-]/.test(value)
+    }
+
+    return list.map((m: any) => {
+      const rawModel =
+        toNonEmptyString(m.model) || toNonEmptyString(m.model_id)
+      const rawName = toNonEmptyString(m.name)
+      const rawId = toNonEmptyString(m.id)
+      const canonicalModelId =
+        rawModel ||
+        (rawName && isLikelyModelId(rawName) ? rawName : null) ||
+        rawId ||
+        rawName ||
+        "unknown-model"
+      const displayName =
+        rawName && !isLikelyModelId(rawName) && rawName !== canonicalModelId
+          ? `${rawName} (${canonicalModelId})`
+          : canonicalModelId
+
+      return {
+        id: canonicalModelId,
+        name: displayName,
+        provider: String(m.provider || "default"),
+        description: m.description,
+        capabilities: Array.isArray(m.capabilities)
+          ? m.capabilities
+          : Array.isArray(m.features)
+            ? m.features
+            : typeof m.capabilities === "object"
+              ? m.capabilities
               : undefined,
-      vision: Boolean(
-        (m.capabilities && m.capabilities.vision) ?? m.vision
-      ),
-      function_calling: Boolean(
-        (m.capabilities &&
-          (m.capabilities.function_calling || m.capabilities.tool_use)) ??
-          m.function_calling
-      ),
-      json_output: Boolean(
-        (m.capabilities && m.capabilities.json_mode) ?? m.json_output
-      ),
-      type: typeof m.type === "string" ? m.type : undefined,
-      modalities:
-        m.modalities && typeof m.modalities === "object"
-          ? {
-              input: Array.isArray(m.modalities.input)
-                ? m.modalities.input.map((v: any) => String(v))
+        context_length:
+          typeof m.context_length === "number"
+            ? m.context_length
+            : typeof m.context_window === "number"
+              ? m.context_window
+              : typeof m.contextLength === "number"
+                ? m.contextLength
                 : undefined,
-              output: Array.isArray(m.modalities.output)
-                ? m.modalities.output.map((v: any) => String(v))
-                : undefined
-            }
-          : {
-              input: Array.isArray(m.input_modality)
-                ? m.input_modality.map((v: any) => String(v))
-                : Array.isArray(m.input_modalities)
-                  ? m.input_modalities.map((v: any) => String(v))
-                  : typeof m.input_modality === "string"
-                    ? [String(m.input_modality)]
-                    : undefined,
-              output: Array.isArray(m.output_modality)
-                ? m.output_modality.map((v: any) => String(v))
-                : Array.isArray(m.output_modalities)
-                  ? m.output_modalities.map((v: any) => String(v))
-                  : typeof m.output_modality === "string"
-                    ? [String(m.output_modality)]
-                    : undefined
-            }
-    }))
+        vision: Boolean(
+          (m.capabilities && m.capabilities.vision) ?? m.vision
+        ),
+        function_calling: Boolean(
+          (m.capabilities &&
+            (m.capabilities.function_calling || m.capabilities.tool_use)) ??
+            m.function_calling
+        ),
+        json_output: Boolean(
+          (m.capabilities && m.capabilities.json_mode) ?? m.json_output
+        ),
+        type: typeof m.type === "string" ? m.type : undefined,
+        modalities:
+          m.modalities && typeof m.modalities === "object"
+            ? {
+                input: Array.isArray(m.modalities.input)
+                  ? m.modalities.input.map((v: any) => String(v))
+                  : undefined,
+                output: Array.isArray(m.modalities.output)
+                  ? m.modalities.output.map((v: any) => String(v))
+                  : undefined
+              }
+            : {
+                input: Array.isArray(m.input_modality)
+                  ? m.input_modality.map((v: any) => String(v))
+                  : Array.isArray(m.input_modalities)
+                    ? m.input_modalities.map((v: any) => String(v))
+                    : typeof m.input_modality === "string"
+                      ? [String(m.input_modality)]
+                      : undefined,
+                output: Array.isArray(m.output_modality)
+                  ? m.output_modality.map((v: any) => String(v))
+                  : Array.isArray(m.output_modalities)
+                    ? m.output_modalities.map((v: any) => String(v))
+                    : typeof m.output_modality === "string"
+                      ? [String(m.output_modality)]
+                      : undefined
+              }
+      }
+    })
   }
 
   async getProviders(): Promise<any> {
@@ -1399,12 +1443,13 @@ export class TldwApiClient {
 
   async ragSearch(query: string, options?: any): Promise<any> {
     const { timeoutMs, signal, ...rest } = options || {}
+    const normalizedQuery = this.normalizeRagQuery(query)
     try {
       return await bgRequest<any>({
         path: '/api/v1/rag/search',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: { query, ...rest },
+        body: { query: normalizedQuery, ...rest },
         timeoutMs,
         abortSignal: signal
       })
@@ -1437,7 +1482,7 @@ export class TldwApiClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: {
-          query,
+          query: normalizedQuery,
           ...rest,
           enable_reranking: false,
           reranking_strategy: 'none'
@@ -1453,11 +1498,12 @@ export class TldwApiClient {
     options?: any
   ): AsyncGenerator<any, void, unknown> {
     const { timeoutMs, signal, ...rest } = options || {}
+    const normalizedQuery = this.normalizeRagQuery(query)
     for await (const line of bgStream({
       path: '/api/v1/rag/search/stream',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: { query, ...rest },
+      body: { query: normalizedQuery, ...rest },
       abortSignal: signal,
       streamIdleTimeoutMs: timeoutMs
     })) {
@@ -1471,7 +1517,8 @@ export class TldwApiClient {
 
   async ragSimple(query: string, options?: any): Promise<any> {
     const { timeoutMs, ...rest } = options || {}
-    return await bgRequest<any>({ path: '/api/v1/rag/simple', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+    const normalizedQuery = this.normalizeRagQuery(query)
+    return await bgRequest<any>({ path: '/api/v1/rag/simple', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query: normalizedQuery, ...rest }, timeoutMs })
   }
 
   // Research / Web search

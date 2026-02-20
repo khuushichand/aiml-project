@@ -1,8 +1,14 @@
 import React from "react"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
 import { StudioPane } from "../StudioPane"
+const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
+  () => ({
+    mockScheduleWorkspaceUndoAction: vi.fn(),
+    mockUndoWorkspaceAction: vi.fn()
+  })
+)
 
 const {
   mockGenerateQuiz,
@@ -227,6 +233,12 @@ vi.mock("@/components/Common/Mermaid", () => ({
   default: ({ code }: { code: string }) => <div data-testid="mermaid">{code}</div>
 }))
 
+vi.mock("../undo-manager", () => ({
+  WORKSPACE_UNDO_WINDOW_MS: 10000,
+  scheduleWorkspaceUndoAction: mockScheduleWorkspaceUndoAction,
+  undoWorkspaceAction: mockUndoWorkspaceAction
+}))
+
 vi.mock("antd", async () => {
   const actual = await vi.importActual<typeof import("antd")>("antd")
   return {
@@ -270,6 +282,18 @@ describe("StudioPane Stage 2 workflows", () => {
     vi.clearAllMocks()
     Modal.destroyAll()
     isMobile = false
+    mockUndoWorkspaceAction.mockReturnValue(true)
+    mockScheduleWorkspaceUndoAction.mockImplementation(
+      ({
+        apply
+      }: {
+        apply: () => void
+        undo: () => void
+      }) => {
+        apply()
+        return { id: "undo-1", expiresAt: Date.now() + 10000 }
+      }
+    )
 
     workspaceStoreState.selectedSourceIds = ["source-1"]
     workspaceStoreState.getSelectedMediaIds = () => [101]
@@ -340,6 +364,7 @@ describe("StudioPane Stage 2 workflows", () => {
 
   afterEach(() => {
     Modal.destroyAll()
+    cleanup()
   })
 
   it("dispatches discuss event for completed artifacts", () => {
@@ -551,7 +576,7 @@ describe("StudioPane Stage 2 workflows", () => {
     ]
 
     render(<StudioPane />)
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+    fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-flashcards"))
 
     fireEvent.change(await screen.findByPlaceholderText("Front (question or term)"), {
       target: { value: "Updated front" }
@@ -573,6 +598,54 @@ describe("StudioPane Stage 2 workflows", () => {
           })
         })
       )
+    })
+  })
+
+  it("removes a flashcard draft with undo parity in editor", async () => {
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-flashcards",
+        type: "flashcards",
+        title: "Flashcards",
+        status: "completed",
+        content: "Front: First\nBack: First back\n\nFront: Second\nBack: Second back",
+        data: {
+          flashcards: [
+            { front: "First", back: "First back" },
+            { front: "Second", back: "Second back" }
+          ]
+        },
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]
+
+    render(<StudioPane />)
+    fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-flashcards"))
+
+    const firstFrontInput = await screen.findByDisplayValue("First")
+    const flashcardsEditor = firstFrontInput.closest(
+      ".ant-modal-confirm-content"
+    ) as HTMLElement
+    fireEvent.click(
+      within(
+        firstFrontInput.closest(".rounded.border") as HTMLElement
+      ).getByRole("button", { name: "Remove" })
+    )
+
+    await waitFor(() => {
+      expect(
+        within(flashcardsEditor).queryByDisplayValue("First")
+      ).not.toBeInTheDocument()
+    })
+    expect(mockScheduleWorkspaceUndoAction).toHaveBeenCalled()
+
+    const scheduledConfig =
+      mockScheduleWorkspaceUndoAction.mock.calls.at(-1)?.[0]
+    expect(scheduledConfig).toBeDefined()
+    ;(scheduledConfig as { undo: () => void }).undo()
+
+    await waitFor(() => {
+      expect(within(flashcardsEditor).getByDisplayValue("First")).toBeInTheDocument()
     })
   })
 
@@ -600,7 +673,7 @@ describe("StudioPane Stage 2 workflows", () => {
     ]
 
     render(<StudioPane />)
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+    fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-quiz"))
 
     fireEvent.change(await screen.findByPlaceholderText("Question prompt"), {
       target: { value: "Updated question" }
@@ -635,6 +708,65 @@ describe("StudioPane Stage 2 workflows", () => {
           })
         })
       )
+    })
+  })
+
+  it("removes a quiz draft question with undo parity in editor", async () => {
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-quiz",
+        type: "quiz",
+        title: "Quiz",
+        status: "completed",
+        content:
+          "Quiz: Quiz\nTotal Questions: 2\n\nQ1: First question\nAnswer: First answer\n\nQ2: Second question\nAnswer: Second answer\n",
+        data: {
+          questions: [
+            {
+              question: "First question",
+              options: ["A"],
+              answer: "First answer",
+              explanation: ""
+            },
+            {
+              question: "Second question",
+              options: ["B"],
+              answer: "Second answer",
+              explanation: ""
+            }
+          ]
+        },
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]
+
+    render(<StudioPane />)
+    fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-quiz"))
+
+    const firstQuestionInput = await screen.findByDisplayValue("First question")
+    const quizEditor = firstQuestionInput.closest(
+      ".ant-modal-confirm-content"
+    ) as HTMLElement
+    fireEvent.click(
+      within(
+        firstQuestionInput.closest(".rounded.border") as HTMLElement
+      ).getByRole("button", { name: "Remove" })
+    )
+
+    await waitFor(() => {
+      expect(
+        within(quizEditor).queryByDisplayValue("First question")
+      ).not.toBeInTheDocument()
+    })
+    expect(mockScheduleWorkspaceUndoAction).toHaveBeenCalled()
+
+    const scheduledConfig =
+      mockScheduleWorkspaceUndoAction.mock.calls.at(-1)?.[0]
+    expect(scheduledConfig).toBeDefined()
+    ;(scheduledConfig as { undo: () => void }).undo()
+
+    await waitFor(() => {
+      expect(within(quizEditor).getByDisplayValue("First question")).toBeInTheDocument()
     })
   })
 

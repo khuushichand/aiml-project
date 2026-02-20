@@ -132,4 +132,34 @@ describe("ComposerToolbar web search", () => {
 
     expect(screen.queryByTestId("web-search-toggle")).toBeNull()
   })
+
+  it("renders mode launcher, compare control, and context strip when provided", () => {
+    const onClick = vi.fn()
+    render(
+      <ComposerToolbar
+        {...createProps({
+          modeLauncherButton: <button type="button">Modes</button>,
+          compareControl: <button type="button">Compare</button>,
+          contextItems: [
+            {
+              id: "model",
+              label: "Model",
+              value: "gpt-4.1",
+              tone: "active",
+              onClick
+            }
+          ]
+        })}
+      />
+    )
+
+    expect(screen.getByText("Modes")).toBeInTheDocument()
+    expect(screen.getByText("Compare")).toBeInTheDocument()
+    const contextStrip = screen.getByTestId("composer-context-strip")
+    const modelChipButton = contextStrip.querySelector("button")
+    expect(modelChipButton).not.toBeNull()
+    fireEvent.click(modelChipButton as HTMLButtonElement)
+    expect(onClick).toHaveBeenCalledTimes(1)
+    expect(contextStrip).toBeInTheDocument()
+  })
 })

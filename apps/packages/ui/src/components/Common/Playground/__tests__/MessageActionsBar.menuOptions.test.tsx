@@ -110,4 +110,24 @@ describe("MessageActionsBar menu options", () => {
     )
     expect(onMessageSteeringModeChange).not.toHaveBeenCalled()
   })
+
+  it("exposes quick transform actions and routes selection callbacks", () => {
+    const onQuickMessageAction = vi.fn()
+    render(
+      <MessageActionsBar
+        {...baseProps()}
+        onQuickMessageAction={onQuickMessageAction}
+      />
+    )
+
+    fireEvent.click(screen.getByText("Summarize this"))
+    fireEvent.click(screen.getByText("Translate this"))
+    fireEvent.click(screen.getByText("Make this shorter"))
+    fireEvent.click(screen.getByText("Explain this"))
+
+    expect(onQuickMessageAction).toHaveBeenNthCalledWith(1, "summarize")
+    expect(onQuickMessageAction).toHaveBeenNthCalledWith(2, "translate")
+    expect(onQuickMessageAction).toHaveBeenNthCalledWith(3, "shorten")
+    expect(onQuickMessageAction).toHaveBeenNthCalledWith(4, "explain")
+  })
 })

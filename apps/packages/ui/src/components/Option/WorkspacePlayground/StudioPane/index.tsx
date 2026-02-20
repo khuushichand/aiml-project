@@ -49,6 +49,7 @@ import { useMobile } from "@/hooks/useMediaQuery"
 import { useWorkspaceStore } from "@/store/workspace"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { tldwModels, type ModelInfo } from "@/services/tldw"
+import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { generateQuiz } from "@/services/quizzes"
 import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
@@ -528,6 +529,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [chatModels, setChatModels] = useState<ModelInfo[]>([])
   const [loadingChatModels, setLoadingChatModels] = useState(false)
   const generationAbortRef = useRef<AbortController | null>(null)
+  const [generationPhase, setGenerationPhase] = useState<
+    "preparing" | "retrieving" | "generating" | "finalizing" | null
+  >(null)
   const outputListContainerRef = useRef<HTMLDivElement | null>(null)
   const [outputListScrollTop, setOutputListScrollTop] = useState(0)
   const [outputListViewportHeight, setOutputListViewportHeight] = useState(320)
@@ -892,6 +896,12 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const handleCancelGeneration = () => {
     const activeAbort = generationAbortRef.current
     if (!activeAbort) return
+    void trackWorkspacePlaygroundTelemetry({
+      type: "operation_cancelled",
+      workspace_id: workspaceTag || null,
+      operation: "artifact_generation",
+      artifact_type: generatingOutputType || null
+    })
     activeAbort.abort()
   }
 
@@ -1099,8 +1109,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     const activeAbort = new AbortController()
     generationAbortRef.current = activeAbort
 
-    // Start generation
+    // Start generation with phased progress (UX-031)
     setIsGeneratingOutput(true, type)
+    setGenerationPhase("preparing")
     const estimatedTokens = estimateGenerationTokens(type, mediaIds.length)
     const estimatedCostUsd = estimateGenerationCostUsd(estimatedTokens)
 
@@ -1155,6 +1166,15 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       }
 
       let result: GenerationResult = {}
+
+      // Phase: retrieving relevant content
+      setGenerationPhase("retrieving")
+
+      // Small delay to ensure UI updates before heavy work
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      // Phase: generating output
+      setGenerationPhase("generating")
 
       switch (type) {
         case "summary":
@@ -1220,6 +1240,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           throw new Error(`Unsupported output type: ${type}`)
       }
 
+      // Phase: finalizing
+      setGenerationPhase("finalizing")
+
       // Update artifact with success
       if (!artifact) {
         throw new Error("Artifact placeholder was not created")
@@ -1284,6 +1307,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
         generationAbortRef.current = null
       }
       setIsGeneratingOutput(false)
+      setGenerationPhase(null)
     }
   }
 
@@ -1816,16 +1840,57 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           className="px-4 pb-4"
         >
         {isGeneratingOutput && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-text-muted">
+          <div className="mb-3 space-y-2">
+            {/* Multi-phase progress indicator (UX-031) */}
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+              <p className="text-xs font-medium text-text">
+                {generationPhase === "preparing"
+                  ? t("playground:studio.phasePreparing", "Preparing...")
+                  : generationPhase === "retrieving"
+                    ? t("playground:studio.phaseRetrieving", "Retrieving relevant content...")
+                    : generationPhase === "finalizing"
+                      ? t("playground:studio.phaseFinalizing", "Finalizing...")
+                      : t(
+                          "playground:studio.phaseGenerating",
+                          "Generating {{type}}...",
+                          {
+                            type:
+                              OUTPUT_BUTTONS.find(
+                                (button) => button.type === generatingOutputType
+                              )?.label || generatingOutputType || "output"
+                          }
+                        )}
+              </p>
+            </div>
+            {/* Phase progress bar */}
+            <div className="flex gap-1">
+              {(["preparing", "retrieving", "generating", "finalizing"] as const).map((phase) => {
+                const phaseOrder = ["preparing", "retrieving", "generating", "finalizing"]
+                const currentIdx = generationPhase ? phaseOrder.indexOf(generationPhase) : -1
+                const thisIdx = phaseOrder.indexOf(phase)
+                const isComplete = thisIdx < currentIdx
+                const isActive = thisIdx === currentIdx
+                return (
+                  <div
+                    key={phase}
+                    className={`h-1 flex-1 rounded-full transition-colors ${
+                      isComplete
+                        ? "bg-primary"
+                        : isActive
+                          ? "bg-primary/60 animate-pulse"
+                          : "bg-border"
+                    }`}
+                  />
+                )
+              })}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] text-text-muted">
               {t(
                 "playground:studio.generatingWithEta",
-                "Generating {{type}}... (~{{seconds}}s for {{count}} source{{suffix}})",
+                "~{{seconds}}s for {{count}} source{{suffix}}",
                 {
-                  type:
-                    OUTPUT_BUTTONS.find(
-                      (button) => button.type === generatingOutputType
-                    )?.label || generatingOutputType || "output",
                   seconds: etaSeconds ?? 15,
                   count: Math.max(1, selectedMediaCount),
                   suffix: Math.max(1, selectedMediaCount) === 1 ? "" : "s"
@@ -1840,6 +1905,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             >
               {t("common:cancel", "Cancel")}
             </Button>
+            </div>
           </div>
         )}
         <div className="space-y-4">
@@ -2179,6 +2245,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                 return (
                   <div
                     key={artifact.id}
+                    data-testid={`studio-artifact-card-${artifact.id}`}
                     className="group rounded-lg border border-border bg-surface2/50 p-3"
                   >
                     <div className="flex items-start gap-2">
@@ -2262,6 +2329,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                               onClick={() => handleViewArtifact(artifact)}
                               className="rounded p-1 text-text-muted hover:bg-surface hover:text-text"
                               aria-label={t("common:edit", "Edit")}
+                              data-testid={`studio-artifact-edit-${artifact.id}`}
                             >
                               <Pencil className="h-4 w-4" />
                             </button>
@@ -2621,6 +2689,8 @@ const FlashcardArtifactEditor: React.FC<{
   cards: FlashcardDraft[]
   onSave: (cards: FlashcardDraft[]) => void
 }> = ({ cards, onSave }) => {
+  const { t } = useTranslation(["playground", "common"])
+  const [messageApi, messageContextHolder] = message.useMessage()
   const [draftCards, setDraftCards] = useState<FlashcardDraft[]>(cards)
 
   const updateCard = (
@@ -2634,12 +2704,77 @@ const FlashcardArtifactEditor: React.FC<{
     )
   }
 
-  const removeCard = (index: number) => {
-    setDraftCards((previous) => previous.filter((_card, cardIndex) => cardIndex !== index))
-  }
+  const removeCard = React.useCallback(
+    (index: number) => {
+      const removedCard = draftCards[index]
+      if (!removedCard) return
+      const nextCards = draftCards.filter(
+        (_card, cardIndex) => cardIndex !== index
+      )
+      const undoHandle = scheduleWorkspaceUndoAction({
+        apply: () => {
+          setDraftCards(nextCards)
+        },
+        undo: () => {
+          setDraftCards((previous) => {
+            const restored = [...previous]
+            const insertionIndex = Math.max(0, Math.min(index, restored.length))
+            restored.splice(insertionIndex, 0, removedCard)
+            return restored
+          })
+        }
+      })
+
+      const undoMessageKey = `workspace-flashcard-remove-undo-${undoHandle.id}`
+      const maybeOpen = (
+        messageApi as { open?: (config: unknown) => void }
+      ).open
+      const messageConfig = {
+        key: undoMessageKey,
+        type: "warning",
+        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+        content: t(
+          "playground:studio.flashcardRemoved",
+          "Flashcard removed."
+        ),
+        btn: (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              if (undoWorkspaceAction(undoHandle.id)) {
+                messageApi.success(
+                  t(
+                    "playground:studio.flashcardRestored",
+                    "Flashcard restored"
+                  )
+                )
+              }
+              messageApi.destroy(undoMessageKey)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        )
+      }
+
+      if (typeof maybeOpen === "function") {
+        maybeOpen(messageConfig)
+      } else {
+        const maybeWarning = (
+          messageApi as { warning?: (content: string) => void }
+        ).warning
+        if (typeof maybeWarning === "function") {
+          maybeWarning(t("playground:studio.flashcardRemoved", "Flashcard removed."))
+        }
+      }
+    },
+    [draftCards, messageApi, t]
+  )
 
   return (
     <div className="flex max-h-[70vh] flex-col gap-3">
+      {messageContextHolder}
       <div className="flex items-center justify-between">
         <p className="text-xs text-text-muted">
           Edit generated flashcards before reusing them.
@@ -2704,6 +2839,8 @@ const QuizArtifactEditor: React.FC<{
   questions: QuizQuestionDraft[]
   onSave: (questions: QuizQuestionDraft[]) => void
 }> = ({ questions, onSave }) => {
+  const { t } = useTranslation(["playground", "common"])
+  const [messageApi, messageContextHolder] = message.useMessage()
   const [draftQuestions, setDraftQuestions] = useState<QuizQuestionDraft[]>(questions)
 
   const updateQuestion = (
@@ -2717,14 +2854,79 @@ const QuizArtifactEditor: React.FC<{
     )
   }
 
-  const removeQuestion = (index: number) => {
-    setDraftQuestions((previous) =>
-      previous.filter((_question, questionIndex) => questionIndex !== index)
-    )
-  }
+  const removeQuestion = React.useCallback(
+    (index: number) => {
+      const removedQuestion = draftQuestions[index]
+      if (!removedQuestion) return
+      const nextQuestions = draftQuestions.filter(
+        (_question, questionIndex) => questionIndex !== index
+      )
+      const undoHandle = scheduleWorkspaceUndoAction({
+        apply: () => {
+          setDraftQuestions(nextQuestions)
+        },
+        undo: () => {
+          setDraftQuestions((previous) => {
+            const restored = [...previous]
+            const insertionIndex = Math.max(0, Math.min(index, restored.length))
+            restored.splice(insertionIndex, 0, removedQuestion)
+            return restored
+          })
+        }
+      })
+
+      const undoMessageKey = `workspace-quiz-remove-undo-${undoHandle.id}`
+      const maybeOpen = (
+        messageApi as { open?: (config: unknown) => void }
+      ).open
+      const messageConfig = {
+        key: undoMessageKey,
+        type: "warning",
+        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+        content: t(
+          "playground:studio.quizQuestionRemoved",
+          "Question removed."
+        ),
+        btn: (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              if (undoWorkspaceAction(undoHandle.id)) {
+                messageApi.success(
+                  t(
+                    "playground:studio.quizQuestionRestored",
+                    "Question restored"
+                  )
+                )
+              }
+              messageApi.destroy(undoMessageKey)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        )
+      }
+
+      if (typeof maybeOpen === "function") {
+        maybeOpen(messageConfig)
+      } else {
+        const maybeWarning = (
+          messageApi as { warning?: (content: string) => void }
+        ).warning
+        if (typeof maybeWarning === "function") {
+          maybeWarning(
+            t("playground:studio.quizQuestionRemoved", "Question removed.")
+          )
+        }
+      }
+    },
+    [draftQuestions, messageApi, t]
+  )
 
   return (
     <div className="flex max-h-[70vh] flex-col gap-3">
+      {messageContextHolder}
       <div className="flex items-center justify-between">
         <p className="text-xs text-text-muted">
           Edit generated quiz questions and answers.

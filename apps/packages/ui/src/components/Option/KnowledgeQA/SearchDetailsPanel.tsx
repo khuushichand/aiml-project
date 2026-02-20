@@ -6,9 +6,15 @@ import React from "react"
 import { BarChart3 } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/lib/utils"
+import type { RagResult } from "./types"
 
 type SearchDetailsPanelProps = {
   className?: string
+}
+
+type CandidateReasonCategory = {
+  label: string
+  className: string
 }
 
 function formatPercent(value: number | null): string {
@@ -16,8 +22,89 @@ function formatPercent(value: number | null): string {
   return `${Math.round(value * 100)}%`
 }
 
+function formatInteger(value: number | null): string {
+  if (value == null || Number.isNaN(value)) return "N/A"
+  return value.toLocaleString()
+}
+
+function formatScorePercent(value: number | null): string {
+  if (value == null || Number.isNaN(value)) return "N/A"
+  return `${Math.round(value * 100)}%`
+}
+
+function getWeakestIncludedScore(results: RagResult[]): number | null {
+  const scores = results
+    .map((result) => result.score)
+    .filter((score): score is number => typeof score === "number" && Number.isFinite(score))
+  if (scores.length === 0) return null
+  return Math.min(...scores)
+}
+
+function formatCandidateScoreContext(
+  score: number | null,
+  weakestIncludedScore: number | null
+): string {
+  if (score == null) return ""
+
+  const scorePercent = formatScorePercent(score)
+  if (weakestIncludedScore == null) {
+    return ` (${scorePercent})`
+  }
+
+  const scoreDelta = score - weakestIncludedScore
+  const deltaLabel = `${scoreDelta >= 0 ? "+" : ""}${Math.round(scoreDelta * 100)} pts vs weakest included`
+  return ` (${scorePercent} • ${deltaLabel})`
+}
+
+function getCandidateReasonCategory(reason: string | null): CandidateReasonCategory | null {
+  if (!reason) return null
+  const normalized = reason.trim().toLowerCase()
+  if (!normalized) return null
+
+  if (/threshold|below|cutoff|minimum/.test(normalized)) {
+    return {
+      label: "Threshold",
+      className: "border-warn/30 bg-warn/10 text-warn",
+    }
+  }
+  if (/relevance|semantic|similarity|match/.test(normalized)) {
+    return {
+      label: "Low relevance",
+      className: "border-warn/30 bg-warn/10 text-warn",
+    }
+  }
+  if (/diversity|redundant|overlap|similar/.test(normalized)) {
+    return {
+      label: "Diversity",
+      className: "border-primary/30 bg-primary/10 text-primary",
+    }
+  }
+  if (/fresh|stale|recency|outdated|age|date/.test(normalized)) {
+    return {
+      label: "Freshness",
+      className: "border-success/30 bg-success/10 text-success",
+    }
+  }
+  if (/duplicate|dedup|already included/.test(normalized)) {
+    return {
+      label: "Deduplicated",
+      className: "border-border bg-surface text-text-muted",
+    }
+  }
+  if (/policy|safety|blocked|restricted|permission/.test(normalized)) {
+    return {
+      label: "Policy filter",
+      className: "border-danger/30 bg-danger/10 text-danger",
+    }
+  }
+  return {
+    label: "Other",
+    className: "border-border bg-surface text-text-muted",
+  }
+}
+
 export function SearchDetailsPanel({ className }: SearchDetailsPanelProps) {
-  const { searchDetails, isSearching } = useKnowledgeQA()
+  const { searchDetails, isSearching, results = [] } = useKnowledgeQA()
 
   if (!searchDetails) {
     return null
@@ -27,6 +114,20 @@ export function SearchDetailsPanel({ className }: SearchDetailsPanelProps) {
     searchDetails.expandedQueries.length > 0
       ? searchDetails.expandedQueries.join(", ")
       : "None"
+  const alsoConsidered = Array.isArray(searchDetails.alsoConsidered)
+    ? searchDetails.alsoConsidered
+    : []
+  const weakestIncludedScore = getWeakestIncludedScore(results)
+  const consideredCount = searchDetails.candidatesConsidered
+  const returnedCount = searchDetails.candidatesReturned
+  const consideredDocuments =
+    searchDetails.documentsConsidered ?? searchDetails.candidatesConsidered
+  const retainedPercent =
+    consideredCount != null && consideredCount > 0
+      ? Math.round((returnedCount / consideredCount) * 100)
+      : null
+  const claimCount =
+    searchDetails.faithfulnessTotalClaims ?? searchDetails.verificationTotalClaims
 
   return (
     <details
@@ -71,6 +172,82 @@ export function SearchDetailsPanel({ className }: SearchDetailsPanelProps) {
             {formatPercent(searchDetails.whyTheseSources.freshness)}
           </div>
         )}
+        {(searchDetails.faithfulnessScore != null ||
+          searchDetails.verificationReportAvailable) && (
+          <div>
+            <span className="font-medium">Verification:</span>{" "}
+            faithfulness {formatPercent(searchDetails.faithfulnessScore)}
+            {searchDetails.verificationRate != null
+              ? `, verification rate ${formatPercent(searchDetails.verificationRate)}`
+              : ""}
+            {searchDetails.verificationCoverage != null
+              ? `, claim coverage ${formatPercent(searchDetails.verificationCoverage)}`
+              : ""}
+            {claimCount != null
+              ? `, claims ${formatInteger(claimCount)}`
+              : ""}
+            {searchDetails.faithfulnessSupportedClaims != null
+              ? `, supported ${formatInteger(searchDetails.faithfulnessSupportedClaims)}`
+              : ""}
+            {searchDetails.faithfulnessUnsupportedClaims != null
+              ? `, unsupported ${formatInteger(searchDetails.faithfulnessUnsupportedClaims)}`
+              : ""}
+          </div>
+        )}
+        <div>
+          <span className="font-medium">Candidates considered:</span>{" "}
+          {formatInteger(consideredCount)}
+          {" • "}
+          returned {formatInteger(returnedCount)}
+          {searchDetails.candidatesRejected != null
+            ? ` • rejected ${formatInteger(searchDetails.candidatesRejected)}`
+            : ""}
+          {retainedPercent != null
+            ? ` • retained ${retainedPercent}%`
+            : ""}
+        </div>
+        <div>
+          <span className="font-medium">Search coverage:</span>{" "}
+          considered {formatInteger(consideredDocuments)} documents
+          {searchDetails.chunksConsidered != null
+            ? ` • ${formatInteger(searchDetails.chunksConsidered)} chunks scanned`
+            : ""}
+          {" • "}
+          returned {formatInteger(searchDetails.documentsReturned)} sources
+        </div>
+        {searchDetails.retrievalLatencyMs != null ? (
+          <div>
+            <span className="font-medium">Retrieval latency:</span>{" "}
+            {formatInteger(searchDetails.retrievalLatencyMs)} ms
+          </div>
+        ) : null}
+        {alsoConsidered.length > 0 ? (
+          <div>
+            <p className="font-medium">Also considered (closest misses):</p>
+            <ul className="mt-1 space-y-1 text-xs text-text-muted">
+              {alsoConsidered.slice(0, 5).map((candidate) => {
+                const reasonCategory = getCandidateReasonCategory(candidate.reason)
+                return (
+                  <li key={candidate.id}>
+                    <span className="font-medium text-text">{candidate.title}</span>
+                    {reasonCategory ? (
+                      <span
+                        className={cn(
+                          "ml-1.5 inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium",
+                          reasonCategory.className
+                        )}
+                      >
+                        {reasonCategory.label}
+                      </span>
+                    ) : null}
+                    {formatCandidateScoreContext(candidate.score, weakestIncludedScore)}
+                    {candidate.reason ? ` — ${candidate.reason}` : ""}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </details>
   )

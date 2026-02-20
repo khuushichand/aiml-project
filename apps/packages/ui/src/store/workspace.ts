@@ -36,6 +36,7 @@ import type {
   WorkspaceSourceType
 } from "@/types/workspace"
 import { DEFAULT_AUDIO_SETTINGS, DEFAULT_WORKSPACE_NOTE } from "@/types/workspace"
+import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Configuration
@@ -2149,7 +2150,19 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           state.selectedSourceIds = (state.selectedSourceIds || []).filter((id) =>
             readySourceIds.has(id)
           )
-          state.generatedArtifacts = reviveArtifacts(state.generatedArtifacts || [])
+          const persistedArtifacts = state.generatedArtifacts || []
+          const interruptedArtifactCount = persistedArtifacts.filter(
+            (artifact) =>
+              (artifact?.status || "").toString().toLowerCase() === "generating"
+          ).length
+          state.generatedArtifacts = reviveArtifacts(persistedArtifacts)
+          if (interruptedArtifactCount > 0) {
+            void trackWorkspacePlaygroundTelemetry({
+              type: "artifact_rehydrated_failed",
+              workspace_id: state.workspaceId || null,
+              interrupted_count: interruptedArtifactCount
+            })
+          }
 
           // Migration: ensure optional fields exist
           if (!state.audioSettings) {

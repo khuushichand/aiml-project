@@ -102,6 +102,11 @@ import {
   getMediaPermalinkIdFromSearch,
   normalizeMediaPermalinkId
 } from '@/components/Review/mediaPermalink'
+import {
+  parseMediaFilterParams,
+  buildMediaFilterSearch,
+  hasMediaFilterParams
+} from '@/components/Review/mediaFilterParams'
 import { buildFlashcardsGenerateRoute } from "@/services/tldw/flashcards-generate-handoff"
 import { downloadBlob } from '@/utils/download-blob'
 import {
@@ -122,6 +127,16 @@ const MEDIA_LIBRARY_TOOLS_COLLAPSED_STORAGE_KEY = 'media:tools:collapsed'
 export const MEDIA_STALE_CHECK_INTERVAL_MS = 30_000
 const MEDIA_KEYWORD_ENDPOINT_RETRY_COOLDOWN_MS = 30_000
 const MEDIA_COLLECTIONS_STORAGE_KEY = 'media:collections:v1'
+const MEDIA_RESULTS_MIN_VISIBLE_ROWS = 5
+const MEDIA_RESULTS_MAX_VISIBLE_ROWS = 20
+const MEDIA_RESULTS_ROW_HEIGHT_STANDARD_PX = 68
+const MEDIA_RESULTS_ROW_HEIGHT_COMPACT_PX = 52
+const MEDIA_RESULTS_HEADER_PX = 42
+const MEDIA_RESULTS_FOOTER_PX = 98
+const MEDIA_RESULTS_CONTENT_HEIGHT_STEP_PX = 120
+const MEDIA_RESULTS_CONTENT_CHARS_STEP = 1_300
+const MEDIA_SIDEBAR_CHROME_BUFFER_PX = 420
+const MEDIA_SIDEBAR_MIN_HEIGHT_PX = 900
 
 type MediaCollectionRecord = {
   id: string
@@ -225,6 +240,11 @@ const deriveMediaMeta = (m: any): {
   status?: any
   source?: string | null
   duration?: number | null
+  author?: string | null
+  published_at?: string | null
+  transcription_model?: string | null
+  word_count?: number | null
+  page_count?: number | null
 } => {
   const rawType = m?.type ?? m?.media_type ?? ''
   const type = typeof rawType === 'string' ? rawType.toLowerCase().trim() : ''
@@ -275,12 +295,76 @@ const deriveMediaMeta = (m: any): {
     }
   }
 
+  // Extract author from various possible locations
+  const rawAuthor =
+    m?.author ??
+    m?.authors ??
+    m?.metadata?.author ??
+    m?.metadata?.authors ??
+    m?.safe_metadata?.author ??
+    m?.safe_metadata?.authors ??
+    m?.metadata?.creator ??
+    m?.safe_metadata?.creator
+  const author = typeof rawAuthor === 'string' && rawAuthor.trim().length > 0
+    ? rawAuthor.trim()
+    : Array.isArray(rawAuthor) && rawAuthor.length > 0
+      ? rawAuthor.filter((a: any) => typeof a === 'string' && a.trim()).join(', ')
+      : null
+
+  // Extract publication date (distinct from ingestion created_at)
+  const rawPublished =
+    m?.published_at ??
+    m?.publication_date ??
+    m?.metadata?.publication_date ??
+    m?.metadata?.published_at ??
+    m?.metadata?.date ??
+    m?.safe_metadata?.publication_date ??
+    m?.safe_metadata?.published_at ??
+    m?.safe_metadata?.date ??
+    m?.metadata?.publish_date ??
+    m?.safe_metadata?.publish_date
+  const published_at = typeof rawPublished === 'string' && rawPublished.trim().length > 0
+    ? rawPublished.trim()
+    : null
+
+  // Extract transcription model
+  const rawTranscriptionModel =
+    m?.transcription_model ??
+    m?.metadata?.transcription_model ??
+    m?.safe_metadata?.transcription_model ??
+    m?.processing?.transcription_model
+  const transcription_model = typeof rawTranscriptionModel === 'string' && rawTranscriptionModel.trim().length > 0
+    ? rawTranscriptionModel.trim()
+    : null
+
+  // Extract word count
+  const rawWordCount =
+    m?.word_count ??
+    m?.metadata?.word_count ??
+    m?.safe_metadata?.word_count ??
+    m?.content_length
+  const word_count = typeof rawWordCount === 'number' && rawWordCount > 0 ? rawWordCount : null
+
+  // Extract page count
+  const rawPageCount =
+    m?.metadata?.page_count ??
+    m?.metadata?.num_pages ??
+    m?.safe_metadata?.page_count ??
+    m?.safe_metadata?.num_pages ??
+    m?.page_count
+  const page_count = typeof rawPageCount === 'number' && rawPageCount > 0 ? Math.trunc(rawPageCount) : null
+
   return {
     type,
     created_at: m?.created_at,
     status,
     source,
-    duration
+    duration,
+    author,
+    published_at,
+    transcription_model,
+    word_count,
+    page_count
   }
 }
 
@@ -478,6 +562,11 @@ const MediaPageContent: React.FC = () => {
   const [bulkExportFormat, setBulkExportFormat] = useState<'json' | 'markdown' | 'text'>(
     'json'
   )
+  const [resultsViewMode, setResultsViewMode] = useStorage<'standard' | 'compact'>(
+    'media:results:viewMode',
+    'standard'
+  )
+  const [readingProgressMap, setReadingProgressMap] = useState<Map<string, number>>(new Map())
   const [mediaCollections, setMediaCollections] = useStorage<MediaCollectionRecord[]>(
     MEDIA_COLLECTIONS_STORAGE_KEY,
     []
@@ -488,10 +577,14 @@ const MediaPageContent: React.FC = () => {
     DEFAULT_MEDIA_LIBRARY_STORAGE_USAGE
   )
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const contentDivRef = useRef<HTMLDivElement | null>(null)
+  const contentMeasureRafRef = useRef<number | null>(null)
+  const contentResizeObserverRef = useRef<ResizeObserver | null>(null)
   const sidebarCollapsedValue = sidebarCollapsed === true
   const libraryToolsCollapsedValue = libraryToolsCollapsed !== false
-  const contentDivRef = React.useRef<HTMLDivElement | null>(null)
   const hasRunInitialSearch = React.useRef(false)
+  const hasInitializedFromUrl = React.useRef(false)
+  const suppressUrlSync = React.useRef(false)
   const keywordEndpointUnavailableRef = React.useRef(false)
   const keywordEndpointRetryAtRef = React.useRef(0)
   const pendingSectionSelectionTelemetryRef = React.useRef<{
@@ -901,89 +994,55 @@ const MediaPageContent: React.FC = () => {
     return favoritesSet.has(String(id))
   }, [favoritesSet])
 
-  // Measure content height whenever content changes - M3 fix
-  useEffect(() => {
-    let rafId: number | null = null
-    let lastHeight = 0
-    let stableCount = 0
-    const STABLE_THRESHOLD = 3
-
-    const measureHeight = () => {
-      if (!contentDivRef.current) return
-
-      const currentHeight = contentDivRef.current.scrollHeight
-
-      // Check if height has stabilized
-      if (currentHeight === lastHeight) {
-        stableCount++
-        if (stableCount >= STABLE_THRESHOLD) {
-          // Height is stable, update state
-          setContentHeight(currentHeight)
-          return
-        }
-      } else {
-        // Height changed, reset counter
-        stableCount = 0
-        lastHeight = currentHeight
-      }
-
-      // Continue measuring until stable
-      rafId = requestAnimationFrame(measureHeight)
+  const clearContentMeasurement = useCallback(() => {
+    if (contentMeasureRafRef.current != null) {
+      cancelAnimationFrame(contentMeasureRafRef.current)
+      contentMeasureRafRef.current = null
     }
-
-    // Start measuring
-    rafId = requestAnimationFrame(measureHeight)
-
-    // Set up ResizeObserver for dynamic updates
-    let observer: ResizeObserver | null = null
-    if (contentDivRef.current) {
-      observer = new ResizeObserver(() => {
-        // Reset stability tracking on resize
-        lastHeight = 0
-        stableCount = 0
-        if (rafId !== null) {
-          cancelAnimationFrame(rafId)
-        }
-        rafId = requestAnimationFrame(measureHeight)
-      })
-      observer.observe(contentDivRef.current)
-    }
-
-    return () => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId)
-      }
-      if (observer) observer.disconnect()
-    }
-    // Note: contentDivRef excluded as refs are stable
-  }, [effectiveContent, selected])
-
-  const contentRef = useCallback((node: HTMLDivElement | null) => {
-    contentDivRef.current = node
-    if (node) {
-      // Initial measurement using requestAnimationFrame - M3 fix
-      let rafId: number | null = null
-      let lastHeight = 0
-      let stableCount = 0
-
-      const measure = () => {
-        const currentHeight = node.scrollHeight
-        if (currentHeight === lastHeight) {
-          stableCount++
-          if (stableCount >= 3) {
-            setContentHeight(currentHeight)
-            return
-          }
-        } else {
-          stableCount = 0
-          lastHeight = currentHeight
-        }
-        rafId = requestAnimationFrame(measure)
-      }
-
-      rafId = requestAnimationFrame(measure)
+    if (contentResizeObserverRef.current) {
+      contentResizeObserverRef.current.disconnect()
+      contentResizeObserverRef.current = null
     }
   }, [])
+
+  const scheduleContentMeasure = useCallback(() => {
+    const node = contentDivRef.current
+    if (!node) return
+    if (contentMeasureRafRef.current != null) {
+      cancelAnimationFrame(contentMeasureRafRef.current)
+    }
+    contentMeasureRafRef.current = requestAnimationFrame(() => {
+      const activeNode = contentDivRef.current
+      if (!activeNode) return
+      const measuredHeight = Math.max(activeNode.scrollHeight, activeNode.clientHeight)
+      setContentHeight((prev) => (prev === measuredHeight ? prev : measuredHeight))
+    })
+  }, [])
+
+  const contentRef = useCallback((node: HTMLDivElement | null) => {
+    clearContentMeasurement()
+    contentDivRef.current = node
+    if (!node) return
+    scheduleContentMeasure()
+    if (typeof window === 'undefined' || typeof window.ResizeObserver !== 'function') {
+      return
+    }
+    const observer = new ResizeObserver(() => {
+      scheduleContentMeasure()
+    })
+    observer.observe(node)
+    contentResizeObserverRef.current = observer
+  }, [clearContentMeasurement, scheduleContentMeasure])
+
+  useEffect(() => {
+    scheduleContentMeasure()
+  }, [scheduleContentMeasure, selected?.id, effectiveContent.length])
+
+  useEffect(() => {
+    return () => {
+      clearContentMeasurement()
+    }
+  }, [clearContentMeasurement])
 
   useEffect(() => {
     setSelectedNavigationNodeId(null)
@@ -1073,6 +1132,73 @@ const MediaPageContent: React.FC = () => {
       })
     )
   }, [message, t])
+
+  // Initialize filter state from URL params on first mount
+  useEffect(() => {
+    if (hasInitializedFromUrl.current) return
+    hasInitializedFromUrl.current = true
+    if (!hasMediaFilterParams(location.search)) return
+    const urlFilters = parseMediaFilterParams(location.search)
+    suppressUrlSync.current = true
+    if (urlFilters.q) setQuery(urlFilters.q)
+    if (urlFilters.types?.length) setMediaTypes(urlFilters.types)
+    if (urlFilters.keywords?.length) setKeywordTokens(urlFilters.keywords)
+    if (urlFilters.excludeKeywords?.length) setExcludeKeywordTokens(urlFilters.excludeKeywords)
+    if (urlFilters.sort) setSortBy(urlFilters.sort)
+    if (urlFilters.dateStart || urlFilters.dateEnd) {
+      setDateRange({ startDate: urlFilters.dateStart || null, endDate: urlFilters.dateEnd || null })
+    }
+    if (urlFilters.searchMode) setSearchMode(urlFilters.searchMode)
+    if (urlFilters.exactPhrase) setExactPhrase(urlFilters.exactPhrase)
+    if (urlFilters.fields?.length) setSearchFields(urlFilters.fields)
+    if (urlFilters.page) setPage(urlFilters.page)
+    if (urlFilters.pageSize) setPageSize(urlFilters.pageSize)
+    // Allow URL sync after a tick so initial state doesn't immediately re-write
+    requestAnimationFrame(() => { suppressUrlSync.current = false })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Sync filter state to URL on change
+  useEffect(() => {
+    if (suppressUrlSync.current) return
+    if (!hasRunInitialSearch.current) return
+    const nextSearch = buildMediaFilterSearch(location.search, {
+      q: query || undefined,
+      types: mediaTypes.length > 0 ? mediaTypes : undefined,
+      keywords: keywordTokens.length > 0 ? keywordTokens : undefined,
+      excludeKeywords: excludeKeywordTokens.length > 0 ? excludeKeywordTokens : undefined,
+      sort: sortBy,
+      dateStart: dateRange.startDate,
+      dateEnd: dateRange.endDate,
+      searchMode: searchMode,
+      exactPhrase: exactPhrase || undefined,
+      fields: searchFields.length > 0 ? searchFields : undefined,
+      page: page,
+      pageSize: pageSize
+    })
+    if (nextSearch === location.search) return
+    navigate(
+      { pathname: location.pathname, search: nextSearch, hash: location.hash },
+      { replace: true }
+    )
+  }, [
+    dateRange.endDate,
+    dateRange.startDate,
+    exactPhrase,
+    excludeKeywordTokens,
+    keywordTokens,
+    location.hash,
+    location.pathname,
+    location.search,
+    mediaTypes,
+    navigate,
+    page,
+    pageSize,
+    query,
+    searchFields,
+    searchMode,
+    sortBy
+  ])
 
   const runSearch = useCallback(async (): Promise<MediaResultItem[]> => {
     const results: MediaResultItem[] = []
@@ -1644,6 +1770,83 @@ const MediaPageContent: React.FC = () => {
     results,
     showFavoritesOnly
   ])
+
+  const sidebarTargetVisibleRows = useMemo(() => {
+    const maxRowsFromPageSize = Math.min(
+      MEDIA_RESULTS_MAX_VISIBLE_ROWS,
+      Math.max(MEDIA_RESULTS_MIN_VISIBLE_ROWS, pageSize)
+    )
+    const rowsFromMeasuredHeight =
+      contentHeight > 0
+        ? Math.ceil(contentHeight / MEDIA_RESULTS_CONTENT_HEIGHT_STEP_PX)
+        : 0
+    const rowsFromContentLength =
+      selectedContent.trim().length > 0
+        ? Math.ceil(selectedContent.trim().length / MEDIA_RESULTS_CONTENT_CHARS_STEP)
+        : 0
+    const dynamicRows = Math.max(rowsFromMeasuredHeight, rowsFromContentLength)
+    return Math.min(
+      maxRowsFromPageSize,
+      Math.max(MEDIA_RESULTS_MIN_VISIBLE_ROWS, dynamicRows)
+    )
+  }, [contentHeight, pageSize, selectedContent])
+
+  const sidebarResultsRowHeightPx =
+    resultsViewMode === 'compact'
+      ? MEDIA_RESULTS_ROW_HEIGHT_COMPACT_PX
+      : MEDIA_RESULTS_ROW_HEIGHT_STANDARD_PX
+  const sidebarResultsListMinHeightPx =
+    MEDIA_RESULTS_HEADER_PX + sidebarTargetVisibleRows * sidebarResultsRowHeightPx
+  const sidebarResultsPanelMinHeightPx =
+    sidebarResultsListMinHeightPx + MEDIA_RESULTS_FOOTER_PX
+  const mediaPageMinHeightPx = Math.max(
+    MEDIA_SIDEBAR_MIN_HEIGHT_PX,
+    MEDIA_SIDEBAR_CHROME_BUFFER_PX + sidebarResultsPanelMinHeightPx
+  )
+
+  // Fetch reading progress for visible media items
+  useEffect(() => {
+    const mediaIds = displayResults
+      .filter((r) => r.kind === 'media')
+      .map((r) => String(r.id))
+    if (mediaIds.length === 0) {
+      setReadingProgressMap(new Map())
+      return
+    }
+    const getReadingProgress = (tldwClient as any).getReadingProgress
+    if (typeof getReadingProgress !== 'function') {
+      setReadingProgressMap(new Map())
+      return
+    }
+    let cancelled = false
+    const fetchProgress = async () => {
+      const entries: Array<[string, number]> = []
+      // Fetch in parallel but limit concurrency
+      const batchSize = 10
+      for (let i = 0; i < mediaIds.length; i += batchSize) {
+        const batch = mediaIds.slice(i, i + batchSize)
+        const results = await Promise.allSettled(
+          batch.map((id) => getReadingProgress.call(tldwClient, id))
+        )
+        if (cancelled) return
+        for (let j = 0; j < results.length; j++) {
+          const result = results[j]
+          if (result.status === 'fulfilled' && result.value?.has_progress !== false) {
+            const pct = result.value?.percent_complete
+            if (typeof pct === 'number' && pct > 0) {
+              entries.push([batch[j], pct])
+            }
+          }
+        }
+      }
+      if (!cancelled) {
+        setReadingProgressMap(new Map(entries))
+      }
+    }
+    void fetchProgress()
+    return () => { cancelled = true }
+  }, [displayResults])
+
   const hasJumpTo = displayResults.length > 5
   const activeCollection = useMemo(
     () => mediaCollections.find((entry) => entry.id === activeCollectionId) || null,
@@ -3048,35 +3251,6 @@ const MediaPageContent: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [hasNext, hasPrevious, page, totalPages, results, searchCollapsed, selectedIndex])
 
-  // Calculate dynamic sidebar height
-  const sidebarHeight = useMemo(() => {
-    const minHeight = 850 // Minimum height in pixels
-
-    // If we have measured content height, use it
-    if (contentHeight > 0 && selected) {
-      // Use content height to match article length
-      const dynamicHeight = Math.max(minHeight, contentHeight)
-      const maxHeight = 10000 // Cap at reasonable maximum
-      return Math.min(maxHeight, dynamicHeight)
-    }
-
-    // If no content selected, calculate based on results to show
-    const headerHeight = 48
-    const searchHeight = 90
-    const filtersHeight = 120
-    const paginationHeight = 70
-    const itemHeight = 65
-    const fixedHeight = headerHeight + searchHeight + filtersHeight + paginationHeight
-
-    // Show at least 5 items, or all items if fewer than 10
-    const itemsToShow =
-      displayResults.length <= 10 ? displayResults.length : Math.min(5, displayResults.length)
-    const resultsHeight = itemsToShow * itemHeight
-    const heightForResults = fixedHeight + resultsHeight
-
-    return Math.max(minHeight, heightForResults)
-  }, [contentHeight, selected, displayResults])
-
   const handleChatWithMedia = useCallback(() => {
     if (!selected) return
 
@@ -3249,32 +3423,32 @@ const MediaPageContent: React.FC = () => {
   }, [selected, setChatMode, setSelectedKnowledge, setRagMediaIds, navigate, message, t])
 
   return (
-    <div className="flex bg-bg" style={{ minHeight: '100vh' }}>
+    <div
+      className="flex h-full min-h-0 bg-bg"
+      style={{ minHeight: `${mediaPageMinHeightPx}px` }}
+    >
       {/* Left Sidebar */}
       <div
-        className={`bg-surface border-r border-border flex flex-col ${
-          sidebarCollapsedValue ? 'w-0' : 'w-full md:w-80 lg:w-96'
+        className={`bg-surface border-r border-border flex h-full min-h-0 flex-col transition-[width] duration-300 ease-in-out ${
+          sidebarCollapsedValue ? 'w-0' : 'w-full md:w-[22rem] lg:w-[25rem]'
         }`}
         style={{
-          overflow: sidebarCollapsedValue ? 'hidden' : 'visible',
-          height: `${sidebarHeight}px`,
-          minHeight: '850px',
-          transition: 'width 300ms ease-in-out, height 200ms ease-out'
+          overflow: 'hidden'
         }}
       >
         <div
-          className="flex h-full flex-col bg-surface"
+          className="flex h-full min-h-0 flex-col overflow-hidden bg-surface"
           hidden={sidebarCollapsedValue}
           aria-hidden={sidebarCollapsedValue}
         >
           {/* Header */}
-          <div className="px-4 py-3 border-b border-border">
+          <div className="shrink-0 border-b border-border/80 bg-surface px-4 py-3.5">
             <div className="flex items-center justify-between gap-3">
               <h1 className="text-text text-base font-semibold">
                 {t('review:mediaPage.mediaInspector', { defaultValue: 'Media Inspector' })}
               </h1>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">
+                <span className="text-[11px] font-medium tabular-nums text-text-muted">
                   {displayResults.length} / {
                     kinds.media && kinds.notes
                       ? combinedTotal
@@ -3286,7 +3460,7 @@ const MediaPageContent: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => navigate('/media-trash')}
-                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text-muted hover:bg-surface2 hover:text-text"
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text-muted hover:bg-surface2 hover:text-text"
                   aria-label={t('review:mediaPage.openTrash', { defaultValue: 'Trash' })}
                   title={t('review:mediaPage.openTrash', { defaultValue: 'Trash' })}
                 >
@@ -3296,7 +3470,7 @@ const MediaPageContent: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleToggleBulkSelectionMode}
-                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+                  className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] ${
                     bulkSelectionMode
                       ? 'border-primary bg-primary/10 text-primaryStrong'
                       : 'border-border text-text-muted hover:bg-surface2 hover:text-text'
@@ -3314,11 +3488,11 @@ const MediaPageContent: React.FC = () => {
               </div>
             </div>
 
-            <div className="mt-3 inline-flex items-center gap-1 rounded-lg border border-border bg-surface2 p-1">
+            <div className="mt-3 inline-flex items-center gap-1 rounded-lg border border-border bg-surface2/70 p-1">
               <button
                 type="button"
                 onClick={() => handleKindChange('media')}
-                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors ${
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                   isMediaOnly(kinds)
                     ? 'bg-primary text-white'
                     : 'text-text hover:bg-surface'
@@ -3334,7 +3508,7 @@ const MediaPageContent: React.FC = () => {
               <button
                 type="button"
                 onClick={() => handleKindChange('notes')}
-                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors ${
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                   isNotesOnly(kinds)
                     ? 'bg-primary text-white'
                     : 'text-text hover:bg-surface'
@@ -3359,12 +3533,12 @@ const MediaPageContent: React.FC = () => {
           </div>
 
           {/* Find Media */}
-          <div className="px-4 py-3 border-b border-border space-y-4">
+          <div className="min-h-0 shrink border-b border-border/80 bg-surface px-4 py-3.5 space-y-3 overflow-hidden">
             <div className="flex items-center justify-between">
               <button
                 type="button"
                 onClick={() => setSearchCollapsed((prev) => !prev)}
-                className="flex items-center justify-between w-full text-sm text-text hover:text-text"
+                className="flex w-full items-center justify-between rounded-md px-1 py-1 text-sm font-medium text-text hover:bg-surface2/60"
                 aria-expanded={!searchCollapsed}
                 aria-controls="media-search-panel"
               >
@@ -3375,7 +3549,11 @@ const MediaPageContent: React.FC = () => {
               </button>
             </div>
             {!searchCollapsed && (
-              <div id="media-search-panel" className="space-y-2" onKeyDown={handleKeyPress}>
+              <div
+                id="media-search-panel"
+                className="max-h-[30dvh] space-y-2.5 overflow-y-auto pr-1 md:max-h-[34dvh]"
+                onKeyDown={handleKeyPress}
+              >
                 <SearchBar
                   value={query}
                   onChange={setQuery}
@@ -3409,7 +3587,7 @@ const MediaPageContent: React.FC = () => {
                 />
                 <button
                   onClick={handleSearch}
-                  className="w-full px-3 py-1.5 text-sm bg-primary text-white rounded-lg hover:bg-primaryStrong transition-colors"
+                  className="w-full rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-primaryStrong"
                 >
                   {t('review:mediaPage.search', { defaultValue: 'Search' })}
                 </button>
@@ -3491,11 +3669,11 @@ const MediaPageContent: React.FC = () => {
                   activeFilterCount={activeFilterCount}
                   onClearAll={resetAllFilters}
                 />
-                <div className="rounded-md border border-border bg-surface2 px-2 py-2 space-y-2">
+                <div className="space-y-2 rounded-md border border-border/80 bg-surface2/60 px-2.5 py-2">
                   <div className="flex items-center gap-2">
                     <label
                       htmlFor="media-collection-filter"
-                      className="text-xs font-medium text-text-muted"
+                      className="text-[11px] font-medium text-text-muted"
                     >
                       {t('review:mediaPage.collectionFilterLabel', {
                         defaultValue: 'Collection'
@@ -3509,7 +3687,7 @@ const MediaPageContent: React.FC = () => {
                         setActiveCollectionId(nextValue || null)
                         setPage(1)
                       }}
-                      className="h-7 flex-1 rounded border border-border bg-surface px-2 text-xs text-text"
+                      className="h-7 flex-1 rounded border border-border bg-surface px-2 text-[11px] text-text"
                       data-testid="media-collection-filter"
                     >
                       <option value="">
@@ -3537,7 +3715,7 @@ const MediaPageContent: React.FC = () => {
                         onClick={() => {
                           void handleOpenCollectionInMultiReview()
                         }}
-                        className="rounded border border-border px-2 py-1 text-[11px] text-text hover:bg-surface"
+                        className="rounded border border-border px-2 py-1 text-[11px] font-medium text-text hover:bg-surface"
                         data-testid="media-collection-open-multi"
                       >
                         {t('review:mediaPage.collectionOpenMultiReview', {
@@ -3559,8 +3737,8 @@ const MediaPageContent: React.FC = () => {
           </div>
 
           {/* Results Section */}
-          <div className="px-4 py-3 border-b border-border space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+          <div className="min-h-0 shrink border-b border-border/80 bg-surface px-4 py-3 space-y-2 overflow-hidden">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
               {t('review:mediaPage.results', { defaultValue: 'Results' })}
             </div>
 
@@ -3570,17 +3748,20 @@ const MediaPageContent: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setJumpToCollapsed((prev) => !prev)}
-                  className="flex items-center justify-between w-full text-sm text-text hover:text-text"
+                  className="flex w-full items-center justify-between rounded-md px-1 py-1 text-sm font-medium text-text hover:bg-surface2/60"
                   aria-expanded={!jumpToCollapsed}
                   aria-controls="media-jump-panel"
                 >
                   <span>{t('review:mediaPage.jumpTo', { defaultValue: 'Jump to' })}</span>
-                  <ChevronDown
-                    className={`w-4 h-4 transition-transform ${jumpToCollapsed ? '' : 'rotate-180'}`}
-                  />
-                </button>
+                <ChevronDown
+                  className={`w-4 h-4 transition-transform ${jumpToCollapsed ? '' : 'rotate-180'}`}
+                />
+              </button>
                 {!jumpToCollapsed && (
-                  <div id="media-jump-panel" className="mt-2">
+                  <div
+                    id="media-jump-panel"
+                    className="mt-2 max-h-[18dvh] overflow-y-auto pr-1 md:max-h-[22dvh]"
+                  >
                     <JumpToNavigator
                       results={displayResults.map((r) => ({ id: r.id, title: r.title }))}
                       selectedId={selected?.id || null}
@@ -3599,11 +3780,11 @@ const MediaPageContent: React.FC = () => {
 
           {bulkSelectionMode && (
             <div
-              className="border-b border-border bg-surface2 px-4 py-3 space-y-3"
+              className="shrink-0 max-h-[24dvh] overflow-y-auto border-b border-border bg-surface2 px-4 py-3 space-y-2.5"
               data-testid="media-bulk-toolbar"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-text-muted">
+                <span className="text-[11px] font-medium text-text-muted">
                   {t('review:mediaPage.bulkSelectedCount', {
                     defaultValue: '{{count}} selected',
                     count: bulkSelectedItems.length
@@ -3613,7 +3794,7 @@ const MediaPageContent: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleSelectAllVisibleItems}
-                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface"
                     data-testid="media-bulk-select-all"
                   >
                     <CheckSquare className="h-3.5 w-3.5" />
@@ -3624,7 +3805,7 @@ const MediaPageContent: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleClearBulkSelection}
-                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-text hover:bg-surface"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface"
                     data-testid="media-bulk-clear"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -3642,14 +3823,14 @@ const MediaPageContent: React.FC = () => {
                   placeholder={t('review:mediaPage.bulkKeywordsPlaceholder', {
                     defaultValue: 'Keywords (comma separated)'
                   })}
-                  className="h-8 min-w-[180px] flex-1 rounded-md border border-border bg-surface px-2 text-xs text-text"
+                  className="h-8 min-w-[180px] flex-1 rounded-md border border-border bg-surface px-2 text-[11px] text-text"
                   data-testid="media-bulk-keywords-input"
                 />
                 <button
                   type="button"
                   onClick={() => void handleBulkAddKeywords()}
                   disabled={bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                   data-testid="media-bulk-tag"
                 >
                   <Tags className="h-3.5 w-3.5" />
@@ -3659,7 +3840,7 @@ const MediaPageContent: React.FC = () => {
                   type="button"
                   onClick={() => void handleBulkDelete()}
                   disabled={bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-danger/50 px-2 text-xs text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-danger/50 px-2 text-[11px] text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
                   data-testid="media-bulk-delete"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -3674,14 +3855,14 @@ const MediaPageContent: React.FC = () => {
                   placeholder={t('review:mediaPage.collectionNamePlaceholder', {
                     defaultValue: 'Collection name'
                   })}
-                  className="h-8 min-w-[140px] rounded-md border border-border bg-surface px-2 text-xs text-text"
+                  className="h-8 min-w-[140px] rounded-md border border-border bg-surface px-2 text-[11px] text-text"
                   data-testid="media-bulk-collection-name"
                 />
                 <button
                   type="button"
                   onClick={handleAddSelectionToCollection}
                   disabled={bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                   data-testid="media-bulk-add-collection"
                 >
                   {t('review:mediaPage.collectionAddSelection', {
@@ -3694,7 +3875,7 @@ const MediaPageContent: React.FC = () => {
                     void handleOpenSelectionInMultiReview()
                   }}
                   disabled={bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                   data-testid="media-bulk-open-multi"
                 >
                   {t('review:mediaPage.bulkOpenMultiReview', {
@@ -3709,7 +3890,7 @@ const MediaPageContent: React.FC = () => {
                   onChange={(event) =>
                     setBulkExportFormat(event.target.value as 'json' | 'markdown' | 'text')
                   }
-                  className="h-8 rounded-md border border-border bg-surface px-2 text-xs text-text"
+                  className="h-8 rounded-md border border-border bg-surface px-2 text-[11px] text-text"
                   data-testid="media-bulk-export-format"
                 >
                   <option value="json">
@@ -3732,7 +3913,7 @@ const MediaPageContent: React.FC = () => {
                   type="button"
                   onClick={handleBulkExport}
                   disabled={bulkSelectedItems.length === 0}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                   data-testid="media-bulk-export"
                 >
                   <Download className="h-3.5 w-3.5" />
@@ -3743,39 +3924,50 @@ const MediaPageContent: React.FC = () => {
           )}
 
           {/* Results + pagination flow */}
-          <div className="flex-1 overflow-y-auto min-h-0 bg-surface">
-            <ResultsList
-              results={displayResults}
-              selectedId={selected?.id || null}
-              onSelect={(id) => {
-                if (bulkSelectionMode) {
-                  toggleBulkItemSelection(id)
-                  return
-                }
-                const item = displayResults.find((r) => r.id === id)
-                if (item) setSelected(item)
-              }}
-              totalCount={activeTotalCount}
-              loadedCount={displayResults.length}
-              isLoading={isLoading || isFetching}
-              hasActiveFilters={hasActiveFilters}
-              searchQuery={query}
-              onClearSearch={() => {
-                setQuery('')
-              }}
-              onClearFilters={resetAllFilters}
-              onOpenQuickIngest={() => {
-                if (typeof window !== 'undefined') {
-                  window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
-                }
-              }}
-              favorites={favoritesSet}
-              onToggleFavorite={toggleFavorite}
-              selectionMode={bulkSelectionMode}
-              selectedIds={bulkSelectedIdSet}
-              onToggleSelected={toggleBulkItemSelection}
-            />
-            <div className="bg-surface border-t border-border">
+          <div
+            className="flex min-h-[12rem] flex-1 flex-col bg-surface md:min-h-[14rem]"
+            style={{ minHeight: `${sidebarResultsPanelMinHeightPx}px` }}
+          >
+            <div
+              className="min-h-0 flex-1 overflow-y-auto"
+              style={{ minHeight: `${sidebarResultsListMinHeightPx}px` }}
+            >
+              <ResultsList
+                results={displayResults}
+                selectedId={selected?.id || null}
+                onSelect={(id) => {
+                  if (bulkSelectionMode) {
+                    toggleBulkItemSelection(id)
+                    return
+                  }
+                  const item = displayResults.find((r) => r.id === id)
+                  if (item) setSelected(item)
+                }}
+                totalCount={activeTotalCount}
+                loadedCount={displayResults.length}
+                isLoading={isLoading || isFetching}
+                hasActiveFilters={hasActiveFilters}
+                searchQuery={query}
+                onClearSearch={() => {
+                  setQuery('')
+                }}
+                onClearFilters={resetAllFilters}
+                onOpenQuickIngest={() => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
+                  }
+                }}
+                favorites={favoritesSet}
+                onToggleFavorite={toggleFavorite}
+                selectionMode={bulkSelectionMode}
+                selectedIds={bulkSelectedIdSet}
+                onToggleSelected={toggleBulkItemSelection}
+                readingProgress={readingProgressMap}
+                viewMode={resultsViewMode === 'compact' ? 'compact' : 'standard'}
+                onViewModeChange={(mode) => void setResultsViewMode(mode)}
+              />
+            </div>
+            <div className="shrink-0 border-t border-border bg-surface">
               <Pagination
                 currentPage={page}
                 totalPages={totalPages}
@@ -3797,7 +3989,7 @@ const MediaPageContent: React.FC = () => {
                 }}
               />
               {/* Keyboard shortcuts hint */}
-              <div className="px-4 py-1.5 border-t border-border flex items-center justify-center">
+              <div className="border-t border-border px-4 py-1.5 flex items-center justify-center">
                 <button
                   type="button"
                   onClick={() => setShortcutsOverlayOpen(true)}
@@ -3820,12 +4012,12 @@ const MediaPageContent: React.FC = () => {
             <button
               type="button"
               onClick={() => setLibraryToolsCollapsed(!libraryToolsCollapsedValue)}
-              className="flex w-full items-center justify-between px-4 py-3 text-sm text-text hover:text-text"
+              className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-text hover:bg-surface2/40 hover:text-text"
               aria-expanded={!libraryToolsCollapsedValue}
               aria-controls="media-library-tools-panel"
               data-testid="media-library-tools-toggle"
             >
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
                 {t('review:mediaPage.libraryTools', { defaultValue: 'Library tools' })}
               </span>
               <ChevronDown

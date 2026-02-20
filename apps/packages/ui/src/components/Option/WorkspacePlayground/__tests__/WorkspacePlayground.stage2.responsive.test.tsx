@@ -1,6 +1,13 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
+
+const mockMessageApi = {
+  open: vi.fn(),
+  warning: vi.fn(),
+  success: vi.fn(),
+  destroy: vi.fn()
+}
 
 const testState = {
   isMobile: false,
@@ -114,8 +121,18 @@ vi.mock("antd", () => ({
   ),
   Modal: ({ open, children, title }: any) =>
     open ? <div aria-label={String(title)}>{children}</div> : null,
+  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
   Input: (props: any) => <input {...props} />,
-  Empty: ({ description }: any) => <div>{description}</div>
+  Empty: ({ description }: any) => <div>{description}</div>,
+  Skeleton: {
+    Button: (props: any) => <div {...props} />
+  },
+  message: {
+    useMessage: () => [
+      mockMessageApi,
+      <div key="message-context" data-testid="workspace-message-context" />
+    ]
+  }
 }))
 
 describe("WorkspacePlayground Stage 2 drawer responsiveness", () => {
@@ -154,8 +171,12 @@ describe("WorkspacePlayground Stage 2 drawer responsiveness", () => {
 
     const sourcesLabel = screen.getByTestId("tab-label-sources")
     const studioLabel = screen.getByTestId("tab-label-studio")
-    const sourceCountBadge = screen.getByText("2", { selector: "span" })
-    const studioCountBadge = screen.getByText("3", { selector: "span" })
+    const sourceCountBadge = within(sourcesLabel).getByText("2", {
+      selector: "span"
+    })
+    const studioCountBadge = within(studioLabel).getByText("3", {
+      selector: "span"
+    })
 
     expect(sourcesLabel).toContainElement(sourceCountBadge)
     expect(studioLabel).toContainElement(studioCountBadge)

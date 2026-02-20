@@ -422,7 +422,7 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Generating Summary... (~8s for 1 source)")
+        screen.getByText("~8s for 1 source")
       ).toBeInTheDocument()
     })
   })

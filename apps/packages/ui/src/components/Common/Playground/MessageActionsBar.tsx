@@ -28,6 +28,7 @@ import { FeedbackButtons } from "@/components/Sidepanel/Chat/FeedbackButtons"
 import type { FeedbackThumb } from "@/store/feedback"
 import type { GenerationInfo as GenerationInfoType } from "./types"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import type { QuickMessageAction } from "./quick-message-actions"
 
 const ACTION_BUTTON_CLASS =
   "flex items-center justify-center rounded-full border border-border bg-surface2 text-text-muted hover:bg-surface hover:text-text transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-focus min-w-[44px] min-h-[44px] sm:h-8 sm:w-8 sm:min-w-0 sm:min-h-0"
@@ -135,6 +136,7 @@ type MessageActionsBarProps = {
   canPin?: boolean
   isPinned?: boolean
   onTogglePinned?: () => void
+  onQuickMessageAction?: (action: QuickMessageAction) => void
 }
 
 export function MessageActionsBar({
@@ -196,7 +198,8 @@ export function MessageActionsBar({
   onDelete,
   canPin,
   isPinned,
-  onTogglePinned
+  onTogglePinned,
+  onQuickMessageAction
 }: MessageActionsBarProps) {
   const actionButtonClass = `${ACTION_BUTTON_CLASS} ${
     isProMode ? "h-11 px-3 sm:h-8 sm:px-2" : "h-11 w-11 sm:h-8 sm:w-8"
@@ -351,6 +354,40 @@ export function MessageActionsBar({
         />
       )
     }
+    if (isBot && onQuickMessageAction) {
+      items.push(
+        <OverflowMenuItem
+          key="quick-summarize"
+          icon={<span className="text-[10px] leading-none font-semibold">S</span>}
+          label={t("playground:actions.quickSummarize", "Summarize this")}
+          onClick={() => onQuickMessageAction("summarize")}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="quick-translate"
+          icon={<span className="text-[10px] leading-none font-semibold">T</span>}
+          label={t("playground:actions.quickTranslate", "Translate this")}
+          onClick={() => onQuickMessageAction("translate")}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="quick-shorten"
+          icon={<span className="text-[10px] leading-none font-semibold">L</span>}
+          label={t("playground:actions.quickShorten", "Make this shorter")}
+          onClick={() => onQuickMessageAction("shorten")}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="quick-explain"
+          icon={<span className="text-[10px] leading-none font-semibold">E</span>}
+          label={t("playground:actions.quickExplain", "Explain this")}
+          onClick={() => onQuickMessageAction("explain")}
+        />
+      )
+    }
     if (isBot && isTtsEnabled) {
       items.push(
         <OverflowMenuItem
@@ -409,7 +446,8 @@ export function MessageActionsBar({
     onClearMessageSteering,
     canSaveToFlashcards, canGenerateDocument, onGenerateDocument,
     onSaveKnowledge, savingKnowledge, isTtsEnabled, ttsActionDisabled,
-    isSpeaking, onToggleTts, onDelete, canPin, isPinned, onTogglePinned, t
+    isSpeaking, onToggleTts, onDelete, canPin, isPinned, onTogglePinned,
+    onQuickMessageAction, t
   ])
 
   return (

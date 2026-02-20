@@ -15,7 +15,7 @@ export function NoResultsRecovery({
   webEnabled,
 }: NoResultsRecoveryProps) {
   return (
-    <div className="rounded-xl border border-border bg-muted/20 p-6">
+    <div className="rounded-xl border border-border bg-surface p-6">
       <div className="flex items-start gap-3">
         <SearchX className="mt-0.5 h-5 w-5 text-text-muted" />
         <div className="min-w-0 flex-1">
@@ -32,7 +32,7 @@ export function NoResultsRecovery({
             <button
               type="button"
               onClick={onBroadenScope}
-              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-subtle hover:bg-hover hover:text-text transition-colors"
             >
               Broaden source scope
             </button>
@@ -40,14 +40,14 @@ export function NoResultsRecovery({
               type="button"
               onClick={onEnableWeb}
               disabled={webEnabled}
-              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm disabled:opacity-60 disabled:cursor-not-allowed hover:bg-muted transition-colors"
+              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-subtle disabled:opacity-60 disabled:cursor-not-allowed hover:bg-hover hover:text-text transition-colors"
             >
               {webEnabled ? "Web search enabled" : "Enable web search"}
             </button>
             <button
               type="button"
               onClick={onShowNearestMatches}
-              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+              className="rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-subtle hover:bg-hover hover:text-text transition-colors"
             >
               Show nearest matches
             </button>

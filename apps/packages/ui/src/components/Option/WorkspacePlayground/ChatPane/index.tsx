@@ -9,12 +9,16 @@ import {
   Square,
   Trash2,
   RotateCcw,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Loader2,
+  Share2,
+  Cpu
 } from "lucide-react"
-import { Modal, Tag, Tooltip, Input, Slider, Switch, message } from "antd"
+import { Modal, Tag, Tooltip, Input, Slider, Switch, Button, message } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useStoreMessageOption } from "@/store/option"
+import { useStoreChatModelSettings } from "@/store/model"
 import type { Message } from "@/store/option"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useSmartScroll } from "@/hooks/useSmartScroll"
@@ -22,6 +26,8 @@ import { useMobile } from "@/hooks/useMediaQuery"
 import { useConnectionStore } from "@/store/connection"
 import { ConnectionPhase } from "@/types/connection"
 import { DEFAULT_RAG_SETTINGS } from "@/services/rag/unified-rag"
+import { formatCost } from "@/utils/model-pricing"
+import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import type { WorkspaceSource, WorkspaceSourceType } from "@/types/workspace"
 import {
   applyVariantToMessage,
@@ -34,19 +40,38 @@ import {
   WORKSPACE_SOURCE_DRAG_TYPE,
   parseWorkspaceSourceDragPayload
 } from "../drag-source"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "../undo-manager"
 import { getWorkspaceChatNoSourcesHint } from "../source-location-copy"
 import { getWorkspaceChatSearchMessageId } from "../workspace-global-search"
 
 const { TextArea } = Input
 const VISIBLE_SOURCE_TAG_COUNT = 5
+const CHAT_TRANSCRIPT_MIN_HEIGHT = "calc(100vh - 22rem)"
+const CHAT_TRANSCRIPT_MAX_HEIGHT = "calc(200vh - 20rem)"
 
 type RetrievalDiagnostics = {
   chunkCount: number | null
   sourceCount: number | null
+  sourceLabels: string[]
   averageRelevanceScore: number | null
+  faithfulnessScore: number | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  costUsd: number | null
+  confidenceLevel: "high" | "medium" | "low" | null
 }
 
 type ChatModePreference = "normal" | "rag"
+type ChatModelOption = {
+  id: string
+  label: string
+  provider: string
+}
 type LorebookActivityTurn = {
   turnNumber: number
   assistantPreview: string
@@ -55,6 +80,9 @@ type LorebookActivityTurn = {
 
 const LOREBOOK_ACTIVITY_PAGE_SIZE = 8
 const LOREBOOK_ACTIVITY_EXPORT_PAGE_SIZE = 200
+const RETRY_BURST_WINDOW_MS = 30_000
+const RETRY_BURST_THRESHOLD = 3
+const DUPLICATE_SUBMISSION_WINDOW_MS = 12_000
 const LOREBOOK_DEBUG_ENTRYPOINT_HREF = buildChatLorebookDebugPath({
   from: "workspace-playground"
 })
@@ -90,6 +118,37 @@ const toFiniteNumber = (value: unknown): number | null => {
 
 const normalizeText = (value: unknown): string =>
   typeof value === "string" ? value.trim().toLowerCase() : ""
+
+const extractStringCandidate = (value: unknown): string => {
+  if (typeof value !== "string") return ""
+  return value.trim()
+}
+
+const extractSourceFullText = (detail: unknown): string => {
+  if (!isRecord(detail)) return ""
+  const content = isRecord(detail.content) ? detail.content : null
+  const processing = isRecord(detail.processing) ? detail.processing : null
+
+  const candidates: unknown[] = [
+    content?.text,
+    content?.content,
+    content?.full_text,
+    content?.transcript,
+    content?.raw_text,
+    processing?.analysis,
+    processing?.transcript,
+    processing?.text
+  ]
+
+  for (const candidate of candidates) {
+    const normalized = extractStringCandidate(candidate)
+    if (normalized.length > 0) {
+      return normalized
+    }
+  }
+
+  return ""
+}
 
 const extractCitationMediaId = (citation: unknown): number | null => {
   if (!isRecord(citation)) return null
@@ -199,6 +258,61 @@ const extractSourceScore = (source: unknown): number | null => {
   return null
 }
 
+const extractSourceLabel = (source: unknown): string | null => {
+  if (!isRecord(source)) return null
+  const metadata = isRecord(source.metadata) ? source.metadata : null
+  const candidates: unknown[] = [
+    source.name,
+    source.title,
+    source.source,
+    source.url,
+    metadata?.title,
+    metadata?.source,
+    metadata?.url
+  ]
+
+  for (const candidate of candidates) {
+    const normalized = extractStringCandidate(candidate)
+    if (normalized.length > 0) {
+      return normalized
+    }
+  }
+
+  return null
+}
+
+const normalizeConfidenceScore = (score: number | null): number | null => {
+  if (score === null || !Number.isFinite(score)) {
+    return null
+  }
+  if (score > 1 && score <= 100) {
+    return score / 100
+  }
+  if (score < 0) {
+    return 0
+  }
+  if (score > 1) {
+    return 1
+  }
+  return score
+}
+
+const getConfidenceLevel = (
+  score: number | null
+): RetrievalDiagnostics["confidenceLevel"] => {
+  const normalized = normalizeConfidenceScore(score)
+  if (normalized === null) {
+    return null
+  }
+  if (normalized >= 0.8) {
+    return "high"
+  }
+  if (normalized >= 0.55) {
+    return "medium"
+  }
+  return "low"
+}
+
 const getNumericField = (
   generationInfo: unknown,
   paths: Array<string[]>
@@ -253,20 +367,69 @@ const buildRetrievalDiagnostics = (
     ["average_relevance_score"],
     ["relevance_score"]
   ])
+  const faithfulnessScore = getNumericField(generationInfo, [
+    ["faithfulness", "score"],
+    ["faithfulness", "faithfulness_score"],
+    ["faithfulness", "overall_score"],
+    ["faithfulness_score"],
+    ["claim_verification", "faithfulness_score"],
+    ["retrieval", "faithfulness_score"],
+    ["confidence"],
+    ["confidence_score"]
+  ])
+  const promptTokensFromGeneration = getNumericField(generationInfo, [
+    ["usage", "prompt_tokens"],
+    ["usage", "input_tokens"],
+    ["prompt_tokens"],
+    ["input_tokens"],
+    ["prompt_eval_count"]
+  ])
+  const completionTokensFromGeneration = getNumericField(generationInfo, [
+    ["usage", "completion_tokens"],
+    ["usage", "output_tokens"],
+    ["completion_tokens"],
+    ["output_tokens"],
+    ["eval_count"]
+  ])
+  const totalTokensFromGeneration = getNumericField(generationInfo, [
+    ["usage", "total_tokens"],
+    ["total_tokens"],
+    ["total_token_count"]
+  ])
+  const costUsdFromGeneration = getNumericField(generationInfo, [
+    ["usage", "total_cost_usd"],
+    ["usage", "estimated_cost_usd"],
+    ["usage", "cost_usd"],
+    ["pricing", "total_cost_usd"],
+    ["pricing", "estimated_cost_usd"],
+    ["pricing", "cost_usd"],
+    ["total_cost_usd"],
+    ["estimated_cost_usd"],
+    ["cost_usd"],
+    ["total_cost"],
+    ["estimated_cost"]
+  ])
 
   const uniqueSourceKeys = new Set<string>()
+  const uniqueSourceLabels = new Set<string>()
   for (const source of sources) {
     if (!isRecord(source)) continue
+    const sourceLabel = extractSourceLabel(source)
+    if (sourceLabel) {
+      uniqueSourceLabels.add(sourceLabel)
+    }
+
     const mediaId = extractCitationMediaId(source)
     if (mediaId !== null) {
       uniqueSourceKeys.add(`media:${mediaId}`)
-      continue
-    }
-    const metadata = isRecord(source.metadata) ? source.metadata : null
-    const label =
-      normalizeText(source.name || source.url || metadata?.source || metadata?.title)
-    if (label) {
-      uniqueSourceKeys.add(`label:${label}`)
+    } else {
+      const metadata = isRecord(source.metadata) ? source.metadata : null
+      const label = normalizeText(
+        source.name || source.url || metadata?.source || metadata?.title
+      )
+      if (label) {
+        uniqueSourceKeys.add(`label:${label}`)
+      }
     }
   }
 
@@ -293,16 +456,54 @@ const buildRetrievalDiagnostics = (
         : uniqueSourceKeys.size > 0
           ? uniqueSourceKeys.size
           : null,
+    sourceLabels: Array.from(uniqueSourceLabels),
     averageRelevanceScore:
       avgScoreFromGeneration !== null
         ? avgScoreFromGeneration
-        : averageScoreFromSources
+        : averageScoreFromSources,
+    faithfulnessScore,
+    promptTokens:
+      promptTokensFromGeneration !== null
+        ? Math.max(0, Math.round(promptTokensFromGeneration))
+        : null,
+    completionTokens:
+      completionTokensFromGeneration !== null
+        ? Math.max(0, Math.round(completionTokensFromGeneration))
+        : null,
+    totalTokens:
+      totalTokensFromGeneration !== null
+        ? Math.max(0, Math.round(totalTokensFromGeneration))
+        : promptTokensFromGeneration !== null ||
+            completionTokensFromGeneration !== null
+          ? Math.max(
+              0,
+              Math.round(
+                (promptTokensFromGeneration || 0) +
+                  (completionTokensFromGeneration || 0)
+              )
+            )
+          : null,
+    costUsd:
+      costUsdFromGeneration !== null && costUsdFromGeneration >= 0
+        ? costUsdFromGeneration
+        : null,
+    confidenceLevel: getConfidenceLevel(
+      faithfulnessScore !== null
+        ? faithfulnessScore
+        : avgScoreFromGeneration !== null
+          ? avgScoreFromGeneration
+          : averageScoreFromSources
+    )
   }
 
   if (
     diagnostics.chunkCount === null &&
     diagnostics.sourceCount === null &&
-    diagnostics.averageRelevanceScore === null
+    diagnostics.averageRelevanceScore === null &&
+    diagnostics.faithfulnessScore === null &&
+    diagnostics.sourceLabels.length === 0 &&
+    diagnostics.totalTokens === null &&
+    diagnostics.costUsd === null
   ) {
     return null
   }
@@ -390,9 +591,50 @@ const RetrievalDiagnosticsPanel: React.FC<{
   diagnostics: RetrievalDiagnostics
 }> = ({ diagnostics }) => {
   const { t } = useTranslation(["playground"])
+  const tokenCostTelemetryTrackedRef = React.useRef(false)
+  const confidenceStyles =
+    diagnostics.confidenceLevel === "high"
+      ? "text-success"
+      : diagnostics.confidenceLevel === "medium"
+        ? "text-warning"
+        : diagnostics.confidenceLevel === "low"
+          ? "text-error"
+          : "text-text-muted"
+  const confidenceText =
+    diagnostics.confidenceLevel === "high"
+      ? t("playground:chat.confidenceHigh", "High")
+      : diagnostics.confidenceLevel === "medium"
+        ? t("playground:chat.confidenceMedium", "Medium")
+        : diagnostics.confidenceLevel === "low"
+          ? t("playground:chat.confidenceLow", "Low")
+          : t("playground:chat.confidenceUnknown", "Unknown")
+  const displayedSources = diagnostics.sourceLabels.slice(0, 3)
+  const hiddenSourceCount = Math.max(0, diagnostics.sourceLabels.length - 3)
+  const normalizedFaithfulnessScore = normalizeConfidenceScore(
+    diagnostics.faithfulnessScore
+  )
+
+  React.useEffect(() => {
+    if (tokenCostTelemetryTrackedRef.current) return
+    if (diagnostics.totalTokens === null && diagnostics.costUsd === null) return
+    tokenCostTelemetryTrackedRef.current = true
+    void trackWorkspacePlaygroundTelemetry({
+      type: "token_cost_rendered",
+      has_tokens: diagnostics.totalTokens !== null,
+      has_cost: diagnostics.costUsd !== null
+    })
+  }, [diagnostics.costUsd, diagnostics.totalTokens])
 
   return (
-    <details className="rounded-md border border-border bg-surface2/40 px-3 py-2 text-xs text-text-muted">
+    <details
+      className="rounded-md border border-border bg-surface2/40 px-3 py-2 text-xs text-text-muted"
+      onToggle={(event) => {
+        void trackWorkspacePlaygroundTelemetry({
+          type: "diagnostics_toggled",
+          expanded: event.currentTarget.open
+        })
+      }}
+    >
       <summary className="cursor-pointer font-medium text-text-subtle">
         {t("playground:chat.retrievalInfo", "Retrieval info")}
       </summary>
@@ -409,6 +651,15 @@ const RetrievalDiagnosticsPanel: React.FC<{
             <span className="font-medium text-text">{diagnostics.sourceCount}</span>
           </p>
         )}
+        {displayedSources.length > 0 && (
+          <p>
+            {t("playground:chat.retrievalSourceList", "Source list")}:{" "}
+            <span className="font-medium text-text">
+              {displayedSources.join(", ")}
+              {hiddenSourceCount > 0 ? ` +${hiddenSourceCount} more` : ""}
+            </span>
+          </p>
+        )}
         {diagnostics.averageRelevanceScore !== null && (
           <p>
             {t("playground:chat.retrievalAverageScore", "Avg relevance score")}:{" "}
@@ -417,6 +668,41 @@ const RetrievalDiagnosticsPanel: React.FC<{
             </span>
           </p>
         )}
+        {diagnostics.totalTokens !== null && (
+          <p>
+            {t("playground:chat.retrievalTokens", "Tokens")}:{" "}
+            <span className="font-medium text-text">
+              {diagnostics.promptTokens ?? 0}{" "}
+              {t("playground:tokens.prompt", "prompt")} +{" "}
+              {diagnostics.completionTokens ?? 0}{" "}
+              {t("playground:tokens.completion", "completion")} ={" "}
+              {diagnostics.totalTokens}{" "}
+              {t("playground:tokens.total", "tokens")}
+            </span>
+          </p>
+        )}
+        {diagnostics.costUsd !== null && (
+          <p>
+            {t("playground:chat.retrievalCost", "Cost")}:{" "}
+            <span className="font-medium text-text">
+              {formatCost(diagnostics.costUsd)}
+            </span>
+          </p>
+        )}
+        {diagnostics.faithfulnessScore !== null && (
+          <p>
+            {t("playground:chat.retrievalFaithfulnessScore", "Faithfulness score")}:{" "}
+            <span className="font-medium text-text">
+              {(normalizedFaithfulnessScore ?? diagnostics.faithfulnessScore).toFixed(
+                3
+              )}
+            </span>
+          </p>
+        )}
+        <p>
+          {t("playground:chat.retrievalConfidence", "Confidence")}:{" "}
+          <span className={`font-medium ${confidenceStyles}`}>{confidenceText}</span>
+        </p>
       </div>
     </details>
   )
@@ -526,25 +812,31 @@ const WorkspaceChatEmpty: React.FC<{
 }
 
 /**
- * SimpleChatInput - A simple chat input component
+ * SimpleChatInput - A simple chat input component with slash command autocomplete (UX-006)
  */
 const SimpleChatInput: React.FC<{
   onSubmit: (message: string) => void
   onStop: () => void
   isLoading: boolean
+  isPreparingContext?: boolean
   placeholder?: string
   seededValue?: string | null
   onSeedConsumed?: () => void
+  slashCommands?: Array<{ name: string; description: string }>
 }> = ({
   onSubmit,
   onStop,
   isLoading,
+  isPreparingContext = false,
   placeholder,
   seededValue,
-  onSeedConsumed
+  onSeedConsumed,
+  slashCommands = []
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [value, setValue] = React.useState("")
+  const [showSlashMenu, setShowSlashMenu] = React.useState(false)
+  const [slashMenuIndex, setSlashMenuIndex] = React.useState(0)
 
   React.useEffect(() => {
     if (typeof seededValue !== "string") return
@@ -552,15 +844,59 @@ const SimpleChatInput: React.FC<{
     onSeedConsumed?.()
   }, [onSeedConsumed, seededValue])
 
+  // Slash command filtering
+  const filteredSlashCommands = React.useMemo(() => {
+    if (!value.startsWith("/") || value.includes(" ")) return []
+    const query = value.slice(1).toLowerCase()
+    return slashCommands.filter((cmd) =>
+      cmd.name.toLowerCase().startsWith(query)
+    )
+  }, [value, slashCommands])
+
+  React.useEffect(() => {
+    setShowSlashMenu(filteredSlashCommands.length > 0 && value.startsWith("/") && !value.includes(" "))
+    setSlashMenuIndex(0)
+  }, [filteredSlashCommands.length, value])
+
+  const selectSlashCommand = (cmd: { name: string }) => {
+    setValue(`/${cmd.name} `)
+    setShowSlashMenu(false)
+  }
+
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
     const trimmed = value.trim()
-    if (!trimmed || isLoading) return
+    if (!trimmed || isLoading || isPreparingContext) return
     onSubmit(trimmed)
     setValue("")
+    setShowSlashMenu(false)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash command menu navigation
+    if (showSlashMenu && filteredSlashCommands.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault()
+        setSlashMenuIndex((prev) => Math.min(prev + 1, filteredSlashCommands.length - 1))
+        return
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault()
+        setSlashMenuIndex((prev) => Math.max(prev - 1, 0))
+        return
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault()
+        selectSlashCommand(filteredSlashCommands[slashMenuIndex])
+        return
+      }
+      if (e.key === "Escape") {
+        e.preventDefault()
+        setShowSlashMenu(false)
+        return
+      }
+    }
+
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       handleSubmit()
@@ -577,15 +913,44 @@ const SimpleChatInput: React.FC<{
     <div>
       <form onSubmit={handleSubmit} className="flex items-end gap-2">
         <div className="relative flex-1">
+          {/* Slash command autocomplete dropdown (UX-006) */}
+          {showSlashMenu && filteredSlashCommands.length > 0 && (
+            <div
+              role="listbox"
+              className="absolute bottom-full left-0 z-20 mb-1 max-h-48 w-full overflow-y-auto rounded-lg border border-border bg-surface shadow-lg"
+            >
+              {filteredSlashCommands.map((cmd, idx) => (
+                <button
+                  key={cmd.name}
+                  type="button"
+                  role="option"
+                  aria-selected={idx === slashMenuIndex}
+                  onClick={() => selectSlashCommand(cmd)}
+                  className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition ${
+                    idx === slashMenuIndex
+                      ? "bg-primary/10 text-text"
+                      : "text-text-muted hover:bg-surface2"
+                  }`}
+                >
+                  <span className="shrink-0 font-mono text-xs text-primary">/{cmd.name}</span>
+                  {cmd.description && (
+                    <span className="truncate text-xs text-text-muted">
+                      {cmd.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
           <TextArea
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              placeholder || t("playground:chat.inputPlaceholder", "Type a message...")
+              placeholder || t("playground:chat.inputPlaceholder", "Type / for commands or a message...")
             }
             autoSize={{ minRows: 1, maxRows: 6 }}
-            disabled={isLoading}
+            disabled={isLoading || isPreparingContext}
             className="pr-10 text-sm"
           />
         </div>
@@ -602,11 +967,22 @@ const SimpleChatInput: React.FC<{
         ) : (
           <button
             type="submit"
-            disabled={!value.trim()}
+            disabled={!value.trim() || isPreparingContext}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary text-white transition hover:bg-primaryStrong disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={t("common:send", "Send")}
+            aria-label={
+              isPreparingContext
+                ? t(
+                    "playground:chat.preparingSourceContext",
+                    "Preparing source context"
+                  )
+                : t("common:send", "Send")
+            }
           >
-            <Send className="h-5 w-5" />
+            {isPreparingContext ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Send className="h-5 w-5" />
+            )}
           </button>
         )}
       </form>
@@ -656,7 +1032,15 @@ const buildCapturedMessageTitle = (
 /**
  * ChatPane - Middle pane for RAG-powered conversation
  */
-export const ChatPane: React.FC = () => {
+interface ChatPaneProps {
+  provenanceEnabled?: boolean
+  statusGuardrailsEnabled?: boolean
+}
+
+export const ChatPane: React.FC<ChatPaneProps> = ({
+  provenanceEnabled = true,
+  statusGuardrailsEnabled = true
+}) => {
   const { t } = useTranslation(["playground", "common"])
   const isMobile = useMobile()
   const [messageApi, messageContextHolder] = message.useMessage()
@@ -676,6 +1060,11 @@ export const ChatPane: React.FC = () => {
   )
   const chatFocusTarget = useWorkspaceStore((s) => s.chatFocusTarget)
   const clearChatFocusTarget = useWorkspaceStore((s) => s.clearChatFocusTarget)
+
+  // Model settings for model badge (UX-009)
+  const selectedModel = useStoreMessageOption((s) => s.selectedModel)
+  const setSelectedModel = useStoreMessageOption((s) => s.setSelectedModel)
+  const chatApiProvider = useStoreChatModelSettings((s) => s.apiProvider)
 
   // Message option hook
   const {
@@ -733,6 +1122,10 @@ export const ChatPane: React.FC = () => {
   const [temporarySourceScope, setTemporarySourceScope] =
     React.useState<TemporarySourceScope | null>(null)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
+  const [includeFullSourceContents, setIncludeFullSourceContents] =
+    React.useState(false)
+  const [preparingSourceContext, setPreparingSourceContext] =
+    React.useState(false)
   const [lorebookActivityTurns, setLorebookActivityTurns] = React.useState<
     LorebookActivityTurn[]
   >([])
@@ -746,6 +1139,16 @@ export const ChatPane: React.FC = () => {
     React.useState(false)
   const [exportingLorebookActivity, setExportingLorebookActivity] =
     React.useState(false)
+  const [sharingConversation, setSharingConversation] = React.useState(false)
+  const [slashCommands, setSlashCommands] = React.useState<
+    Array<{ name: string; description: string }>
+  >([])
+  const [availableModels, setAvailableModels] = React.useState<ChatModelOption[]>(
+    []
+  )
+  const [loadingModels, setLoadingModels] = React.useState(false)
+  const slashCommandsFetchedRef = React.useRef(false)
+  const modelsFetchedRef = React.useRef(false)
   const workspaceSessionRef = React.useRef<string | null>(null)
   const chatMessageItemRefs = React.useRef<Record<string, HTMLDivElement | null>>(
     {}
@@ -755,6 +1158,17 @@ export const ChatPane: React.FC = () => {
   const temporarySourceScopeRef = React.useRef<TemporarySourceScope | null>(null)
   const suppressSourceContextWarningRef = React.useRef(false)
   const selectedSourcesInitializedRef = React.useRef(false)
+  const retryAttemptTimestampsRef = React.useRef<number[]>([])
+  const lastRetryBurstSignalRef = React.useRef(0)
+  const duplicateSubmissionTrackerRef = React.useRef<{
+    signature: string
+    count: number
+    lastAttemptAt: number
+  }>({
+    signature: "",
+    count: 0,
+    lastAttemptAt: 0
+  })
   const workspaceSessionId = workspaceId || WORKSPACE_CONVERSATION_ID
 
   // Smart scroll for chat messages
@@ -792,6 +1206,11 @@ export const ChatPane: React.FC = () => {
     preferredChatMode ?? (hasSelectedSources ? "rag" : "normal")
   const effectiveChatMode: ChatModePreference =
     hasSelectedSources && requestedChatMode === "rag" ? "rag" : "normal"
+
+  React.useEffect(() => {
+    if (hasSelectedSources || !includeFullSourceContents) return
+    setIncludeFullSourceContents(false)
+  }, [hasSelectedSources, includeFullSourceContents])
 
   const updateRagAdvancedOptions = React.useCallback(
     (patch: Record<string, unknown>) => {
@@ -878,6 +1297,63 @@ export const ChatPane: React.FC = () => {
       setShowAdvancedRagSettings(false)
     }
   }, [hasSelectedSources, showAdvancedRagSettings])
+
+  React.useEffect(() => {
+    if (modelsFetchedRef.current) return
+    modelsFetchedRef.current = true
+    if (typeof tldwClient.getModels !== "function") return
+
+    let isMounted = true
+    setLoadingModels(true)
+    void tldwClient
+      .getModels()
+      .then((models) => {
+        if (!isMounted) return
+        if (!Array.isArray(models) || models.length === 0) {
+          setAvailableModels([])
+          return
+        }
+        const uniqueById = new Map<string, ChatModelOption>()
+        for (const model of models) {
+          if (!model || typeof model !== "object") continue
+          const modelId = extractStringCandidate((model as { id?: unknown }).id)
+          if (!modelId) continue
+          const provider = extractStringCandidate(
+            (model as { provider?: unknown }).provider
+          )
+          const modelName = extractStringCandidate(
+            (model as { name?: unknown }).name
+          )
+          const label =
+            modelName && modelName !== modelId
+              ? `${modelName} (${modelId})`
+              : modelName || modelId
+          uniqueById.set(modelId, {
+            id: modelId,
+            label: provider ? `${provider} · ${label}` : label,
+            provider
+          })
+        }
+        setAvailableModels(
+          Array.from(uniqueById.values()).sort((a, b) =>
+            a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
+          )
+        )
+      })
+      .catch(() => {
+        if (!isMounted) return
+        setAvailableModels([])
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoadingModels(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   React.useEffect(() => {
     selectedSourceIdsRef.current = selectedSourceIds
@@ -1076,10 +1552,151 @@ export const ChatPane: React.FC = () => {
     }
   }, [chatFocusTarget, clearChatFocusTarget])
 
+  const buildFullSourceContextPrompt = React.useCallback(
+    async (message: string): Promise<string> => {
+      if (!includeFullSourceContents || selectedSources.length === 0) {
+        return message
+      }
+
+      setPreparingSourceContext(true)
+
+      try {
+        const detailResults = await Promise.allSettled(
+          selectedSources.map(async (source) => {
+            const detail = await tldwClient.getMediaDetails(source.mediaId, {
+              include_content: true,
+              include_versions: false,
+              include_version_content: false
+            })
+            const fullText = extractSourceFullText(detail)
+            return {
+              source,
+              fullText
+            }
+          })
+        )
+
+        const resolvedSourceContexts: Array<{
+          source: WorkspaceSource
+          fullText: string
+        }> = []
+        let skippedSourceCount = 0
+
+        for (const detailResult of detailResults) {
+          if (detailResult.status !== "fulfilled") {
+            skippedSourceCount += 1
+            continue
+          }
+
+          if (!detailResult.value.fullText) {
+            skippedSourceCount += 1
+            continue
+          }
+
+          resolvedSourceContexts.push(detailResult.value)
+        }
+
+        if (resolvedSourceContexts.length === 0) {
+          messageApi.warning(
+            t(
+              "playground:chat.fullSourceContextUnavailable",
+              "Couldn't load full source contents; sending your question without inline source text."
+            )
+          )
+          return message
+        }
+
+        if (skippedSourceCount > 0) {
+          messageApi.info(
+            t(
+              "playground:chat.partialSourceContextLoaded",
+              "Loaded full content for {{loaded}} source(s); {{skipped}} source(s) had no extracted text yet.",
+              {
+                loaded: resolvedSourceContexts.length,
+                skipped: skippedSourceCount
+              }
+            )
+          )
+        }
+
+        const fullSourceBlock = resolvedSourceContexts
+          .map(({ source, fullText }) => {
+            const sourceHeader = `Source ${source.mediaId}: ${source.title}`
+            return `<<SOURCE START: ${sourceHeader}>>\n${fullText}\n<<SOURCE END: ${sourceHeader}>>`
+          })
+          .join("\n\n")
+
+        return [
+          t(
+            "playground:chat.fullSourceContextInstruction",
+            "Use the complete source contents below when answering the user question."
+          ),
+          t(
+            "playground:chat.fullSourceContextCitationInstruction",
+            "When relevant, cite source titles directly."
+          ),
+          "",
+          fullSourceBlock,
+          "",
+          `${t("playground:chat.fullSourceContextQuestionLabel", "User question")}: ${message}`
+        ].join("\n")
+      } catch {
+        messageApi.warning(
+          t(
+            "playground:chat.fullSourceContextFailed",
+            "Failed to fetch full source contents; sending your question without inline source text."
+          )
+        )
+        return message
+      } finally {
+        setPreparingSourceContext(false)
+      }
+    },
+    [includeFullSourceContents, messageApi, selectedSources, t]
+  )
+
   const handleSubmit = async (message: string) => {
+    if (preparingSourceContext) return
+    const normalizedMessage = message.trim().replace(/\s+/g, " ").toLowerCase()
+    const sourceScopeSignature = [...selectedSourceIdsRef.current]
+      .sort((a, b) => a.localeCompare(b))
+      .join(",")
+    const submissionSignature = `${effectiveChatMode}|${sourceScopeSignature}|${normalizedMessage}`
+    const now = Date.now()
+    const duplicateState = duplicateSubmissionTrackerRef.current
+    const isDuplicateAttempt =
+      duplicateState.signature === submissionSignature &&
+      now - duplicateState.lastAttemptAt <= DUPLICATE_SUBMISSION_WINDOW_MS
+
+    if (isDuplicateAttempt) {
+      const nextCount = duplicateState.count + 1
+      duplicateSubmissionTrackerRef.current = {
+        signature: submissionSignature,
+        count: nextCount,
+        lastAttemptAt: now
+      }
+      if (statusGuardrailsEnabled && nextCount === 2) {
+        void trackWorkspacePlaygroundTelemetry({
+          type: "confusion_duplicate_submission",
+          workspace_id: workspaceSessionId || null,
+          duplicate_count: nextCount,
+          window_ms: DUPLICATE_SUBMISSION_WINDOW_MS,
+          source_scope_count: selectedSourceIdsRef.current.length,
+          message_length: normalizedMessage.length
+        })
+      }
+    } else {
+      duplicateSubmissionTrackerRef.current = {
+        signature: submissionSignature,
+        count: 1,
+        lastAttemptAt: now
+      }
+    }
+
     setSubmitError(null)
     try {
-      await onSubmit({ message, image: "" })
+      const preparedMessage = await buildFullSourceContextPrompt(message)
+      await onSubmit({ message: preparedMessage, image: "" })
       const activeScope = temporarySourceScopeRef.current
       if (activeScope) {
         const selectedIds = selectedSourceIdsRef.current
@@ -1207,31 +1824,228 @@ export const ChatPane: React.FC = () => {
       okText: t("common:clear", "Clear"),
       cancelText: t("common:cancel", "Cancel"),
       onOk: () => {
-        setMessages([])
-        setHistory([])
-        setHistoryId(null, { preserveServerChatId: true })
-        setServerChatId(null)
-        setStreaming(false)
-        setIsProcessing(false)
-        setSubmitError(null)
-        saveWorkspaceChatSession(workspaceSessionId, {
-          messages: [],
-          history: [],
-          historyId: null,
-          serverChatId: null
+        const previousMessages = [...messages]
+        const previousHistory = [...history]
+        const previousHistoryId = historyId
+        const previousServerChatId = serverChatId
+
+        const undoHandle = scheduleWorkspaceUndoAction({
+          apply: () => {
+            setMessages([])
+            setHistory([])
+            setHistoryId(null, { preserveServerChatId: true })
+            setServerChatId(null)
+            setStreaming(false)
+            setIsProcessing(false)
+            setSubmitError(null)
+            saveWorkspaceChatSession(workspaceSessionId, {
+              messages: [],
+              history: [],
+              historyId: null,
+              serverChatId: null
+            })
+          },
+          undo: () => {
+            setMessages(previousMessages)
+            setHistory(previousHistory)
+            setHistoryId(previousHistoryId, { preserveServerChatId: true })
+            setServerChatId(previousServerChatId)
+            setStreaming(false)
+            setIsProcessing(false)
+            setSubmitError(null)
+            saveWorkspaceChatSession(workspaceSessionId, {
+              messages: previousMessages,
+              history: previousHistory,
+              historyId: previousHistoryId,
+              serverChatId: previousServerChatId
+            })
+          }
         })
+
+        const undoMessageKey = `workspace-chat-clear-undo-${undoHandle.id}`
+        const maybeOpen = (
+          messageApi as { open?: (config: unknown) => void }
+        ).open
+        const messageConfig = {
+          key: undoMessageKey,
+          type: "warning",
+          duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+          content: t("playground:chat.cleared", "Chat cleared."),
+          btn: (
+            <Button
+              size="small"
+              type="link"
+              onClick={() => {
+                if (undoWorkspaceAction(undoHandle.id)) {
+                  messageApi.success(
+                    t("playground:chat.restored", "Chat restored")
+                  )
+                }
+                messageApi.destroy(undoMessageKey)
+              }}
+            >
+              {t("common:undo", "Undo")}
+            </Button>
+          )
+        }
+        if (typeof maybeOpen === "function") {
+          maybeOpen(messageConfig)
+        } else {
+          const maybeWarning = (
+            messageApi as { warning?: (content: string) => void }
+          ).warning
+          if (typeof maybeWarning === "function") {
+            maybeWarning(t("playground:chat.cleared", "Chat cleared."))
+          }
+        }
       }
     })
   }
 
+  const handleDeleteMessageWithUndo = React.useCallback(
+    async (messageIndex: number) => {
+      if (!Number.isInteger(messageIndex) || messageIndex < 0) return
+      const previousMessages = [...messages]
+      const previousHistory = [...history]
+      const previousHistoryId = historyId
+      const previousServerChatId = serverChatId
+      if (!previousMessages[messageIndex]) return
+
+      const nextMessages = previousMessages.filter(
+        (_message, index) => index !== messageIndex
+      )
+      const nextHistory = previousHistory.filter(
+        (_entry, index) => index !== messageIndex
+      )
+
+      await deleteMessage(messageIndex)
+
+      const undoHandle = scheduleWorkspaceUndoAction({
+        apply: () => {
+          saveWorkspaceChatSession(workspaceSessionId, {
+            messages: nextMessages,
+            history: nextHistory,
+            historyId: previousHistoryId,
+            serverChatId: previousServerChatId
+          })
+        },
+        undo: () => {
+          setMessages(previousMessages)
+          setHistory(previousHistory)
+          setHistoryId(previousHistoryId, { preserveServerChatId: true })
+          setServerChatId(previousServerChatId)
+          setStreaming(false)
+          setIsProcessing(false)
+          setSubmitError(null)
+          saveWorkspaceChatSession(workspaceSessionId, {
+            messages: previousMessages,
+            history: previousHistory,
+            historyId: previousHistoryId,
+            serverChatId: previousServerChatId
+          })
+        }
+      })
+
+      const undoMessageKey = `workspace-message-delete-undo-${undoHandle.id}`
+      const maybeOpen = (
+        messageApi as { open?: (config: unknown) => void }
+      ).open
+      const messageConfig = {
+        key: undoMessageKey,
+        type: "warning",
+        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+        content: t("playground:chat.messageDeleted", "Message deleted."),
+        btn: (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              if (undoWorkspaceAction(undoHandle.id)) {
+                messageApi.success(
+                  t("playground:chat.messageRestored", "Message restored")
+                )
+              }
+              messageApi.destroy(undoMessageKey)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        )
+      }
+      if (typeof maybeOpen === "function") {
+        maybeOpen(messageConfig)
+      } else {
+        const maybeWarning = (
+          messageApi as { warning?: (content: string) => void }
+        ).warning
+        if (typeof maybeWarning === "function") {
+          maybeWarning(t("playground:chat.messageDeleted", "Message deleted."))
+        }
+      }
+    },
+    [
+      deleteMessage,
+      history,
+      historyId,
+      messageApi,
+      messages,
+      saveWorkspaceChatSession,
+      serverChatId,
+      setHistory,
+      setHistoryId,
+      setIsProcessing,
+      setMessages,
+      setServerChatId,
+      setStreaming,
+      t,
+      workspaceSessionId
+    ]
+  )
+
+  const handleStopStreaming = React.useCallback(() => {
+    void trackWorkspacePlaygroundTelemetry({
+      type: "operation_cancelled",
+      workspace_id: workspaceSessionId || null,
+      operation: "chat_stream"
+    })
+    stopStreamingRequest()
+  }, [stopStreamingRequest, workspaceSessionId])
+
   const handleRetryConnection = async () => {
+    const now = Date.now()
+    const recentRetryAttempts = retryAttemptTimestampsRef.current.filter(
+      (timestamp) => now - timestamp <= RETRY_BURST_WINDOW_MS
+    )
+    recentRetryAttempts.push(now)
+    retryAttemptTimestampsRef.current = recentRetryAttempts
+
+    if (
+      statusGuardrailsEnabled &&
+      recentRetryAttempts.length >= RETRY_BURST_THRESHOLD &&
+      now - lastRetryBurstSignalRef.current > RETRY_BURST_WINDOW_MS
+    ) {
+      lastRetryBurstSignalRef.current = now
+      void trackWorkspacePlaygroundTelemetry({
+        type: "confusion_retry_burst",
+        workspace_id: workspaceSessionId || null,
+        retry_count: recentRetryAttempts.length,
+        window_ms: RETRY_BURST_WINDOW_MS
+      })
+    }
+
     setSubmitError(null)
     await checkConnectionOnce()
   }
 
   const handleCitationSourceClick = React.useCallback(
     (citation: unknown) => {
+      if (!provenanceEnabled) return
       const citationMediaId = extractCitationMediaId(citation)
+      void trackWorkspacePlaygroundTelemetry({
+        type: "citation_provenance_opened",
+        workspace_id: workspaceSessionId || null,
+        has_media_id: citationMediaId !== null
+      })
       if (citationMediaId !== null && focusSourceByMediaId(citationMediaId)) {
         return
       }
@@ -1241,7 +2055,13 @@ export const ChatPane: React.FC = () => {
         focusSourceById(matchedSourceId)
       }
     },
-    [focusSourceById, focusSourceByMediaId, sources]
+    [
+      focusSourceById,
+      focusSourceByMediaId,
+      provenanceEnabled,
+      sources,
+      workspaceSessionId
+    ]
   )
 
   const loadLorebookActivity = React.useCallback(async () => {
@@ -1359,13 +2179,81 @@ export const ChatPane: React.FC = () => {
     [captureToCurrentNote, t]
   )
 
+  // Share conversation handler (UX-044)
+  const handleShareConversation = React.useCallback(async () => {
+    if (!serverChatId || sharingConversation) return
+    setSharingConversation(true)
+    try {
+      const result = await tldwClient.createConversationShareLink(serverChatId, {
+        label: "Workspace share"
+      })
+      const shareUrl = result?.share_url || result?.url || result?.link
+      if (shareUrl) {
+        await navigator.clipboard.writeText(String(shareUrl))
+        messageApi.success(
+          t("playground:chat.shareUrlCopied", "Share link copied to clipboard")
+        )
+      } else {
+        messageApi.info(
+          t("playground:chat.shareLinkCreated", "Share link created")
+        )
+      }
+    } catch {
+      messageApi.error(
+        t("playground:chat.shareError", "Failed to create share link")
+      )
+    } finally {
+      setSharingConversation(false)
+    }
+  }, [serverChatId, sharingConversation, messageApi, t])
+
+  // Fetch slash commands once (UX-006)
+  React.useEffect(() => {
+    if (slashCommandsFetchedRef.current) return
+    slashCommandsFetchedRef.current = true
+    if (typeof tldwClient.listChatCommands !== "function") return
+    try {
+      tldwClient.listChatCommands().then((data: unknown) => {
+        const record = isRecord(data) ? data : {}
+        const commands = Array.isArray(data)
+          ? data
+          : Array.isArray(record.commands)
+            ? record.commands
+            : []
+        setSlashCommands(
+          commands
+            .filter(
+              (cmd: unknown): cmd is { name: string; description: string } =>
+                isRecord(cmd) && typeof cmd.name === "string"
+            )
+            .map((cmd: { name: string; description?: string }) => ({
+              name: String(cmd.name),
+              description: String(cmd.description || "")
+            }))
+        )
+      }).catch(() => {
+        // Slash commands unavailable - silently degrade
+      })
+    } catch {
+      // Slash commands unavailable - silently degrade
+    }
+  }, [])
+
+  // Model display label (UX-009)
+  const modelDisplayLabel = React.useMemo(() => {
+    if (selectedModel) return selectedModel
+    if (chatApiProvider) return chatApiProvider
+    return null
+  }, [selectedModel, chatApiProvider])
+
   // Conversation instance ID (use workspace ID or fallback)
   const conversationInstanceId =
     workspaceChatReferenceId || workspaceId || WORKSPACE_CONVERSATION_ID
   const showConnectionBanner =
-    submitError !== null ||
-    (connectionState.phase === ConnectionPhase.ERROR &&
-      !connectionState.isChecking)
+    statusGuardrailsEnabled &&
+    (submitError !== null ||
+      (connectionState.phase === ConnectionPhase.ERROR &&
+        !connectionState.isChecking))
   const connectionDescription =
     submitError ||
     connectionState.lastError ||
@@ -1375,7 +2263,7 @@ export const ChatPane: React.FC = () => {
     )
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-[calc(100vh-10rem)] flex-col">
       {messageContextHolder}
 
       {/* Context indicator */}
@@ -1512,14 +2400,18 @@ export const ChatPane: React.FC = () => {
       )}
 
       {/* Chat messages area */}
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="relative flex flex-col">
         <div
           ref={containerRef}
           role="log"
           aria-live="polite"
           aria-relevant="additions"
           aria-label={t("playground:aria.chatTranscript", "Chat messages")}
-          className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4"
+          className="custom-scrollbar overflow-x-hidden overflow-y-auto px-4"
+          style={{
+            minHeight: CHAT_TRANSCRIPT_MIN_HEIGHT,
+            maxHeight: CHAT_TRANSCRIPT_MAX_HEIGHT
+          }}
         >
           <div className="mx-auto w-full max-w-3xl pb-6">
             {hasMessages ? (
@@ -1584,7 +2476,9 @@ export const ChatPane: React.FC = () => {
                         }
                         modelName={msg.modelName}
                         modelImage={msg.modelImage}
-                        onSourceClick={handleCitationSourceClick}
+                        onSourceClick={
+                          provenanceEnabled ? handleCitationSourceClick : undefined
+                        }
                         onSaveToWorkspaceNotes={() =>
                           handleSaveMessageToNotes({
                             isBot: msg.isBot,
@@ -1597,7 +2491,8 @@ export const ChatPane: React.FC = () => {
                             ? () => regenerateLastMessage()
                             : () => {}
                         }
-                        onDeleteMessage={() => deleteMessage(idx)}
+                        onDeleteMessage={() => handleDeleteMessageWithUndo(idx)}
+                        suppressDeleteSuccessToast
                         onEditFormSubmit={(value, isSend) => {
                           editMessage(idx, value, !msg.isBot, isSend)
                         }}
@@ -1605,7 +2500,7 @@ export const ChatPane: React.FC = () => {
                         hideContinue={true}
                         temporaryChat={false}
                       />
-                      {msg.isBot && diagnostics && (
+                      {msg.isBot && diagnostics && provenanceEnabled && (
                         <div className="px-2">
                           <RetrievalDiagnosticsPanel diagnostics={diagnostics} />
                         </div>
@@ -1729,6 +2624,69 @@ export const ChatPane: React.FC = () => {
               </Tooltip>
             </div>
             <div className="flex items-center gap-2">
+              {/* Model badge (UX-009) */}
+              {provenanceEnabled && modelDisplayLabel && (
+                <Tooltip
+                  title={t(
+                    "playground:chat.currentModelTooltip",
+                    "Current model: {{model}}",
+                    { model: modelDisplayLabel }
+                  ).replace("{{model}}", modelDisplayLabel)}
+                >
+                  <span className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text-muted">
+                    <Cpu className="h-3 w-3" />
+                    <span className="max-w-[120px] truncate">{modelDisplayLabel}</span>
+                  </span>
+                </Tooltip>
+              )}
+              {provenanceEnabled && (loadingModels || availableModels.length > 0) && (
+                <label className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted">
+                  <span>{t("playground:chat.modelPickerLabel", "Model")}</span>
+                  <select
+                    aria-label={t(
+                      "playground:chat.modelPickerAria",
+                      "Select model"
+                    )}
+                    value={selectedModel ?? ""}
+                    onChange={(event) => {
+                      if (typeof setSelectedModel !== "function") return
+                      const value = event.target.value.trim()
+                      setSelectedModel(value.length > 0 ? value : null)
+                    }}
+                    className="max-w-[180px] truncate bg-transparent text-[11px] text-text focus:outline-none"
+                    disabled={loadingModels}
+                  >
+                    <option value="">
+                      {t("playground:chat.modelPickerAuto", "Auto")}
+                    </option>
+                    {availableModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {/* Share conversation button (UX-044) */}
+              {serverChatId && hasMessages && (
+                <Tooltip
+                  title={t("playground:chat.shareConversation", "Share conversation")}
+                >
+                  <button
+                    type="button"
+                    onClick={handleShareConversation}
+                    disabled={sharingConversation}
+                    className="inline-flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 text-xs text-text-muted transition hover:bg-surface hover:text-text disabled:opacity-50"
+                    aria-label={t("playground:chat.shareConversation", "Share conversation")}
+                  >
+                    {sharingConversation ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Share2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </Tooltip>
+              )}
               {preferredChatMode !== null && (
                 <button
                   type="button"
@@ -1761,6 +2719,42 @@ export const ChatPane: React.FC = () => {
               {t(
                 "playground:chat.generalModeWithSourcesHint",
                 "General chat mode is active. Selected sources will not be used unless RAG mode is enabled."
+              )}
+            </p>
+          )}
+          {hasSelectedSources && (
+            <div className="mb-2 flex items-start justify-between gap-3 rounded-md border border-border bg-surface2/40 px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-text">
+                  {t(
+                    "playground:chat.includeFullSourcesLabel",
+                    "Include full source contents"
+                  )}
+                </p>
+                <p className="mt-0.5 text-[11px] text-text-muted">
+                  {t(
+                    "playground:chat.includeFullSourcesHint",
+                    "Inject complete extracted source text with your question (helpful for synopsis-style prompts)."
+                  )}
+                </p>
+              </div>
+              <Switch
+                size="small"
+                checked={includeFullSourceContents}
+                onChange={setIncludeFullSourceContents}
+                aria-label={t(
+                  "playground:chat.includeFullSourcesAria",
+                  "Include full source contents"
+                )}
+              />
+            </div>
+          )}
+          {preparingSourceContext && (
+            <p className="mb-2 flex items-center gap-1.5 text-xs text-text-muted">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t(
+                "playground:chat.preparingSourceContext",
+                "Preparing source context"
               )}
             </p>
           )}
@@ -1808,6 +2802,7 @@ export const ChatPane: React.FC = () => {
                     size="small"
                     checked={rerankingEnabled}
                     onChange={handleRerankingToggle}
+                    aria-label={t("playground:chat.ragReranking", "Enable reranking")}
                   />
                 </div>
               </div>
@@ -1815,10 +2810,12 @@ export const ChatPane: React.FC = () => {
           )}
           <SimpleChatInput
             onSubmit={handleSubmit}
-            onStop={stopStreamingRequest}
+            onStop={handleStopStreaming}
             isLoading={streaming}
+            isPreparingContext={preparingSourceContext}
             seededValue={seededPrompt}
             onSeedConsumed={() => setSeededPrompt(null)}
+            slashCommands={slashCommands}
             placeholder={
               hasSelectedSources
                 ? t(

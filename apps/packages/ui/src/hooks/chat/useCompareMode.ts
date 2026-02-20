@@ -25,6 +25,8 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
     setCompareParentForHistory,
     compareCanonicalByCluster,
     setCompareCanonicalForCluster,
+    compareContinuationModeByCluster,
+    setCompareContinuationModeForCluster,
     compareSplitChats,
     setCompareSplitChat
   } = useStoreMessageOption()
@@ -58,6 +60,7 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
     useStoreMessageOption.setState({
       compareSelectionByCluster: {},
       compareCanonicalByCluster: {},
+      compareContinuationModeByCluster: {},
       compareSplitChats: {},
       compareActiveModelsByCluster: {}
     })
@@ -108,6 +111,8 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
           useStoreMessageOption.setState({
             compareSelectionByCluster: saved.compareSelectionByCluster || {},
             compareCanonicalByCluster: saved.compareCanonicalByCluster || {},
+            compareContinuationModeByCluster:
+              saved.compareContinuationModeByCluster || {},
             compareSplitChats: saved.compareSplitChats || {},
             compareActiveModelsByCluster:
               saved.compareActiveModelsByCluster || {}
@@ -155,6 +160,7 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
         compareSelectedModels,
         compareSelectionByCluster,
         compareCanonicalByCluster,
+        compareContinuationModeByCluster,
         compareSplitChats,
         compareActiveModelsByCluster,
         compareParent: compareParentForHistory ?? null,
@@ -173,6 +179,7 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
     compareSelectedModels,
     compareSelectionByCluster,
     compareCanonicalByCluster,
+    compareContinuationModeByCluster,
     compareSplitChats,
     compareActiveModelsByCluster,
     compareParentForHistory
@@ -199,6 +206,8 @@ export const useCompareMode = ({ historyId, forceEnabled }: UseCompareModeOption
     setCompareParentForHistory,
     compareCanonicalByCluster,
     setCompareCanonicalForCluster,
+    compareContinuationModeByCluster,
+    setCompareContinuationModeForCluster,
     compareSplitChats,
     setCompareSplitChat,
     compareMaxModels,

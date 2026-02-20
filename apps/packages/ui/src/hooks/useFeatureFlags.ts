@@ -1,5 +1,12 @@
-import { useCallback } from "react"
+import { useCallback, useMemo } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
+import {
+  FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS,
+  FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY,
+  createRolloutSubjectId,
+  isFlagEnabledForRollout,
+  resolveRolloutPercentageFromCandidates
+} from "@/utils/feature-rollout"
 
 /**
  * Feature flags for gradual UX redesign rollout.
@@ -22,7 +29,10 @@ export const FEATURE_FLAGS = {
   MEDIA_RICH_RENDERING: "ff_mediaRichRendering",
   MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR: "ff_mediaAnalysisDisplayModeSelector",
   MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT:
-    "ff_mediaNavigationGeneratedFallbackDefault"
+    "ff_mediaNavigationGeneratedFallbackDefault",
+  RESEARCH_STUDIO_PROVENANCE_V1: "research_studio_provenance_v1",
+  RESEARCH_STUDIO_STATUS_GUARDRAILS_V1:
+    "research_studio_status_guardrails_v1"
 } as const
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[keyof typeof FEATURE_FLAGS]
@@ -35,7 +45,143 @@ const FEATURE_FLAG_DEFAULTS: Partial<Record<FeatureFlagKey, boolean>> = {
   [FEATURE_FLAGS.MEDIA_NAVIGATION_PANEL]: true,
   [FEATURE_FLAGS.MEDIA_RICH_RENDERING]: true,
   [FEATURE_FLAGS.MEDIA_ANALYSIS_DISPLAY_MODE_SELECTOR]: true,
-  [FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT]: true
+  [FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT]: true,
+  [FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1]: true,
+  [FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1]: true
+}
+
+type ResearchStudioRolloutFlag =
+  | typeof FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1
+  | typeof FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1
+
+const RESEARCH_STUDIO_ROLLOUT_DEFAULT_PERCENTAGE = 100
+
+const RESEARCH_STUDIO_ROLLOUT_CONFIG: Record<
+  ResearchStudioRolloutFlag,
+  {
+    storageKey: string
+    viteEnvKey: string
+    nextEnvKey: string
+  }
+> = {
+  [FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1]: {
+    storageKey:
+      FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.research_studio_provenance_v1,
+    viteEnvKey: "VITE_RESEARCH_STUDIO_PROVENANCE_V1_ROLLOUT_PERCENTAGE",
+    nextEnvKey: "NEXT_PUBLIC_RESEARCH_STUDIO_PROVENANCE_V1_ROLLOUT_PERCENTAGE"
+  },
+  [FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1]: {
+    storageKey:
+      FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS
+        .research_studio_status_guardrails_v1,
+    viteEnvKey: "VITE_RESEARCH_STUDIO_STATUS_GUARDRAILS_V1_ROLLOUT_PERCENTAGE",
+    nextEnvKey:
+      "NEXT_PUBLIC_RESEARCH_STUDIO_STATUS_GUARDRAILS_V1_ROLLOUT_PERCENTAGE"
+  }
+}
+
+export const RESEARCH_STUDIO_ROLLOUT_PERCENTAGE_STORAGE_KEYS = {
+  [FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1]:
+    FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.research_studio_provenance_v1,
+  [FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1]:
+    FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS
+      .research_studio_status_guardrails_v1
+} as const
+
+const isResearchStudioRolloutFlag = (
+  flag: FeatureFlagKey
+): flag is ResearchStudioRolloutFlag =>
+  flag === FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1 ||
+  flag === FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1
+
+const readLocalStorageValue = (key: string): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const writeLocalStorageValue = (key: string, value: string): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Ignore storage write failures; rollout will fall back to in-memory defaults.
+  }
+}
+
+const readRolloutWindowOverrides = (): Record<string, unknown> | null => {
+  if (typeof window === "undefined") return null
+  const overrideValue = (
+    window as Window & { __TLDW_RESEARCH_STUDIO_ROLLOUT__?: unknown }
+  ).__TLDW_RESEARCH_STUDIO_ROLLOUT__
+  if (!overrideValue || typeof overrideValue !== "object") return null
+  return overrideValue as Record<string, unknown>
+}
+
+const resolveRolloutSubjectId = (): string => {
+  const overridePayload = readRolloutWindowOverrides()
+  const overrideSubject =
+    overridePayload?.subjectId ?? overridePayload?.subject_id
+  if (typeof overrideSubject === "string" && overrideSubject.trim().length > 0) {
+    return overrideSubject.trim()
+  }
+
+  if (typeof window === "undefined") {
+    return "server-rollout-subject"
+  }
+
+  const persistedSubjectId = readLocalStorageValue(
+    FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY
+  )
+  if (typeof persistedSubjectId === "string" && persistedSubjectId.trim().length) {
+    return persistedSubjectId.trim()
+  }
+
+  const createdSubjectId = createRolloutSubjectId()
+  writeLocalStorageValue(
+    FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY,
+    createdSubjectId
+  )
+  return createdSubjectId
+}
+
+const resolveRolloutPercentageForFlag = (
+  flag: ResearchStudioRolloutFlag
+): number => {
+  const config = RESEARCH_STUDIO_ROLLOUT_CONFIG[flag]
+  const overridePayload = readRolloutWindowOverrides()
+  const overrideValue = overridePayload?.[flag]
+  const storageValue = readLocalStorageValue(config.storageKey)
+
+  const viteEnv = (
+    import.meta as unknown as { env?: Record<string, unknown> }
+  ).env
+  const viteValue = viteEnv?.[config.viteEnvKey]
+  const nextEnvValue = typeof process !== "undefined"
+    ? (process as { env?: Record<string, string | undefined> }).env?.[
+      config.nextEnvKey
+    ]
+    : undefined
+
+  return resolveRolloutPercentageFromCandidates(
+    [overrideValue, storageValue, viteValue, nextEnvValue],
+    RESEARCH_STUDIO_ROLLOUT_DEFAULT_PERCENTAGE
+  )
+}
+
+const isFeatureFlagEnabledByRollout = (flag: FeatureFlagKey): boolean => {
+  if (!isResearchStudioRolloutFlag(flag)) return true
+
+  const rolloutPercentage = resolveRolloutPercentageForFlag(flag)
+  const subjectId = resolveRolloutSubjectId()
+  return isFlagEnabledForRollout({
+    flagKey: flag,
+    subjectId,
+    rolloutPercentage
+  })
 }
 
 /**
@@ -44,8 +190,12 @@ const FEATURE_FLAG_DEFAULTS: Partial<Record<FeatureFlagKey, boolean>> = {
  * @returns [isEnabled, setEnabled] tuple
  */
 export function useFeatureFlag(flag: FeatureFlagKey) {
-  // Default to true to enable new UX features by default
-  return useStorage(flag, FEATURE_FLAG_DEFAULTS[flag] ?? true)
+  const [persistedEnabled, setPersistedEnabled] = useStorage(
+    flag,
+    FEATURE_FLAG_DEFAULTS[flag] ?? true
+  )
+  const rolloutEnabled = useMemo(() => isFeatureFlagEnabledByRollout(flag), [flag])
+  return [Boolean(persistedEnabled) && rolloutEnabled, setPersistedEnabled] as const
 }
 
 /**
@@ -114,6 +264,17 @@ export function useAllFeatureFlags() {
       FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT
     ] ?? true
   )
+  const [researchStudioProvenanceV1, setResearchStudioProvenanceV1] = useStorage(
+    FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1,
+    FEATURE_FLAG_DEFAULTS[FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1] ?? true
+  )
+  const [researchStudioStatusGuardrailsV1, setResearchStudioStatusGuardrailsV1] =
+    useStorage(
+      FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1,
+      FEATURE_FLAG_DEFAULTS[
+        FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1
+      ] ?? true
+    )
 
   return {
     flags: {
@@ -130,7 +291,9 @@ export function useAllFeatureFlags() {
       mediaNavigationPanel,
       mediaRichRendering,
       mediaAnalysisDisplayModeSelector,
-      mediaNavigationGeneratedFallbackDefault
+      mediaNavigationGeneratedFallbackDefault,
+      researchStudioProvenanceV1,
+      researchStudioStatusGuardrailsV1
     },
     setters: {
       setNewOnboarding,
@@ -146,7 +309,9 @@ export function useAllFeatureFlags() {
       setMediaNavigationPanel,
       setMediaRichRendering,
       setMediaAnalysisDisplayModeSelector,
-      setMediaNavigationGeneratedFallbackDefault
+      setMediaNavigationGeneratedFallbackDefault,
+      setResearchStudioProvenanceV1,
+      setResearchStudioStatusGuardrailsV1
     },
     // Enable all new UX features
     enableAll: useCallback(() => {
@@ -164,6 +329,8 @@ export function useAllFeatureFlags() {
       setMediaRichRendering(true)
       setMediaAnalysisDisplayModeSelector(true)
       setMediaNavigationGeneratedFallbackDefault(true)
+      setResearchStudioProvenanceV1(true)
+      setResearchStudioStatusGuardrailsV1(true)
     }, [
       setNewOnboarding,
       setNewChat,
@@ -178,7 +345,9 @@ export function useAllFeatureFlags() {
       setMediaNavigationPanel,
       setMediaRichRendering,
       setMediaAnalysisDisplayModeSelector,
-      setMediaNavigationGeneratedFallbackDefault
+      setMediaNavigationGeneratedFallbackDefault,
+      setResearchStudioProvenanceV1,
+      setResearchStudioStatusGuardrailsV1
     ]),
     // Disable all new UX features (revert to old)
     disableAll: useCallback(() => {
@@ -196,6 +365,8 @@ export function useAllFeatureFlags() {
       setMediaRichRendering(false)
       setMediaAnalysisDisplayModeSelector(false)
       setMediaNavigationGeneratedFallbackDefault(false)
+      setResearchStudioProvenanceV1(false)
+      setResearchStudioStatusGuardrailsV1(false)
     }, [
       setNewOnboarding,
       setNewChat,
@@ -210,7 +381,9 @@ export function useAllFeatureFlags() {
       setMediaNavigationPanel,
       setMediaRichRendering,
       setMediaAnalysisDisplayModeSelector,
-      setMediaNavigationGeneratedFallbackDefault
+      setMediaNavigationGeneratedFallbackDefault,
+      setResearchStudioProvenanceV1,
+      setResearchStudioStatusGuardrailsV1
     ])
   }
 }
@@ -268,4 +441,12 @@ export function useMediaAnalysisDisplayModeSelector() {
 
 export function useMediaNavigationGeneratedFallbackDefault() {
   return useFeatureFlag(FEATURE_FLAGS.MEDIA_NAVIGATION_GENERATED_FALLBACK_DEFAULT)
+}
+
+export function useResearchStudioProvenance() {
+  return useFeatureFlag(FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1)
+}
+
+export function useResearchStudioStatusGuardrails() {
+  return useFeatureFlag(FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1)
 }

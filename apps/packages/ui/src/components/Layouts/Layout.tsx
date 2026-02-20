@@ -36,7 +36,6 @@ import { useMobile } from "@/hooks/useMediaQuery"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import {
   DOCUMENT_WORKSPACE_PATH,
-  WORKSPACE_PLAYGROUND_PATH
 } from "@/routes/route-paths"
 import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
@@ -123,10 +122,11 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const mobileSidebarPathRef = React.useRef(location.pathname)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
+  const isMediaRoute = location.pathname === "/media"
   const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
-  const isWorkspacePlayground = location.pathname === WORKSPACE_PLAYGROUND_PATH
+  const isMediaMultiRoute = location.pathname === "/media-multi"
   const isViewportConstrainedRoute =
-    isDocumentWorkspace || isWorkspacePlayground
+    isDocumentWorkspace || isMediaRoute || isMediaMultiRoute
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage
       ? {
@@ -182,6 +182,26 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     }
     mobileSidebarPathRef.current = location.pathname
   }, [isMobile, showChatSidebar, sidebarOpen, location.pathname])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = () => {
+      if (hideSidebar) return
+      if (showChatSidebar) {
+        if (isMobile) {
+          setSidebarOpen(true)
+          return
+        }
+        setChatSidebarCollapsed(false)
+        return
+      }
+      setSidebarOpen(true)
+    }
+    window.addEventListener("tldw:open-chat-sidebar", handler)
+    return () => {
+      window.removeEventListener("tldw:open-chat-sidebar", handler)
+    }
+  }, [hideSidebar, isMobile, setChatSidebarCollapsed, showChatSidebar])
 
   const handleIngestPage = () => {
     if (typeof window !== "undefined") {

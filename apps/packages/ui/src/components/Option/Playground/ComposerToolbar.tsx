@@ -1,13 +1,15 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { Tooltip } from "antd"
+import { useStorage } from "@plasmohq/storage/hook"
 import {
   Globe,
   MicIcon,
   Search,
   FileText,
   FileIcon,
-  Gauge
+  Gauge,
+  ChevronDown
 } from "lucide-react"
 import { PromptSelect } from "@/components/Common/PromptSelect"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
@@ -26,6 +28,8 @@ export type ComposerToolbarProps = {
   isMobile: boolean
   isConnectionReady: boolean
   isSending: boolean
+  modeLauncherButton?: React.ReactNode
+  compareControl?: React.ReactNode
   // Row 1: primary selectors (pre-rendered by parent)
   modelSelectButton: React.ReactNode
   mcpControl: React.ReactNode
@@ -79,6 +83,15 @@ export type ComposerToolbarProps = {
   showServerPersistenceHint: boolean
   onDismissServerPersistenceHint: () => void
   onFocusConnectionCard: () => void
+  contextItems?: ComposerContextItem[]
+}
+
+export type ComposerContextItem = {
+  id: string
+  label: string
+  value?: string
+  tone?: "neutral" | "active" | "warning"
+  onClick?: () => void
 }
 
 /**
@@ -94,6 +107,8 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     isProMode,
     isMobile,
     isConnectionReady,
+    modeLauncherButton,
+    compareControl,
     modelSelectButton,
     mcpControl,
     sendControl,
@@ -134,10 +149,15 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     serverChatId,
     showServerPersistenceHint,
     onDismissServerPersistenceHint,
-    onFocusConnectionCard
+    onFocusConnectionCard,
+    contextItems = []
   } = props
 
   const ephemeralDisabled = privateChatLocked || isFireFoxPrivateMode
+  const [advancedControlsOpen, setAdvancedControlsOpen] = useStorage(
+    "playgroundComposerAdvancedControlsOpen",
+    false
+  )
 
   // --- Shared sub-elements ---
   const ephemeralToggle = (
@@ -150,7 +170,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           aria-pressed={temporaryChat}
           aria-label={
             temporaryChat
-              ? (t("playground:composer.ephemeralLabel", "Ephemeral") as string)
+              ? (t("playground:composer.ephemeralLabel", "Temporary") as string)
               : (t("playground:composer.savedLabel", "Saved") as string)
           }
           className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
@@ -160,7 +180,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           } ${ephemeralDisabled ? "cursor-not-allowed opacity-50" : ""}`}
         >
           {temporaryChat
-            ? t("playground:composer.ephemeralLabel", "Ephemeral")
+            ? t("playground:composer.ephemeralLabel", "Temporary")
             : t("playground:composer.savedLabel", "Saved")}
         </button>
       </span>
@@ -352,7 +372,11 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     <div className="mt-2 flex flex-col gap-1">
       {/* Row 1: Primary selectors - always present */}
       <div className={`flex flex-col gap-2 ${isProMode ? "mt-1" : ""}`}>
-        <div className="flex flex-wrap items-center gap-2">
+        <div
+          data-playground-toolbar-row="primary"
+          className="flex flex-wrap items-center gap-2"
+        >
+          {modeLauncherButton}
           <ConnectionStatus showLabel={false} className="px-1 py-0.5" />
           {!isMobile && mcpControl}
           {modelSelectButton}
@@ -368,29 +392,60 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             iconClassName="h-4 w-4"
             className="text-text-muted hover:text-text"
           />
+          {compareControl}
         </div>
 
         {/* Row 2 (Pro-only): Enhanced features */}
         {isProMode && !isMobile && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <ParameterPresets compact />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <SystemPromptTemplatesButton onSelect={onTemplateSelect} />
-              {messages.length > 0 && (
-                <SessionCostEstimation
-                  modelId={selectedModel}
-                  provider={resolvedProviderKey}
-                  messages={messages}
-                />
-              )}
-            </div>
+          <div className="border-t border-border/50 pt-2">
+            <button
+              type="button"
+              onClick={() => setAdvancedControlsOpen(!advancedControlsOpen)}
+              aria-expanded={advancedControlsOpen}
+              data-testid="composer-advanced-toggle"
+              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs font-medium text-text-muted transition hover:bg-surface2 hover:text-text"
+            >
+              <span>
+                {t(
+                  "playground:composer.advancedControls",
+                  "Advanced controls"
+                )}
+              </span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${
+                  advancedControlsOpen ? "rotate-180" : ""
+                }`}
+                aria-hidden="true"
+              />
+            </button>
+            {advancedControlsOpen && (
+              <div
+                data-playground-toolbar-row="advanced"
+                className="mt-2 flex flex-wrap items-center justify-between gap-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <ParameterPresets compact />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <SystemPromptTemplatesButton onSelect={onTemplateSelect} />
+                  {messages.length > 0 && (
+                    <SessionCostEstimation
+                      modelId={selectedModel}
+                      provider={resolvedProviderKey}
+                      messages={messages}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Row 3: Toggles + action controls */}
-        <div className={`flex ${isProMode ? "flex-col gap-2 md:flex-row md:items-center md:justify-between" : "items-center justify-between gap-2"}`}>
+        <div
+          data-playground-toolbar-row="actions"
+          className={`flex ${isProMode ? "flex-col gap-2 md:flex-row md:items-center md:justify-between" : "items-center justify-between gap-2"}`}
+        >
           <div className={`flex items-center gap-2 ${isProMode ? "flex-wrap text-text-muted" : "flex-nowrap"}`}>
             {ephemeralToggle}
             {/* Desktop: show inline; Mobile: hidden (in overflow) */}
@@ -473,6 +528,66 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
               {t("common:dismiss", "Dismiss")}
             </button>
           </p>
+        )}
+        {contextItems.length > 0 && (
+          <div
+            data-testid="composer-context-strip"
+            aria-label={t("playground:composer.activeContext", "Active context") as string}
+            className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-2"
+          >
+            {contextItems.map((item) => {
+              const baseClasses =
+                item.tone === "warning"
+                  ? "border-warn/40 bg-warn/10 text-warn"
+                  : item.tone === "active"
+                    ? "border-primary/40 bg-primary/10 text-primaryStrong"
+                    : "border-border bg-surface2 text-text-muted"
+              const content = (
+                <>
+                  <span className="font-medium">
+                    {item.label}
+                  </span>
+                  {item.value ? (
+                    <span className="max-w-[150px] truncate text-text">
+                      {item.value}
+                    </span>
+                  ) : null}
+                </>
+              )
+
+              if (item.onClick) {
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.onClick}
+                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition hover:bg-surface2 ${baseClasses}`}
+                    title={
+                      item.value
+                        ? `${item.label}: ${item.value}`
+                        : item.label
+                    }
+                  >
+                    {content}
+                  </button>
+                )
+              }
+
+              return (
+                <span
+                  key={item.id}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${baseClasses}`}
+                  title={
+                    item.value
+                      ? `${item.label}: ${item.value}`
+                      : item.label
+                  }
+                >
+                  {content}
+                </span>
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

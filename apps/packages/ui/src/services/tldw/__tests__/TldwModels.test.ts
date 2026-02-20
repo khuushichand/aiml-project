@@ -113,4 +113,30 @@ describe("TldwModelsService caching", () => {
     expect(mocks.getModels).toHaveBeenCalledTimes(1)
     expect(mocks.getModels).toHaveBeenCalledWith({ refreshOpenRouter: true })
   })
+
+  it("ignores legacy cache entries without schema version and refetches models", async () => {
+    mocks.storageGet.mockResolvedValue({
+      timestamp: Date.now(),
+      scope: "http://127.0.0.1:8000|single-user|key|none",
+      models: [
+        {
+          id: "z-ai/glm-4.6",
+          name: "deepseek/deepseek-r1",
+          provider: "openrouter",
+          type: "chat"
+        }
+      ]
+    })
+    mocks.getModels.mockResolvedValue([
+      { id: "deepseek/deepseek-r1", name: "deepseek/deepseek-r1", provider: "openrouter", type: "chat" }
+    ])
+
+    const { TldwModelsService } = await importService()
+    const service = new TldwModelsService()
+
+    const models = await service.getModels()
+
+    expect(mocks.getModels).toHaveBeenCalledTimes(1)
+    expect(models[0]?.id).toBe("deepseek/deepseek-r1")
+  })
 })

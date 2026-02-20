@@ -2,7 +2,7 @@
  * SourceCard - Individual source/document display
  */
 
-import React, { useCallback } from "react"
+import React, { useCallback, useMemo } from "react"
 import {
   FileText,
   MessageSquare,
@@ -10,6 +10,7 @@ import {
   Copy,
   Check,
   Quote,
+  Pin,
   ThumbsUp,
   ThumbsDown,
 } from "lucide-react"
@@ -18,8 +19,11 @@ import type { RagResult } from "./types"
 import {
   formatChunkPosition,
   formatSourceDate,
+  getFreshnessDescriptor,
   getRelevanceDescriptor,
   getSourceTypeLabel,
+  type CitationUsageAnchor,
+  splitTextByHighlights,
 } from "./sourceListUtils"
 
 export type SourceAskTemplate = "detail" | "summary" | "quotes"
@@ -29,13 +33,19 @@ type SourceCardProps = {
   index: number // 1-based for display
   isCited: boolean
   isFocused: boolean
+  onSourceHover: (index: number | null) => void
   onAskAbout: (result: RagResult, template: SourceAskTemplate) => void
   onViewFull: (result: RagResult, index: number) => void
   onSourceFeedback: (result: RagResult, index: number, thumb: "up" | "down") => void
   onRetrySourceFeedback: (result: RagResult, index: number) => void
+  onTogglePin: (result: RagResult, index: number) => void
+  onJumpToCitation: (citationIndex: number, occurrence?: number) => void
   feedbackThumb: "up" | "down" | null
   feedbackSubmitting: boolean
   feedbackError: string | null
+  isPinned: boolean
+  highlightTerms: string[]
+  citationUsages: CitationUsageAnchor[]
   className?: string
 }
 
@@ -73,18 +83,35 @@ function buildCitationText(result: RagResult, fallbackIndex: number): string {
   return segments.join(" ")
 }
 
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false
+  }
+  return Boolean(
+    target.closest(
+      'button, a, input, select, textarea, [role="button"], [role="link"], [contenteditable]'
+    )
+  )
+}
+
 export function SourceCard({
   result,
   index,
   isCited,
   isFocused,
+  onSourceHover,
   onAskAbout,
   onViewFull,
   onSourceFeedback,
   onRetrySourceFeedback,
+  onTogglePin,
+  onJumpToCitation,
   feedbackThumb,
   feedbackSubmitting,
   feedbackError,
+  isPinned,
+  highlightTerms,
+  citationUsages,
   className,
 }: SourceCardProps) {
   const [copiedState, setCopiedState] = React.useState<"text" | "citation" | null>(null)
@@ -94,6 +121,10 @@ export function SourceCard({
   const title = result.metadata?.title || result.metadata?.source || `Source ${index}`
   const content = result.content || result.text || result.chunk || ""
   const excerpt = isExpanded ? content : truncateText(content, 300)
+  const excerptSegments = useMemo(
+    () => splitTextByHighlights(excerpt, highlightTerms),
+    [excerpt, highlightTerms]
+  )
   const canExpand = content.length > 300
   const url = result.metadata?.url
   const score = result.score
@@ -101,6 +132,7 @@ export function SourceCard({
   const sourceTypeLabel = getSourceTypeLabel(sourceType)
   const chunkPosition = formatChunkPosition(result.metadata?.chunk_id)
   const sourceDate = formatSourceDate(result)
+  const freshnessDescriptor = getFreshnessDescriptor(result)
   const relevanceDescriptor = getRelevanceDescriptor(score)
 
   const Icon = getSourceIcon(sourceType)
@@ -131,17 +163,57 @@ export function SourceCard({
     }
   }, [url])
 
+  const jumpToCitationFromCard = useCallback(() => {
+    if (!isCited) return
+    onJumpToCitation(index)
+  }, [index, isCited, onJumpToCitation])
+
   return (
     <div
       id={`source-card-${index - 1}`}
       role="listitem"
+      tabIndex={isCited ? 0 : undefined}
+      onMouseEnter={() => onSourceHover(index - 1)}
+      onMouseLeave={() => onSourceHover(null)}
+      onFocusCapture={() => onSourceHover(index - 1)}
+      onBlurCapture={(event) => {
+        const nextFocused = event.relatedTarget as Node | null
+        if (nextFocused && event.currentTarget.contains(nextFocused)) {
+          return
+        }
+        onSourceHover(null)
+      }}
+      onClick={(event) => {
+        if (!isCited || isInteractiveTarget(event.target)) {
+          return
+        }
+        jumpToCitationFromCard()
+      }}
+      onKeyDown={(event) => {
+        if (!isCited || isInteractiveTarget(event.target)) {
+          return
+        }
+        if (event.key !== "Enter" && event.key !== " ") {
+          return
+        }
+        event.preventDefault()
+        jumpToCitationFromCard()
+      }}
+      aria-label={
+        isCited
+          ? `Source ${index}. Cited in answer. Press Enter to jump to citation ${index}.`
+          : undefined
+      }
       className={cn(
         "group rounded-lg border transition-all duration-200",
         isFocused
           ? "border-primary bg-primary/5 ring-2 ring-primary/20"
+          : isPinned
+            ? "border-primary/40 bg-primary/5 hover:border-primary/60"
           : isCited
             ? "border-border bg-surface hover:border-primary/30"
             : "border-border/70 bg-surface/90 hover:border-border-strong",
+        isCited && "cursor-pointer",
         className
       )}
     >
@@ -179,14 +251,66 @@ export function SourceCard({
                 )}
                 <span>{sourceTypeLabel}</span>
                 {chunkPosition ? <span>{chunkPosition}</span> : null}
-                {sourceDate ? <span>{sourceDate}</span> : null}
-                {isCited && (
-                  <span className="flex items-center gap-1 text-primary">
-                    <Quote className="w-3 h-3" />
-                    Cited
+                {freshnessDescriptor ? (
+                  <span
+                    className={cn(
+                      "rounded border px-1.5 py-0.5",
+                      freshnessDescriptor.className
+                    )}
+                    title={sourceDate ? `Source date ${sourceDate}` : undefined}
+                  >
+                    {freshnessDescriptor.label}
+                  </span>
+                ) : sourceDate ? (
+                  <span>{sourceDate}</span>
+                ) : null}
+                {isPinned && (
+                  <span className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary">
+                    <Pin className="h-3 w-3" />
+                    Pinned
                   </span>
                 )}
+                {isCited && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onJumpToCitation(index)
+                    }}
+                    className="inline-flex items-center gap-1 text-primary hover:text-primaryStrong transition-colors"
+                    aria-label={`Jump to citation ${index} in answer`}
+                    title={`Jump to citation [${index}] in answer`}
+                  >
+                    <Quote className="w-3 h-3" />
+                    Cited
+                  </button>
+                )}
               </div>
+              {isCited && citationUsages.length > 0 ? (
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted sm:text-xs">
+                  <span>Used in answer:</span>
+                  {citationUsages.slice(0, 4).map((usage) => (
+                    <button
+                      key={`${index}-${usage.sentenceNumber}-${usage.occurrence}`}
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onJumpToCitation(index, usage.occurrence)
+                      }}
+                      className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-primary hover:bg-primary/15 transition-colors"
+                      aria-label={`Jump to citation ${index} in answer sentence ${usage.sentenceNumber}: ${usage.sentencePreview}`}
+                      title={`Sentence ${usage.sentenceNumber}: ${usage.sentencePreview}`}
+                    >
+                      S{usage.sentenceNumber}
+                    </button>
+                  ))}
+                  {citationUsages.length > 4 ? (
+                    <span className="text-text-muted">
+                      +{citationUsages.length - 4} more
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -195,7 +319,20 @@ export function SourceCard({
       {/* Content excerpt */}
       <div className="px-3 pb-2 sm:px-4 sm:pb-3">
         <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap sm:text-sm">
-          {excerpt}
+          {excerptSegments.map((segment, segmentIndex) =>
+            segment.highlight ? (
+              <mark
+                key={`segment-${segmentIndex}`}
+                className="rounded bg-primary/20 px-0.5 text-text"
+              >
+                {segment.text}
+              </mark>
+            ) : (
+              <React.Fragment key={`segment-${segmentIndex}`}>
+                {segment.text}
+              </React.Fragment>
+            )
+          )}
         </p>
         {canExpand && (
           <button
@@ -209,12 +346,29 @@ export function SourceCard({
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-muted/20 px-3 py-2 sm:px-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-bg-subtle px-3 py-2 sm:px-4">
         <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
+            onClick={() => onTogglePin(result, index)}
+            aria-pressed={isPinned}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors",
+              isPinned
+                ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
+                : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
+            )}
+            title={isPinned ? "Unpin source" : "Pin source"}
+            aria-label={isPinned ? `Unpin source ${index}` : `Pin source ${index}`}
+          >
+            <Pin className="w-3.5 h-3.5" />
+            {isPinned ? "Unpin" : "Pin"}
+          </button>
+
+          <button
+            type="button"
             onClick={() => onViewFull(result, index)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-text hover:bg-surface2 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="View the full source content"
             aria-label={`View full source ${index}`}
           >
@@ -228,7 +382,7 @@ export function SourceCard({
               onClick={() => onAskAbout(result, askTemplate)}
               title="Create a question about this source"
               aria-label={`Ask about ${title}`}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-text hover:bg-muted transition-colors"
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
             >
               <MessageSquare className="w-3.5 h-3.5" />
               Ask
@@ -250,7 +404,7 @@ export function SourceCard({
           <button
             type="button"
             onClick={handleCopyText}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-text hover:bg-surface2 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="Copy full source text"
           >
             {copiedState === "text" ? (
@@ -269,7 +423,7 @@ export function SourceCard({
           <button
             type="button"
             onClick={handleCopyCitation}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-muted text-text hover:bg-surface2 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="Copy citation"
           >
             {copiedState === "citation" ? "Copied citation" : "Copy citation"}
@@ -283,7 +437,7 @@ export function SourceCard({
           className={cn(
             "flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors",
             url
-              ? "text-text-muted hover:text-text hover:bg-muted"
+              ? "text-text-subtle hover:text-text hover:bg-hover"
               : "text-text-subtle opacity-60 cursor-not-allowed"
           )}
           title={url ? "Open original" : "No external URL available"}
@@ -304,7 +458,7 @@ export function SourceCard({
             "inline-flex items-center gap-1 rounded-md border px-2 py-1 transition-colors",
             feedbackThumb === "up"
               ? "border-primary bg-primary/10 text-primary"
-              : "border-border text-text-muted hover:text-text hover:bg-muted",
+              : "border-border text-text-subtle hover:text-text hover:bg-hover",
             feedbackSubmitting && "opacity-60 cursor-not-allowed"
           )}
         >
@@ -320,7 +474,7 @@ export function SourceCard({
             "inline-flex items-center gap-1 rounded-md border px-2 py-1 transition-colors",
             feedbackThumb === "down"
               ? "border-primary bg-primary/10 text-primary"
-              : "border-border text-text-muted hover:text-text hover:bg-muted",
+              : "border-border text-text-subtle hover:text-text hover:bg-hover",
             feedbackSubmitting && "opacity-60 cursor-not-allowed"
           )}
         >

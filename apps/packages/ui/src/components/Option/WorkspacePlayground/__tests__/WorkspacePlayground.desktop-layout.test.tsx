@@ -229,6 +229,10 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
     expect(
       main?.querySelector("[data-testid='workspace-chat-pane']")
     ).not.toBeNull()
+
+    const root = container.firstElementChild as HTMLElement | null
+    expect(root).not.toBeNull()
+    expect(root?.className).toContain("h-full")
   })
 
   it("renders hydration skeleton until workspace store hydration completes", () => {

@@ -74,10 +74,10 @@ function HistorySkeleton() {
       {[1, 2, 3].map((i) => (
         <div key={i} className="px-4">
           <div className="flex items-start gap-2 px-2 py-2">
-            <div className="w-4 h-4 bg-muted rounded flex-shrink-0" />
+            <div className="w-4 h-4 bg-bg-subtle rounded flex-shrink-0" />
             <div className="flex-1 space-y-2">
-              <div className="h-4 bg-muted rounded w-3/4" />
-              <div className="h-3 bg-muted rounded w-1/2" />
+              <div className="h-4 bg-bg-subtle rounded w-3/4" />
+              <div className="h-3 bg-bg-subtle rounded w-1/2" />
             </div>
           </div>
         </div>
@@ -205,7 +205,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
         </div>
         <button
           onClick={() => setHistorySidebarOpen(false)}
-          className="p-1 rounded hover:bg-muted transition-colors"
+          className="p-1 rounded hover:bg-hover transition-colors"
           title="Collapse sidebar"
         >
           <ChevronLeft className="w-4 h-4 text-text-muted" />
@@ -216,7 +216,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
       <div className="px-4 py-2 border-b border-border">
         <button
           onClick={() => setSettingsPanelOpen(true)}
-          className="flex items-center justify-between w-full text-xs hover:bg-muted rounded-md px-2 py-1.5 transition-colors"
+          className="flex items-center justify-between w-full text-xs hover:bg-hover rounded-md px-2 py-1.5 transition-colors"
         >
           <span className="text-text-muted">Preset:</span>
           <span className="font-medium capitalize">{preset}</span>
@@ -311,14 +311,14 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
       <div className="px-4 py-3 border-t border-border space-y-2">
         <button
           onClick={handleExportAll}
-          className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md hover:bg-muted transition-colors"
+          className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-text-subtle hover:bg-hover hover:text-text transition-colors"
         >
           <Download className="w-4 h-4 text-text-muted" />
           <span>Export All</span>
         </button>
         <button
           onClick={() => setSettingsPanelOpen(true)}
-          className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md hover:bg-muted transition-colors"
+          className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md text-text-subtle hover:bg-hover hover:text-text transition-colors"
         >
           <Settings className="w-4 h-4 text-text-muted" />
           <span>Advanced Settings</span>
@@ -356,7 +356,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
             />
             <aside
               className={cn(
-                "relative h-full w-[85vw] max-w-sm border-r border-border bg-muted/95 backdrop-blur",
+                "relative h-full w-[85vw] max-w-sm border-r border-border bg-surface/95 backdrop-blur",
                 className
               )}
             >
@@ -372,13 +372,13 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
   if (!historySidebarOpen) {
     return (
       <div
-        className={cn("flex flex-col items-center py-4 px-2 border-r border-border bg-muted/30", className)}
+        className={cn("flex flex-col items-center py-4 px-2 border-r border-border bg-surface", className)}
         data-testid="knowledge-history-desktop-collapsed"
       >
         <button
           onClick={handleExpandSidebar}
           className={cn(
-            "p-2 rounded-lg hover:bg-muted transition-colors",
+            "p-2 rounded-lg hover:bg-hover transition-colors",
             showExpandHint ? "animate-pulse" : ""
           )}
           title="Expand history sidebar"
@@ -396,7 +396,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
         <div className="mt-4 flex flex-col gap-2">
           <button
             onClick={handleExpandSidebar}
-            className="p-2 rounded-lg hover:bg-muted transition-colors"
+            className="p-2 rounded-lg hover:bg-hover transition-colors"
             title="Search history"
           >
             <History className="w-5 h-5 text-text-muted" />
@@ -404,7 +404,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
 
           <button
             onClick={() => setSettingsPanelOpen(true)}
-            className="p-2 rounded-lg hover:bg-muted transition-colors"
+            className="p-2 rounded-lg hover:bg-hover transition-colors"
             title="Settings"
           >
             <Settings className="w-5 h-5 text-text-muted" />
@@ -416,7 +416,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
 
   return (
     <div
-      className={cn("flex flex-col w-64 border-r border-border bg-muted/30", className)}
+      className={cn("flex flex-col w-64 border-r border-border bg-surface", className)}
       data-testid="knowledge-history-desktop-open"
     >
       {renderExpandedContent()}
@@ -477,7 +477,7 @@ function HistoryItem({
         aria-current={isActive ? "true" : undefined}
         className={cn(
           "flex items-start gap-2 w-full px-2 py-2 text-left rounded-md transition-colors",
-          isActive ? "bg-primary/10 border-l-2 border-primary" : "hover:bg-muted"
+          isActive ? "bg-primary/10 border-l-2 border-primary" : "hover:bg-hover"
         )}
       >
         <Search className="w-4 h-4 mt-0.5 text-text-muted flex-shrink-0" />
@@ -505,7 +505,7 @@ function HistoryItem({
         onClick={handlePinClick}
         aria-label={item.pinned ? "Unpin history item" : "Pin history item"}
         className={cn(
-          "absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 transition-all hover:bg-muted",
+          "absolute right-7 top-1/2 -translate-y-1/2 rounded p-1 transition-all hover:bg-hover",
           actionVisibilityClass
         )}
         title={item.pinned ? "Unpin" : "Pin"}

@@ -348,6 +348,31 @@ export function MediaIngestJobsPanel() {
                       {job.error_message && (
                         <p className="mt-1 text-[11px] text-danger">{job.error_message}</p>
                       )}
+                      {/* Retry button for failed/error/cancelled jobs */}
+                      {(() => {
+                        const s = String(job.status || '').toLowerCase().trim()
+                        if (s !== 'failed' && s !== 'error' && s !== 'cancelled') return null
+                        return (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (job.source && typeof window !== 'undefined') {
+                                window.dispatchEvent(
+                                  new CustomEvent('tldw:open-quick-ingest', {
+                                    detail: { source: job.source, sourceKind: job.source_kind }
+                                  })
+                                )
+                              }
+                            }}
+                            className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-danger/40 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 transition-colors"
+                            data-testid={`media-ingest-job-retry-${job.id}`}
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            {t('review:mediaPage.retryJob', { defaultValue: 'Retry' })}
+                          </button>
+                        )
+                      })()}
                     </li>
                   ))}
                 </ul>

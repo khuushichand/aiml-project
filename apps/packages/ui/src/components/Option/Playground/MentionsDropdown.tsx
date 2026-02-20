@@ -58,10 +58,12 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
 
       switch (e.key) {
         case "ArrowDown":
+          if (tabs.length === 0) return
           e.preventDefault()
           setSelectedIndex((prev) => (prev + 1) % tabs.length)
           break
         case "ArrowUp":
+          if (tabs.length === 0) return
           e.preventDefault()
           setSelectedIndex((prev) => (prev - 1 + tabs.length) % tabs.length)
           break
@@ -103,6 +105,13 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
     <div
       ref={dropdownRef}
       className="absolute z-50 bg-surface border border-border rounded-lg shadow-lg max-h-80 overflow-y-auto w-80"
+      role="listbox"
+      aria-label={
+        t(
+          "playground:mentions.dropdownLabel",
+          "Tab mention suggestions"
+        ) as string
+      }
       style={{
         top: position.top,
         left: position.left,
@@ -110,7 +119,7 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
     >
       <div className="p-2 border-b border-border flex items-center justify-between">
         <span className="text-sm font-medium text-text">
-          Select Tab
+          {t("playground:mentions.selectTab", "Select tab")}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -118,8 +127,8 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
             disabled={isRefreshing}
             type="button"
             className="text-text-subtle hover:text-text disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Refresh tabs"
-            aria-label="Refresh tabs">
+            title={t("playground:mentions.refreshTabs", "Refresh tabs") as string}
+            aria-label={t("playground:mentions.refreshTabs", "Refresh tabs") as string}>
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
           <button
@@ -170,15 +179,36 @@ export const MentionsDropdown: React.FC<MentionsDropdownProps> = ({
         ))}
       </div>
 
-      {tabs.length === 0 && mentionPosition?.query && (
+      {tabs.length === 0 && (
         <div className="p-4 text-center text-text-subtle text-sm">
-          <p>No tabs found matching "{mentionPosition.query}"</p>
+          {mentionPosition?.query ? (
+            <p>
+              {t(
+                "playground:mentions.noTabsMatching",
+                `No tabs found matching "{{query}}"`,
+                { query: mentionPosition.query } as any
+              )}
+            </p>
+          ) : (
+            <p>
+              {t(
+                "playground:mentions.noTabsHint",
+                "Type to search open tabs, or refresh to load recent tabs."
+              )}
+            </p>
+          )}
           <button
             onClick={handleRefreshTabs}
             disabled={isRefreshing}
-            title={isRefreshing ? "Refreshing..." : "Refresh tabs"}
+            title={
+              isRefreshing
+                ? (t("playground:mentions.refreshing", "Refreshing...") as string)
+                : (t("playground:mentions.refreshTabs", "Refresh tabs") as string)
+            }
             className="mt-2 text-primary hover:text-primaryStrong disabled:opacity-50">
-            {isRefreshing ? "Refreshing..." : "Refresh tabs"}
+            {isRefreshing
+              ? t("playground:mentions.refreshing", "Refreshing...")
+              : t("playground:mentions.refreshTabs", "Refresh tabs")}
           </button>
         </div>
       )}

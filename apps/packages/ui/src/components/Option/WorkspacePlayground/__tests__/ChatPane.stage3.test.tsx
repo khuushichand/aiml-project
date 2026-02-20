@@ -19,6 +19,7 @@ const mockOnSubmit = vi.fn()
 const mockRegenerateLastMessage = vi.fn()
 const mockDeleteMessage = vi.fn()
 const mockEditMessage = vi.fn()
+const mockGetMediaDetails = vi.fn()
 const mockSetRagMediaIds = vi.fn()
 const mockSetChatMode = vi.fn()
 const mockSetFileRetrievalEnabled = vi.fn()
@@ -195,6 +196,8 @@ vi.mock("../source-location-copy", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
+    getMediaDetails: (...args: unknown[]) =>
+      (mockGetMediaDetails as (...inner: unknown[]) => unknown)(...args),
     getChatLorebookDiagnostics: vi.fn(async () => ({
       chat_id: "chat",
       total_turns_with_diagnostics: 0,
@@ -233,16 +236,19 @@ vi.mock("antd", async () => {
     ),
     Switch: ({
       checked,
-      onChange
+      onChange,
+      ...rest
     }: {
       checked?: boolean
       onChange?: (checked: boolean) => void
+      [key: string]: unknown
     }) => (
       <input
         type="checkbox"
         role="checkbox"
         checked={Boolean(checked)}
         onChange={(event) => onChange?.(event.target.checked)}
+        {...(rest as any)}
       />
     )
   }
@@ -278,6 +284,11 @@ describe("ChatPane Stage 3 adaptive mode controls and settings", () => {
     messageOptionState.streaming = false
     messageOptionState.isProcessing = false
     mockOnSubmit.mockResolvedValue(undefined)
+    mockGetMediaDetails.mockResolvedValue({
+      content: {
+        text: "Fallback full source text"
+      }
+    })
 
     mockGetWorkspaceChatSession.mockReturnValue(null)
   })
@@ -366,9 +377,73 @@ describe("ChatPane Stage 3 adaptive mode controls and settings", () => {
       expect.objectContaining({ min_score: 0.55 })
     )
 
-    fireEvent.click(screen.getByRole("checkbox"))
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Enable reranking" })
+    )
     expect(mockSetRagAdvancedOptions).toHaveBeenCalledWith(
       expect.objectContaining({ enable_reranking: true })
+    )
+  })
+
+  it("injects complete selected source contents when enabled", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-doc-1", "source-doc-2"]
+    workspaceStoreState.getSelectedSources = () => [
+      {
+        id: "source-doc-1",
+        mediaId: 101,
+        title: "Primary Paper",
+        type: "pdf"
+      },
+      {
+        id: "source-doc-2",
+        mediaId: 102,
+        title: "Appendix Notes",
+        type: "document"
+      }
+    ]
+    workspaceStoreState.getSelectedMediaIds = () => [101, 102]
+
+    mockGetMediaDetails.mockImplementation(async (mediaId: number) => {
+      if (mediaId === 101) {
+        return {
+          content: {
+            text: "Primary paper full text block."
+          }
+        }
+      }
+      return {
+        content: {
+          text: "Appendix reference text block."
+        }
+      }
+    })
+
+    render(<ChatPane />)
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Include full source contents" })
+    )
+
+    const textarea = screen.getByPlaceholderText("Ask about your sources...")
+    fireEvent.change(textarea, { target: { value: "What's the synopsis?" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("Source 101: Primary Paper")
+        })
+      )
+    })
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Primary paper full text block.")
+      })
+    )
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("User question: What's the synopsis?")
+      })
     )
   })
 

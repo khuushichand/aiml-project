@@ -3,11 +3,18 @@ import { createImageDataUrl, validateAndCreateImageDataUrl } from "../image-util
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAE/wH+J6m3XQAAAABJRU5ErkJggg=="
+const WEBP_HEADER_BASE64 = "UklGRhAAAABXRUJQVlA4IAAAAAA="
 
 describe("image utils", () => {
   it("builds a data URL from valid base64 image content", () => {
     expect(createImageDataUrl(ONE_PIXEL_PNG_BASE64)).toBe(
       `data:image/png;base64,${ONE_PIXEL_PNG_BASE64}`
+    )
+  })
+
+  it("builds a data URL from webp base64 content", () => {
+    expect(createImageDataUrl(WEBP_HEADER_BASE64)).toBe(
+      `data:image/webp;base64,${WEBP_HEADER_BASE64}`
     )
   })
 

@@ -89,12 +89,17 @@ type SourceAnnotation = {
 interface SourcesPaneProps {
   /** Callback to hide/collapse the pane */
   onHide?: () => void
+  /** Rollout gate for status/guardrails source handling. */
+  statusGuardrailsEnabled?: boolean
 }
 
 /**
  * SourcesPane - Left pane for managing research sources
  */
-export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
+export const SourcesPane: React.FC<SourcesPaneProps> = ({
+  onHide,
+  statusGuardrailsEnabled = true
+}) => {
   const { t } = useTranslation(["playground", "common"])
   const [messageApi, messageContextHolder] = message.useMessage()
 
@@ -270,20 +275,107 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
   const handleDeleteAnnotation = React.useCallback(
     (annotationId: string) => {
       if (!previewSourceId) return
-      setSourceAnnotations((previous) => {
-        const existing = previous[previewSourceId] || []
-        return {
-          ...previous,
-          [previewSourceId]: existing.filter(
-            (annotation) => annotation.id !== annotationId
-          )
+      const sourceId = previewSourceId
+      const existing = sourceAnnotations[sourceId] || []
+      const annotationIndex = existing.findIndex(
+        (annotation) => annotation.id === annotationId
+      )
+      if (annotationIndex < 0) return
+      const removedAnnotation = existing[annotationIndex]
+      const wasEditingRemovedAnnotation = editingAnnotationId === annotationId
+
+      const undoHandle = scheduleWorkspaceUndoAction({
+        apply: () => {
+          setSourceAnnotations((previous) => {
+            const current = previous[sourceId] || []
+            return {
+              ...previous,
+              [sourceId]: current.filter(
+                (annotation) => annotation.id !== annotationId
+              )
+            }
+          })
+          if (wasEditingRemovedAnnotation) {
+            resetAnnotationEditor()
+          }
+        },
+        undo: () => {
+          setSourceAnnotations((previous) => {
+            const current = previous[sourceId] || []
+            if (current.some((annotation) => annotation.id === annotationId)) {
+              return previous
+            }
+            const restored = [...current]
+            const insertionIndex = Math.max(
+              0,
+              Math.min(annotationIndex, restored.length)
+            )
+            restored.splice(insertionIndex, 0, removedAnnotation)
+            return {
+              ...previous,
+              [sourceId]: restored
+            }
+          })
+          if (wasEditingRemovedAnnotation) {
+            setAnnotationQuoteDraft(removedAnnotation.quote)
+            setAnnotationNoteDraft(removedAnnotation.note)
+            setEditingAnnotationId(removedAnnotation.id)
+          }
         }
       })
-      if (editingAnnotationId === annotationId) {
-        resetAnnotationEditor()
+
+      const undoMessageKey = `workspace-source-annotation-undo-${undoHandle.id}`
+      const maybeOpen = (
+        messageApi as { open?: (config: unknown) => void }
+      ).open
+      const messageConfig = {
+        key: undoMessageKey,
+        type: "warning",
+        duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+        content: t(
+          "playground:sources.annotationRemoved",
+          "Annotation removed."
+        ),
+        btn: (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => {
+              if (undoWorkspaceAction(undoHandle.id)) {
+                messageApi.success(
+                  t(
+                    "playground:sources.annotationRestored",
+                    "Annotation restored"
+                  )
+                )
+              }
+              messageApi.destroy(undoMessageKey)
+            }}
+          >
+            {t("common:undo", "Undo")}
+          </Button>
+        )
+      }
+
+      if (typeof maybeOpen === "function") {
+        maybeOpen(messageConfig)
+      } else {
+        const maybeWarning = (
+          messageApi as { warning?: (content: string) => void }
+        ).warning
+        if (typeof maybeWarning === "function") {
+          maybeWarning(t("playground:sources.annotationRemoved", "Annotation removed."))
+        }
       }
     },
-    [editingAnnotationId, previewSourceId, resetAnnotationEditor]
+    [
+      editingAnnotationId,
+      messageApi,
+      previewSourceId,
+      resetAnnotationEditor,
+      sourceAnnotations,
+      t
+    ]
   )
 
   const removeSourceWithUndo = React.useCallback(
@@ -430,10 +522,16 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
     const Icon = SOURCE_TYPE_ICONS[source.type] || File
     const isSelected = selectedSourceIds.includes(source.id)
     const isHighlighted = highlightedSourceId === source.id
-    const sourceStatus = source.status || "ready"
+    const sourceStatus = statusGuardrailsEnabled
+      ? source.status || "ready"
+      : "ready"
     const isReady = sourceStatus === "ready"
     const isProcessing = sourceStatus === "processing"
     const isError = sourceStatus === "error"
+    const processingStatusText =
+      typeof source.statusMessage === "string" && source.statusMessage.trim().length > 0
+        ? source.statusMessage
+        : t("playground:sources.statusProcessing", "Processing")
     const metadataParts: string[] = []
     const fileSizeLabel = formatFileSize(source.fileSize)
     const durationLabel = formatDuration(source.duration)
@@ -528,11 +626,23 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
         </div>
         <div className="flex min-w-0 flex-1 items-start gap-2">
           <div
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${
+            className={`relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
               isSelected ? "bg-primary/20 text-primary" : "bg-surface2 text-text-muted"
             }`}
           >
             <Icon className="h-4 w-4" />
+            {source.thumbnailUrl && (
+              <img
+                src={source.thumbnailUrl}
+                alt=""
+                aria-hidden="true"
+                data-testid={`source-thumbnail-${source.id}`}
+                className="absolute inset-0 h-full w-full object-cover"
+                onError={(event) => {
+                  event.currentTarget.remove()
+                }}
+              />
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-text">
@@ -547,13 +657,16 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
                 <span className="truncate">{metadataPreview}</span>
               </p>
             </Tooltip>
-            {isProcessing && (
-              <p className="mt-0.5 flex items-center gap-1 text-[11px] text-primary">
+            {statusGuardrailsEnabled && isProcessing && (
+              <p
+                className="mt-0.5 flex items-center gap-1 text-[11px] text-primary"
+                title={processingStatusText}
+              >
                 <Loader2 className="h-3 w-3 animate-spin" />
-                {t("playground:sources.statusProcessing", "Processing")}
+                {processingStatusText}
               </p>
             )}
-            {isError && (
+            {statusGuardrailsEnabled && isError && (
               <p
                 className="mt-0.5 flex items-center gap-1 text-[11px] text-error"
                 title={source.statusMessage || undefined}
@@ -826,7 +939,10 @@ export const SourcesPane: React.FC<SourcesPaneProps> = ({ onHide }) => {
             <div className="rounded border border-border bg-surface2/40 p-3">
               <p className="text-sm font-semibold text-text">{previewSource.title}</p>
               <p className="text-xs capitalize text-text-muted">
-                {previewSource.type} • {previewSource.status || "ready"}
+                {previewSource.type} •{" "}
+                {statusGuardrailsEnabled
+                  ? previewSource.status || "ready"
+                  : "ready"}
               </p>
               {previewSource.url && (
                 <a

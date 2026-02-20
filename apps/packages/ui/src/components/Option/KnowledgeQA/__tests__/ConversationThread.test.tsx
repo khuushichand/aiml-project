@@ -245,4 +245,45 @@ describe("ConversationThread", () => {
     expect(screen.getAllByText("How did Q1 perform?").length).toBeGreaterThan(0)
     expect(screen.getAllByText("How did Q4 perform?").length).toBeGreaterThan(0)
   })
+
+  it("provides one-click compare with previous turn in current thread", async () => {
+    state.messages = [
+      {
+        id: "u1",
+        role: "user",
+        content: "How did Q1 perform?",
+        timestamp: "2026-02-18T08:00:00.000Z",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Q1 increased by 12% [1].",
+        timestamp: "2026-02-18T08:00:03.000Z",
+      },
+      {
+        id: "u2",
+        role: "user",
+        content: "How did Q2 perform?",
+        timestamp: "2026-02-18T08:01:00.000Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Q2 increased by 9% [2].",
+        timestamp: "2026-02-18T08:01:03.000Z",
+      },
+    ]
+
+    render(<ConversationThread />)
+
+    await userEvent.click(screen.getByRole("button", { name: "Compare with previous" }))
+
+    expect(
+      screen.getByRole("region", { name: "Side-by-side query comparison" })
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText("Left thread")).toHaveValue("thread-current")
+    expect(screen.getByLabelText("Right thread")).toHaveValue("thread-current")
+    expect(screen.getByLabelText("Left turn")).toHaveValue("u1")
+    expect(screen.getByLabelText("Right turn")).toHaveValue("u2")
+  })
 })

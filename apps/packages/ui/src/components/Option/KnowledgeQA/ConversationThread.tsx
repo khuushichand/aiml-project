@@ -410,7 +410,22 @@ export function ConversationThread({ className }: ConversationThreadProps) {
     [branchFromTurn]
   )
 
+  const handleCompareWithPrevious = useCallback(() => {
+    if (!currentThreadId) return
+    if (!latestTurn) return
+    if (historicalTurns.length === 0) return
+
+    const previousTurn = historicalTurns[historicalTurns.length - 1]
+    setLeftThreadId(currentThreadId)
+    setRightThreadId(currentThreadId)
+    setLeftTurnId(previousTurn.id)
+    setRightTurnId(latestTurn.id)
+    setIsComparisonOpen(true)
+  }, [currentThreadId, historicalTurns, latestTurn])
+
   const hasComparisonWorkspace = threadOptions.length > 0
+  const canCompareWithPrevious =
+    Boolean(currentThreadId) && Boolean(latestTurn) && historicalTurns.length > 0
   if (!hasComparisonWorkspace && historicalTurns.length === 0) {
     return null
   }
@@ -452,7 +467,7 @@ export function ConversationThread({ className }: ConversationThreadProps) {
                 <button
                   type="button"
                   onClick={() => handleReuseQuestion(turn.question)}
-                  className="rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted transition-colors"
+                  className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
                 >
                   Reuse Question
                 </button>
@@ -461,7 +476,7 @@ export function ConversationThread({ className }: ConversationThreadProps) {
                     type="button"
                     onClick={() => void handleStartBranch(turn.id)}
                     disabled={branchingTurnId === turn.id}
-                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <GitBranch className="w-3 h-3" />
                     {branchingTurnId === turn.id ? "Creating branch..." : "Start Branch"}
@@ -488,13 +503,24 @@ export function ConversationThread({ className }: ConversationThreadProps) {
         <div className="border-t border-border px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Comparison workspace</h3>
-            <button
-              type="button"
-              onClick={() => setIsComparisonOpen((previous) => !previous)}
-              className="rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted transition-colors"
-            >
-              {isComparisonOpen ? "Hide comparison" : "Compare turns"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {canCompareWithPrevious ? (
+                <button
+                  type="button"
+                  onClick={handleCompareWithPrevious}
+                  className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                >
+                  Compare with previous
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setIsComparisonOpen((previous) => !previous)}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
+              >
+                {isComparisonOpen ? "Hide comparison" : "Compare turns"}
+              </button>
+            </div>
           </div>
 
           {isComparisonOpen && (

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FollowUpInput } from "../FollowUpInput"
 
@@ -37,9 +37,9 @@ describe("FollowUpInput accessibility", () => {
   it("provides an explicit accessible name for the follow-up input", () => {
     render(<FollowUpInput />)
 
-    expect(
-      screen.getByRole("textbox", { name: "Ask a follow-up question" })
-    ).toBeInTheDocument()
+    const input = screen.getByRole("textbox", { name: "Ask a follow-up question" })
+    expect(input).toBeInTheDocument()
+    expect(input).toHaveAttribute("maxlength", "20000")
     expect(
       screen.getByText(
         'Follow-up questions maintain context. Click "New Topic" to start fresh.'
@@ -80,6 +80,21 @@ describe("FollowUpInput accessibility", () => {
     expect(screen.getByRole("button", { name: "Start new topic" })).toBeInTheDocument()
     expect(
       screen.getByRole("textbox", { name: "Ask a follow-up question" })
+    ).toBeInTheDocument()
+  })
+
+  it("shows character-limit feedback near the max and warns at the cap", () => {
+    render(<FollowUpInput />)
+
+    const input = screen.getByRole("textbox", { name: "Ask a follow-up question" })
+
+    fireEvent.change(input, { target: { value: "x".repeat(17000) } })
+    expect(screen.getByText("17000/20000")).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: "x".repeat(21000) } })
+    expect(screen.getByText(/20000\/20000/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Max length reached\. Extra text will not be included\./i)
     ).toBeInTheDocument()
   })
 })

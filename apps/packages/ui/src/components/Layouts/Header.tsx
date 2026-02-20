@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { isMac } from "@/hooks/keyboard/useKeyboardShortcuts"
 import { getTitleById, updateHistory } from "@/db"
 import { useMessageOption } from "~/hooks/useMessageOption"
@@ -9,6 +9,8 @@ import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settin
 import { ChatHeader } from "./ChatHeader"
 import { TtsClipsDrawer } from "@/components/Sidepanel/Chat/TtsClipsDrawer"
 import { useDarkMode } from "@/hooks/useDarkmode"
+import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import type { Character } from "@/types/character"
 
 type Props = {
   onToggleSidebar?: () => void
@@ -30,11 +32,21 @@ export const Header: React.FC<Props> = ({
     HEADER_SHORTCUTS_EXPANDED_SETTING
   )
   const { mode: themeMode, toggleDarkMode } = useDarkMode()
-  const { clearChat, historyId, temporaryChat } = useMessageOption()
+  const { clearChat, historyId, temporaryChat, setTemporaryChat } =
+    useMessageOption()
+  const [selectedCharacter, setSelectedCharacter] = useSelectedCharacter<Character | null>(
+    null
+  )
   const navigate = useNavigate()
+  const location = useLocation()
   const [chatTitle, setChatTitle] = React.useState("")
   const [isEditingTitle, setIsEditingTitle] = React.useState(false)
   const [ttsClipsOpen, setTtsClipsOpen] = React.useState(false)
+  const normalizedPath =
+    location.pathname.length > 1 && location.pathname.endsWith("/")
+      ? location.pathname.slice(0, -1)
+      : location.pathname
+  const isChatRoute = normalizedPath === "/chat"
 
   React.useEffect(() => {
     ;(async () => {
@@ -89,6 +101,26 @@ export const Header: React.FC<Props> = ({
     [saveTitle]
   )
 
+  const startSavedChat = React.useCallback(() => {
+    setTemporaryChat(false)
+    void setSelectedCharacter(null)
+    clearChat()
+  }, [clearChat, setSelectedCharacter, setTemporaryChat])
+
+  const startTemporaryChat = React.useCallback(() => {
+    setTemporaryChat(true)
+    void setSelectedCharacter(null)
+    clearChat()
+  }, [clearChat, setSelectedCharacter, setTemporaryChat])
+
+  const startCharacterChat = React.useCallback(() => {
+    setTemporaryChat(false)
+    clearChat()
+    if (!selectedCharacter && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("tldw:open-actor-settings"))
+    }
+  }, [clearChat, selectedCharacter, setTemporaryChat])
+
   return (
     <>
       <ChatHeader
@@ -108,6 +140,12 @@ export const Header: React.FC<Props> = ({
         onToggleTheme={toggleDarkMode}
         themeMode={themeMode}
         onClearChat={clearChat}
+        onStartSavedChat={startSavedChat}
+        onStartTemporaryChat={startTemporaryChat}
+        onStartCharacterChat={startCharacterChat}
+        activeCharacterName={selectedCharacter?.name || null}
+        showChatTitle={isChatRoute}
+        showSessionModeBadge={isChatRoute}
         shortcutsExpanded={headerShortcutsExpanded}
         onToggleShortcuts={toggleHeaderShortcuts}
         commandKeyLabel={cmdKey}

@@ -44,6 +44,10 @@ const createProps = (overrides: Partial<React.ComponentProps<typeof ChatHeader>>
   onToggleTheme: vi.fn(),
   themeMode: "dark" as const,
   onClearChat: vi.fn(),
+  onStartSavedChat: vi.fn(),
+  onStartTemporaryChat: vi.fn(),
+  onStartCharacterChat: vi.fn(),
+  activeCharacterName: null,
   shortcutsExpanded: false,
   onToggleShortcuts: vi.fn(),
   commandKeyLabel: "Ctrl+",
@@ -92,7 +96,9 @@ describe("ChatHeader shortcut toggle", () => {
     const controls = [
       screen.getByRole("button", { name: "Collapse sidebar" }),
       screen.getByRole("button", { name: "Show shortcuts" }),
-      screen.getByRole("button", { name: "New chat" }),
+      screen.getByRole("button", { name: "New saved chat" }),
+      screen.getByRole("button", { name: "Temporary chat (not saved)" }),
+      screen.getByRole("button", { name: "Character chat" }),
       screen.getByRole("button", { name: "Open settings" }),
       screen.getByRole("button", { name: "Switch to light theme" }),
       screen.getByRole("button", { name: "Show keyboard shortcuts" })
@@ -116,5 +122,53 @@ describe("ChatHeader shortcut toggle", () => {
     fireEvent.click(toggleButton)
 
     expect(props.onToggleTheme).toHaveBeenCalledTimes(1)
+  })
+
+  it("routes chat mode actions to the dedicated callbacks", () => {
+    const props = createProps()
+    render(<ChatHeader {...props} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "New saved chat" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Temporary chat (not saved)" })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Character chat" }))
+
+    expect(props.onStartSavedChat).toHaveBeenCalledTimes(1)
+    expect(props.onStartTemporaryChat).toHaveBeenCalledTimes(1)
+    expect(props.onStartCharacterChat).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows mode badges for temporary and active character", () => {
+    const props = createProps({
+      temporaryChat: true,
+      activeCharacterName: "Rin"
+    })
+    render(<ChatHeader {...props} />)
+
+    expect(screen.getByText("Temporary")).toBeInTheDocument()
+    expect(screen.getByText("Character: Rin")).toBeInTheDocument()
+  })
+
+  it("hides session mode badge when not on chat route", () => {
+    const props = createProps({
+      showSessionModeBadge: false,
+      temporaryChat: false,
+      activeCharacterName: "Rin"
+    })
+    render(<ChatHeader {...props} />)
+
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument()
+    expect(screen.queryByText("Character: Rin")).not.toBeInTheDocument()
+  })
+
+  it("hides chat title when chat title display is disabled", () => {
+    const props = createProps({
+      showChatTitle: false,
+      chatTitle: "Chat title"
+    })
+    render(<ChatHeader {...props} />)
+
+    expect(screen.queryByText("Chat title")).not.toBeInTheDocument()
   })
 })

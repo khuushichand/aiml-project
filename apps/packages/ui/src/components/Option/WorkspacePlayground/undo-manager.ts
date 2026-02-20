@@ -1,4 +1,6 @@
-export const WORKSPACE_UNDO_WINDOW_MS = 5000
+import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
+
+export const WORKSPACE_UNDO_WINDOW_MS = 10000
 
 export interface WorkspaceUndoActionHandle {
   id: string
@@ -71,6 +73,9 @@ export const undoWorkspaceAction = (id: string): boolean => {
   const action = clearPendingWorkspaceUndoAction(id)
   if (!action) return false
   action.undo()
+  void trackWorkspacePlaygroundTelemetry({
+    type: "undo_triggered"
+  })
   return true
 }
 

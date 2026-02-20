@@ -139,6 +139,7 @@ export function CharacterPreviewPopup({
           system_prompt={character.system_prompt}
           greeting={character.greeting || character.first_message}
           tags={character.tags}
+          expandedMetadata
         />
 
         <div className="rounded-md border border-border bg-surface p-3">

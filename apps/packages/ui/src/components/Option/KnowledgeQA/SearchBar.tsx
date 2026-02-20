@@ -22,7 +22,7 @@ const EXAMPLE_QUERIES = [
   "When was topic X first mentioned in my sources?",
   "What are the citations for claim Y?",
 ]
-const MAX_QUERY_LENGTH = 2000
+const MAX_QUERY_LENGTH = 20000
 const SUGGESTION_SOURCE_LABELS: Record<QuerySuggestion["source"], string> = {
   history: "History",
   source_title: "Source",
@@ -49,6 +49,7 @@ export function SearchBar({
     clearResults,
     results,
     answer,
+    queryWarning,
     searchHistory,
     isLocalOnlyThread,
     settings,
@@ -61,7 +62,6 @@ export function SearchBar({
   const [cycleCount, setCycleCount] = useState(0)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1)
-  const MAX_CYCLES = 3 // Stop rotating after 3 full cycles
   const hasResults = results.length > 0 || Boolean(answer)
   const showHintEmphasis = !query && !isSearching && cycleCount === 0
   const showCharacterCount = query.length >= Math.floor(MAX_QUERY_LENGTH * 0.8)
@@ -96,10 +96,9 @@ export function SearchBar({
     shouldShowSuggestionPrototype(query) &&
     suggestions.length > 0
 
-  // Rotate placeholder examples - slower interval, pause on focus, stop after cycles
+  // Rotate placeholder examples continuously while idle; pause on focus or when typing.
   useEffect(() => {
-    // Stop rotation if focused, has query, or exceeded max cycles
-    if (isFocused || query || cycleCount >= MAX_CYCLES) return
+    if (isFocused || query) return
 
     const interval = setInterval(() => {
       setPlaceholderIndex((prev) => {
@@ -113,7 +112,7 @@ export function SearchBar({
     }, 8000) // 8 seconds instead of 4 for better readability
 
     return () => clearInterval(interval)
-  }, [isFocused, query, cycleCount])
+  }, [isFocused, query])
 
   // Handle keyboard shortcuts
   useEffect(() => {
@@ -300,7 +299,7 @@ export function SearchBar({
                   "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors",
                   activeSuggestionIndex === index
                     ? "bg-primary/10 text-primary"
-                    : "hover:bg-muted"
+                    : "hover:bg-hover"
                 )}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => applySuggestion(suggestion)}
@@ -346,12 +345,22 @@ export function SearchBar({
 
       {isSearching && (
         <div
-          className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted"
+          className="mt-2 h-1 w-full overflow-hidden rounded-full bg-bg-subtle"
           data-testid="knowledge-search-loading-indicator"
         >
           <div className="h-full w-1/3 rounded-full bg-primary animate-pulse" />
         </div>
       )}
+
+      {queryWarning ? (
+        <p
+          role="status"
+          aria-live="polite"
+          className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
+        >
+          {queryWarning}
+        </p>
+      ) : null}
 
       {/* Keyboard hint + quick controls */}
       <div
@@ -361,8 +370,8 @@ export function SearchBar({
         )}
       >
         <span className="truncate">
-          Press <kbd className="px-1.5 py-0.5 bg-muted text-text rounded font-mono">/</kbd> to focus,{" "}
-          <kbd className="px-1.5 py-0.5 bg-muted text-text rounded font-mono">Cmd+K</kbd> for new search
+          Press <kbd className="px-1.5 py-0.5 bg-bg-subtle text-text rounded font-mono">/</kbd> to focus,{" "}
+          <kbd className="px-1.5 py-0.5 bg-bg-subtle text-text rounded font-mono">Cmd+K</kbd> for new search
         </span>
         <div className="flex items-center gap-2">
           {isLocalOnlyThread && (
@@ -378,7 +387,7 @@ export function SearchBar({
             <button
               type="button"
               onClick={handleNewSearch}
-              className="px-2 py-1 rounded-md border border-border hover:bg-muted transition-colors whitespace-nowrap"
+              className="px-2 py-1 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors whitespace-nowrap"
               title="Clear current results and start a new search"
             >
               New search
@@ -405,7 +414,7 @@ export function SearchBar({
                 "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
                 settings.enable_web_fallback
                   ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border hover:bg-muted"
+                  : "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
               )}
               aria-pressed={settings.enable_web_fallback}
               title="Falls back to web search when local source relevance is below threshold (configurable in settings)."

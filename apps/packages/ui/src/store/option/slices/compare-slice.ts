@@ -15,6 +15,8 @@ export const createCompareSlice: StoreSlice<
     | "setCompareParentForHistory"
     | "compareCanonicalByCluster"
     | "setCompareCanonicalForCluster"
+    | "compareContinuationModeByCluster"
+    | "setCompareContinuationModeForCluster"
     | "compareSplitChats"
     | "setCompareSplitChat"
   >
@@ -54,6 +56,14 @@ export const createCompareSlice: StoreSlice<
       compareCanonicalByCluster: {
         ...state.compareCanonicalByCluster,
         [clusterId]: messageId
+      }
+    })),
+  compareContinuationModeByCluster: {},
+  setCompareContinuationModeForCluster: (clusterId, mode) =>
+    set((state) => ({
+      compareContinuationModeByCluster: {
+        ...state.compareContinuationModeByCluster,
+        [clusterId]: mode
       }
     })),
   compareSplitChats: {},

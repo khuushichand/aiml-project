@@ -44,6 +44,15 @@ import {
 const { TextArea } = Input
 const { Dragger } = Upload
 const EXISTING_MEDIA_CACHE_TTL_MS = 60_000
+const ADD_SOURCE_TAB_USAGE_STORAGE_KEY =
+  "tldw:workspace-playground:add-source-tab-usage:v1"
+const DEFAULT_ADD_SOURCE_TAB_ORDER: AddSourceTab[] = [
+  "upload",
+  "existing",
+  "url",
+  "paste",
+  "search"
+]
 
 let existingMediaCache: { items: any[]; totalCount: number; cachedAt: number } | null =
   null
@@ -78,6 +87,77 @@ type UploadProgressEntry = {
   totalBytes: number
   status: UploadProgressStatus
   message?: string
+}
+
+type AddSourceTabUsage = Record<AddSourceTab, number>
+
+const buildDefaultAddSourceTabUsage = (): AddSourceTabUsage => ({
+  upload: 0,
+  existing: 0,
+  url: 0,
+  paste: 0,
+  search: 0
+})
+
+const normalizeAddSourceTabUsage = (raw: unknown): AddSourceTabUsage => {
+  const next = buildDefaultAddSourceTabUsage()
+  if (!raw || typeof raw !== "object") {
+    return next
+  }
+
+  for (const tab of DEFAULT_ADD_SOURCE_TAB_ORDER) {
+    const value = (raw as Record<string, unknown>)[tab]
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      next[tab] = Math.trunc(value)
+    }
+  }
+
+  return next
+}
+
+const readAddSourceTabUsage = (): AddSourceTabUsage => {
+  if (typeof window === "undefined") {
+    return buildDefaultAddSourceTabUsage()
+  }
+  try {
+    const raw = window.localStorage.getItem(ADD_SOURCE_TAB_USAGE_STORAGE_KEY)
+    if (!raw) return buildDefaultAddSourceTabUsage()
+    return normalizeAddSourceTabUsage(JSON.parse(raw))
+  } catch {
+    return buildDefaultAddSourceTabUsage()
+  }
+}
+
+const persistAddSourceTabUsage = (usage: AddSourceTabUsage) => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(
+      ADD_SOURCE_TAB_USAGE_STORAGE_KEY,
+      JSON.stringify(usage)
+    )
+  } catch {
+    // Ignore storage write errors.
+  }
+}
+
+const isAddSourceTab = (value: string): value is AddSourceTab =>
+  DEFAULT_ADD_SOURCE_TAB_ORDER.includes(value as AddSourceTab)
+
+const orderAddSourceTabs = (usage: AddSourceTabUsage): AddSourceTab[] => {
+  const secondaryTabs = DEFAULT_ADD_SOURCE_TAB_ORDER.filter(
+    (tab) => tab !== "upload"
+  )
+
+  secondaryTabs.sort((left, right) => {
+    const usageDelta = usage[right] - usage[left]
+    if (usageDelta !== 0) return usageDelta
+    return (
+      DEFAULT_ADD_SOURCE_TAB_ORDER.indexOf(left) -
+      DEFAULT_ADD_SOURCE_TAB_ORDER.indexOf(right)
+    )
+  })
+
+  return ["upload", ...secondaryTabs]
 }
 
 const toMediaId = (value: unknown): number | null => {
@@ -1467,6 +1547,18 @@ export const AddSourceModal: React.FC = () => {
   const setError = useWorkspaceStore((s) => s.setAddSourceError)
   const addSource = useWorkspaceStore((s) => s.addSource)
   const workspaceTag = useWorkspaceStore((s) => s.workspaceTag)
+  const [tabUsage, setTabUsage] = React.useState<AddSourceTabUsage>(() =>
+    readAddSourceTabUsage()
+  )
+
+  React.useEffect(() => {
+    if (!isOpen) return
+    setTabUsage(readAddSourceTabUsage())
+  }, [isOpen])
+
+  React.useEffect(() => {
+    persistAddSourceTabUsage(tabUsage)
+  }, [tabUsage])
 
   const handleAddSources: AddSourceHandler = async (
     sources,
@@ -1578,6 +1670,27 @@ export const AddSourceModal: React.FC = () => {
     }
   ]
 
+  const orderedTabItems = React.useMemo(() => {
+    const itemMap = new Map<AddSourceTab, (typeof tabItems)[number]>(
+      tabItems.map((item) => [item.key as AddSourceTab, item])
+    )
+    return orderAddSourceTabs(tabUsage)
+      .map((tab) => itemMap.get(tab))
+      .filter((item): item is (typeof tabItems)[number] => Boolean(item))
+  }, [tabItems, tabUsage])
+
+  const handleTabChange = React.useCallback(
+    (key: string) => {
+      if (!isAddSourceTab(key)) return
+      setTab(key)
+      setTabUsage((previous) => ({
+        ...previous,
+        [key]: previous[key] + 1
+      }))
+    },
+    [setTab]
+  )
+
   return (
     <Modal
       open={isOpen}
@@ -1610,8 +1723,8 @@ export const AddSourceModal: React.FC = () => {
         )}
         <Tabs
           activeKey={activeTab}
-          onChange={(key) => setTab(key as AddSourceTab)}
-          items={tabItems}
+          onChange={handleTabChange}
+          items={orderedTabItems}
         />
       </Spin>
     </Modal>

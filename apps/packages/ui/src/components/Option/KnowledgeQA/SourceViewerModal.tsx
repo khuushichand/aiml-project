@@ -77,7 +77,7 @@ export function SourceViewerModal({
               <button
                 type="button"
                 onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-muted hover:bg-muted hover:text-text transition-colors"
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 Open original
@@ -86,7 +86,7 @@ export function SourceViewerModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md p-1.5 text-text-muted hover:bg-muted hover:text-text transition-colors"
+              className="rounded-md p-1.5 text-text-muted hover:bg-hover hover:text-text transition-colors"
               aria-label="Close source preview"
             >
               <X className="w-4 h-4" />

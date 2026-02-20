@@ -267,6 +267,17 @@ const resolveStorageKey = (key: unknown): string => {
   return ""
 }
 
+const openAdvancedFilters = async (
+  user: ReturnType<typeof userEvent.setup>
+) => {
+  const advancedFiltersToggle = screen.queryByRole("button", {
+    name: /Advanced filters/i
+  })
+  if (advancedFiltersToggle) {
+    await user.click(advancedFiltersToggle)
+  }
+}
+
 describe("CharactersManager first-use onboarding", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -367,19 +378,19 @@ describe("CharactersManager first-use onboarding", () => {
     ).toBe("Chat as Persona 2")
   })
 
-  it("requests lightweight character list payload by default", async () => {
+  it("requests character list payloads with image data for avatar rendering", async () => {
     render(<CharactersManager />)
 
     const listQuery = getListCharactersQueryOptions()
     expect(listQuery.queryKey[1]).toMatchObject({
-      include_image_base64: false
+      include_image_base64: true
     })
 
     await listQuery.queryFn()
 
     expect(tldwClientMock.listCharactersPage).toHaveBeenCalledWith(
       expect.objectContaining({
-        include_image_base64: false
+        include_image_base64: true
       })
     )
     expect(tldwClientMock.listAllCharacters).not.toHaveBeenCalled()
@@ -388,6 +399,7 @@ describe("CharactersManager first-use onboarding", () => {
   it("serializes created/updated date filters into query params and clears them", async () => {
     const user = userEvent.setup()
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     fireEvent.change(
       screen.getByLabelText("Filter characters created on or after"),
@@ -454,6 +466,7 @@ describe("CharactersManager first-use onboarding", () => {
   })
 
   it("forces server query mode for date filters when rollout flag is disabled", async () => {
+    const user = userEvent.setup()
     useStorageMock.mockImplementation((key: unknown, defaultValue: unknown) => {
       if (resolveStorageKey(key) === "ff_characters_server_query") {
         return [false, vi.fn(), { isLoading: false }]
@@ -462,6 +475,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     fireEvent.change(
       screen.getByLabelText("Filter characters created on or after"),
@@ -549,7 +563,7 @@ describe("CharactersManager first-use onboarding", () => {
       expect.objectContaining({
         limit: 10,
         offset: 0,
-        include_image_base64: false
+        include_image_base64: true
       })
     )
     expect(response.items).toEqual([
@@ -580,7 +594,7 @@ describe("CharactersManager first-use onboarding", () => {
       expect.objectContaining({
         limit: 10,
         offset: 0,
-        include_image_base64: false
+        include_image_base64: true
       })
     )
     expect(response.items).toEqual([
@@ -1293,6 +1307,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     expect(await screen.findByText("With Chats")).toBeInTheDocument()
     expect(screen.getByText("No Chats")).toBeInTheDocument()
@@ -1339,10 +1354,16 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
+    expect(screen.getByPlaceholderText("Search characters")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Advanced filters" })
+    ).toBeInTheDocument()
+
+    await openAdvancedFilters(user)
+
     expect(
       await screen.findByLabelText("Filter characters by creator")
     ).toBeInTheDocument()
-    expect(screen.getByPlaceholderText("Search characters")).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Hide filters" }))
 
@@ -1398,6 +1419,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     fireEvent.mouseDown(screen.getByLabelText("Filter characters by folder"))
     await user.click(await screen.findByText("Research"))
@@ -1460,6 +1482,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     expect(await screen.findByText("visible")).toBeInTheDocument()
     expect(screen.queryByText("__tldw_folder_id:12")).not.toBeInTheDocument()
+    await openAdvancedFilters(user)
 
     await user.click(screen.getByRole("button", { name: "Manage tags" }))
     const tagDialog = await screen.findByRole("dialog")
@@ -1598,6 +1621,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     expect(await screen.findByText("Favorited Character")).toBeInTheDocument()
     expect(screen.getByText("Regular Character")).toBeInTheDocument()
@@ -2323,6 +2347,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     await user.click(screen.getByRole("button", { name: "Manage tags" }))
     const renameDialog = await screen.findByRole("dialog")
@@ -2401,6 +2426,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     await user.click(screen.getByRole("button", { name: "Manage tags" }))
     const mergeDialog = await screen.findByRole("dialog")
@@ -2480,6 +2506,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
+    await openAdvancedFilters(user)
 
     await user.click(screen.getByRole("button", { name: "Manage tags" }))
     const deleteDialog = await screen.findByRole("dialog")

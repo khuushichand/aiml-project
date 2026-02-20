@@ -1,6 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { Modal } from "antd"
+import {
+  clearWorkspaceUndoActionsForTests,
+  getWorkspaceUndoPendingCount
+} from "../undo-manager"
 import { WorkspaceHeader } from "../WorkspaceHeader"
+import {
+  FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS,
+  FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY
+} from "@/utils/feature-rollout"
 
 const mockNavigate = vi.fn()
 const mockSwitchWorkspace = vi.fn()
@@ -14,9 +23,14 @@ const mockDeleteWorkspace = vi.fn()
 const mockSaveCurrentWorkspace = vi.fn()
 const mockSetWorkspaceName = vi.fn()
 const mockSetCurrentNote = vi.fn()
+const mockCaptureUndoSnapshot = vi.fn()
+const mockRestoreUndoSnapshot = vi.fn()
 const mockCreateWorkspaceExportZipBlob = vi.fn()
 const mockCreateWorkspaceExportZipFilename = vi.fn()
 const mockParseWorkspaceImportFile = vi.fn()
+const mockTrackWorkspacePlaygroundTelemetry = vi.fn()
+const mockGetWorkspacePlaygroundTelemetryState = vi.fn()
+const mockResetWorkspacePlaygroundTelemetryState = vi.fn()
 
 const now = new Date("2026-02-18T12:00:00.000Z")
 
@@ -71,7 +85,32 @@ const mockStoreState = {
   archiveWorkspace: mockArchiveWorkspace,
   restoreArchivedWorkspace: mockRestoreArchivedWorkspace,
   deleteWorkspace: mockDeleteWorkspace,
-  saveCurrentWorkspace: mockSaveCurrentWorkspace
+  saveCurrentWorkspace: mockSaveCurrentWorkspace,
+  captureUndoSnapshot: mockCaptureUndoSnapshot,
+  restoreUndoSnapshot: mockRestoreUndoSnapshot
+}
+
+const mockConnectionStoreState = {
+  state: {
+    phase: "connected" as const,
+    serverUrl: "http://127.0.0.1:8000",
+    lastCheckedAt: Date.now(),
+    lastError: null as string | null,
+    lastStatusCode: 200 as number | null,
+    isConnected: true,
+    isChecking: false,
+    consecutiveFailures: 0,
+    offlineBypass: false,
+    knowledgeStatus: "ready" as const,
+    knowledgeLastCheckedAt: Date.now(),
+    knowledgeError: null as string | null,
+    mode: "normal" as const,
+    configStep: "none" as const,
+    errorKind: "none" as const,
+    hasCompletedFirstRun: true,
+    lastConfigUpdatedAt: Date.now(),
+    checksSinceConfigChange: 0
+  }
 }
 
 vi.mock("react-i18next", () => ({
@@ -101,6 +140,12 @@ vi.mock("@/store/workspace", () => ({
   ) => selector(mockStoreState)
 }))
 
+vi.mock("@/store/connection", () => ({
+  useConnectionStore: (
+    selector: (state: typeof mockConnectionStoreState) => unknown
+  ) => selector(mockConnectionStoreState)
+}))
+
 vi.mock("@/store/workspace-bundle", async () => {
   const actual = await vi.importActual<typeof import("@/store/workspace-bundle")>(
     "@/store/workspace-bundle"
@@ -116,6 +161,22 @@ vi.mock("@/store/workspace-bundle", async () => {
   }
 })
 
+vi.mock("@/utils/workspace-playground-telemetry", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/utils/workspace-playground-telemetry")>(
+      "@/utils/workspace-playground-telemetry"
+    )
+  return {
+    ...actual,
+    trackWorkspacePlaygroundTelemetry: (...args: unknown[]) =>
+      mockTrackWorkspacePlaygroundTelemetry(...args),
+    getWorkspacePlaygroundTelemetryState: (...args: unknown[]) =>
+      mockGetWorkspacePlaygroundTelemetryState(...args),
+    resetWorkspacePlaygroundTelemetryState: (...args: unknown[]) =>
+      mockResetWorkspacePlaygroundTelemetryState(...args)
+  }
+})
+
 if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
     observe() {}
@@ -127,6 +188,22 @@ if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
 describe("WorkspaceHeader workspace browser modal", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
+    clearWorkspaceUndoActionsForTests()
+    mockCaptureUndoSnapshot.mockReturnValue({
+      workspaceId: "workspace-alpha",
+      workspaceName: "Alpha Research"
+    })
+    mockConnectionStoreState.state = {
+      ...mockConnectionStoreState.state,
+      phase: "connected",
+      isConnected: true,
+      isChecking: false,
+      errorKind: "none",
+      knowledgeStatus: "ready",
+      lastError: null,
+      knowledgeError: null
+    }
     mockExportWorkspaceBundle.mockReturnValue({
       format: "tldw.workspace-playground.bundle",
       schemaVersion: 1,
@@ -200,6 +277,45 @@ describe("WorkspaceHeader workspace browser modal", () => {
         }
       }
     })
+    mockGetWorkspacePlaygroundTelemetryState.mockResolvedValue({
+      version: 1,
+      counters: {
+        status_viewed: 3,
+        citation_provenance_opened: 1,
+        token_cost_rendered: 2,
+        diagnostics_toggled: 1,
+        quota_warning_seen: 0,
+        conflict_modal_opened: 1,
+        undo_triggered: 2,
+        operation_cancelled: 1,
+        artifact_rehydrated_failed: 0,
+        source_status_polled: 5,
+        source_status_ready: 4,
+        connectivity_state_changed: 2,
+        confusion_retry_burst: 0,
+        confusion_refresh_loop: 0,
+        confusion_duplicate_submission: 0
+      },
+      last_event_at: Date.parse("2026-02-20T01:23:45.000Z"),
+      recent_events: [
+        {
+          type: "status_viewed",
+          at: Date.parse("2026-02-20T01:22:00.000Z"),
+          details: { workspace_id: "workspace-alpha" }
+        },
+        {
+          type: "operation_cancelled",
+          at: Date.parse("2026-02-20T01:23:45.000Z"),
+          details: { scope: "chat" }
+        },
+        {
+          type: "confusion_retry_burst",
+          at: Date.parse("2026-02-20T01:24:12.000Z"),
+          details: { retry_count: 3, window_ms: 30000 }
+        }
+      ]
+    })
+    mockResetWorkspacePlaygroundTelemetryState.mockResolvedValue(undefined)
   })
 
   it("opens view-all modal and filters workspaces by search query", async () => {
@@ -380,6 +496,34 @@ describe("WorkspaceHeader workspace browser modal", () => {
     })
   })
 
+  it("archives current workspace with undo availability", async () => {
+    const confirmSpy = vi
+      .spyOn(Modal, "confirm")
+      .mockImplementation((config) => {
+        config.onOk?.()
+        return {
+          destroy: vi.fn(),
+          update: vi.fn()
+        } as any
+      })
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Archive Current Workspace"))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(mockArchiveWorkspace).toHaveBeenCalledWith("workspace-alpha")
+    expect(getWorkspaceUndoPendingCount()).toBeGreaterThan(0)
+  })
+
   it("accepts ZIP workspace imports via the hidden file input", async () => {
     render(
       <WorkspaceHeader
@@ -405,5 +549,342 @@ describe("WorkspaceHeader workspace browser modal", () => {
       expect(mockParseWorkspaceImportFile).toHaveBeenCalledWith(zipFile)
       expect(mockImportWorkspaceBundle).toHaveBeenCalled()
     })
+  })
+
+  it("opens keyboard shortcuts cheat sheet from workspace menu", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Keyboard Shortcuts"))
+
+    const shortcutsModal = await screen.findByRole("dialog", {
+      name: "Keyboard Shortcuts"
+    })
+    expect(shortcutsModal).toBeInTheDocument()
+    expect(within(shortcutsModal).getByText("Search workspace")).toBeInTheDocument()
+    expect(within(shortcutsModal).getByText("Focus sources")).toBeInTheDocument()
+    expect(within(shortcutsModal).getByText("Focus chat")).toBeInTheDocument()
+    expect(within(shortcutsModal).getByText("Focus studio")).toBeInTheDocument()
+  })
+
+  it("opens telemetry summary modal from workspace menu", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Telemetry summary"))
+
+    const telemetryModal = await screen.findByRole("dialog", {
+      name: "Telemetry summary"
+    })
+    expect(telemetryModal).toBeInTheDocument()
+    expect(mockGetWorkspacePlaygroundTelemetryState).toHaveBeenCalledTimes(1)
+    expect(
+      within(telemetryModal).getByTestId(
+        "workspace-telemetry-counter-status_viewed"
+      )
+    ).toHaveTextContent("3")
+    expect(
+      within(telemetryModal).getByTestId(
+        "workspace-telemetry-counter-connectivity_state_changed"
+      )
+    ).toHaveTextContent("2")
+  })
+
+  it("resets telemetry summary state from the telemetry modal", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Telemetry summary"))
+
+    const telemetryModal = await screen.findByRole("dialog", {
+      name: "Telemetry summary"
+    })
+    fireEvent.click(within(telemetryModal).getByRole("button", { name: "Reset" }))
+
+    await waitFor(() => {
+      expect(mockResetWorkspacePlaygroundTelemetryState).toHaveBeenCalledTimes(1)
+      expect(mockGetWorkspacePlaygroundTelemetryState).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it("exports telemetry summary and confusion CSV from telemetry modal", async () => {
+    const createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:workspace-telemetry")
+    const revokeObjectUrlSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined)
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Telemetry summary"))
+
+    const telemetryModal = await screen.findByRole("dialog", {
+      name: "Telemetry summary"
+    })
+    fireEvent.click(
+      within(telemetryModal).getByRole("button", { name: "Export JSON" })
+    )
+    fireEvent.click(
+      within(telemetryModal).getByRole("button", {
+        name: "Export confusion CSV"
+      })
+    )
+
+    await waitFor(() => {
+      expect(createObjectUrlSpy).toHaveBeenCalledTimes(2)
+    })
+
+    const firstBlob = createObjectUrlSpy.mock.calls[0]?.[0] as Blob
+    const secondBlob = createObjectUrlSpy.mock.calls[1]?.[0] as Blob
+    expect(firstBlob.type).toContain("application/json")
+    expect(secondBlob.type).toContain("text/csv")
+    expect(revokeObjectUrlSpy).toHaveBeenCalledWith("blob:workspace-telemetry")
+  })
+
+  it("loads rollout execution controls from localStorage in telemetry modal", async () => {
+    window.localStorage.setItem(
+      FEATURE_ROLLOUT_SUBJECT_ID_STORAGE_KEY,
+      "subject-ops-42"
+    )
+    window.localStorage.setItem(
+      FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.research_studio_provenance_v1,
+      "10"
+    )
+    window.localStorage.setItem(
+      FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS
+        .research_studio_status_guardrails_v1,
+      "50"
+    )
+
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Telemetry summary"))
+
+    const telemetryModal = await screen.findByRole("dialog", {
+      name: "Telemetry summary"
+    })
+    expect(
+      within(telemetryModal).getByTestId("workspace-rollout-subject-id")
+    ).toHaveTextContent("subject-ops-42")
+    expect(
+      within(telemetryModal).getByTestId(
+        "workspace-rollout-percentage-research_studio_provenance_v1"
+      )
+    ).toHaveTextContent("10%")
+    expect(
+      within(telemetryModal).getByTestId(
+        "workspace-rollout-percentage-research_studio_status_guardrails_v1"
+      )
+    ).toHaveTextContent("50%")
+  })
+
+  it("persists rollout preset updates from telemetry modal controls", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    fireEvent.click(await screen.findByText("Telemetry summary"))
+
+    const telemetryModal = await screen.findByRole("dialog", {
+      name: "Telemetry summary"
+    })
+    const provenanceControl = within(telemetryModal).getByTestId(
+      "workspace-rollout-control-research_studio_provenance_v1"
+    )
+    fireEvent.click(within(provenanceControl).getByRole("button", { name: "10%" }))
+
+    await waitFor(() => {
+      expect(
+        window.localStorage.getItem(
+          FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.research_studio_provenance_v1
+        )
+      ).toBe("10")
+    })
+    expect(
+      within(provenanceControl).getByTestId(
+        "workspace-rollout-percentage-research_studio_provenance_v1"
+      )
+    ).toHaveTextContent("10%")
+  })
+
+  it("renders proactive storage usage indicator with formatted capacity", () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={2.1 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+      />
+    )
+
+    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
+    expect(indicator).toHaveTextContent("Storage 2.1/5 MB")
+    expect(indicator.className).toContain("text-text-muted")
+  })
+
+  it("shows connection status indicator tone for healthy, degraded, and disconnected states", () => {
+    const { rerender } = render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByTestId("workspace-connection-status-indicator")
+    ).toHaveTextContent("Connected")
+    expect(
+      screen.getByTestId("workspace-connection-status-indicator").className
+    ).toContain("text-success")
+
+    mockConnectionStoreState.state = {
+      ...mockConnectionStoreState.state,
+      phase: "connected",
+      isConnected: true,
+      errorKind: "partial",
+      knowledgeStatus: "offline"
+    }
+
+    rerender(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByTestId("workspace-connection-status-indicator")
+    ).toHaveTextContent("Degraded")
+    expect(
+      screen.getByTestId("workspace-connection-status-indicator").className
+    ).toContain("text-warning")
+
+    mockConnectionStoreState.state = {
+      ...mockConnectionStoreState.state,
+      phase: "error",
+      isConnected: false,
+      errorKind: "unreachable",
+      lastError: "Network timeout"
+    }
+
+    rerender(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+      />
+    )
+
+    expect(
+      screen.getByTestId("workspace-connection-status-indicator")
+    ).toHaveTextContent("Disconnected")
+    expect(
+      screen.getByTestId("workspace-connection-status-indicator").className
+    ).toContain("text-error")
+  })
+
+  it("highlights storage usage indicator at warning and critical thresholds", () => {
+    const { rerender } = render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={4.1 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+      />
+    )
+
+    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
+    expect(indicator.className).toContain("text-warning")
+
+    rerender(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={4.8 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+      />
+    )
+
+    expect(screen.getByTestId("workspace-storage-usage-indicator").className).toContain(
+      "text-error"
+    )
+  })
+
+  it("hides status guardrail indicators and telemetry menu when rollout flags are disabled", async () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        statusGuardrailsEnabled={false}
+        provenanceEnabled={false}
+      />
+    )
+
+    expect(
+      screen.queryByTestId("workspace-connection-status-indicator")
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByTestId("workspace-storage-usage-indicator")
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspaces" }))
+    expect(screen.queryByText("Telemetry summary")).not.toBeInTheDocument()
   })
 })

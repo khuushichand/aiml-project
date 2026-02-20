@@ -2,7 +2,7 @@
  * AnswerPanel - Displays generated answer with inline citations
  */
 
-import React, { useEffect, useMemo, useState } from "react"
+import React, { type ReactNode, useEffect, useMemo, useState } from "react"
 import { Sparkles, AlertCircle, Loader2, ThumbsUp, ThumbsDown } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/lib/utils"
@@ -27,6 +27,17 @@ const LONG_ANSWER_WORD_THRESHOLD = 1000
 type ErrorPresentation = {
   title: string
   guidance: string
+}
+
+type GroundingCoverage = {
+  citedSentences: number
+  totalSentences: number
+  percent: number
+}
+
+type TrustDescriptor = {
+  label: "High" | "Medium" | "Low"
+  className: string
 }
 
 const classifyErrorMessage = (rawMessage: string): ErrorPresentation => {
@@ -55,6 +66,65 @@ const classifyErrorMessage = (rawMessage: string): ErrorPresentation => {
   }
 }
 
+function extractTextFromNode(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node)
+  }
+  if (!node) {
+    return ""
+  }
+  if (Array.isArray(node)) {
+    return node.map((entry) => extractTextFromNode(entry)).join("")
+  }
+  if (React.isValidElement<{ children?: ReactNode }>(node)) {
+    return extractTextFromNode(node.props.children)
+  }
+  return ""
+}
+
+function computeGroundingCoverage(answer: string | null): GroundingCoverage | null {
+  if (!answer || answer.trim().length === 0) return null
+
+  const sentences = answer
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => /[A-Za-z0-9]/.test(sentence))
+
+  if (sentences.length === 0) {
+    return null
+  }
+
+  const citedSentences = sentences.filter((sentence) => /\[\d+\]/.test(sentence)).length
+  const totalSentences = sentences.length
+  const percent = Math.round((citedSentences / totalSentences) * 100)
+
+  return {
+    citedSentences,
+    totalSentences,
+    percent,
+  }
+}
+
+function describeFaithfulness(score: number | null): TrustDescriptor | null {
+  if (score == null || Number.isNaN(score)) return null
+  if (score >= 0.85) {
+    return {
+      label: "High",
+      className: "border-success/40 bg-success/15 text-success",
+    }
+  }
+  if (score >= 0.6) {
+    return {
+      label: "Medium",
+      className: "border-warn/40 bg-warn/15 text-warn",
+    }
+  }
+  return {
+    label: "Low",
+    className: "border-danger/40 bg-danger/15 text-danger",
+  }
+}
+
 export function AnswerPanel({ className }: AnswerPanelProps) {
   const {
     answer,
@@ -62,6 +132,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     isSearching,
     error,
     scrollToSource,
+    focusedSourceIndex = null,
     results,
     searchDetails,
     query = "",
@@ -103,6 +174,18 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     return answer.trim().split(/\s+/).filter(Boolean).length
   }, [answer])
   const isLongAnswer = answerWordCount > LONG_ANSWER_WORD_THRESHOLD
+  const groundingCoverage = useMemo(
+    () => computeGroundingCoverage(answer),
+    [answer]
+  )
+  const trustScore = searchDetails?.faithfulnessScore ?? searchDetails?.verificationRate ?? null
+  const trustScoreLabel = searchDetails?.faithfulnessScore != null
+    ? "Faithfulness"
+    : "Verification"
+  const faithfulnessDescriptor = useMemo(
+    () => describeFaithfulness(trustScore),
+    [trustScore]
+  )
 
   useEffect(() => {
     setIsExpanded(false)
@@ -175,12 +258,24 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     }
   }
 
-  const renderCitationButton = (citationNum: number) => {
+  const citationRenderCounts = new Map<number, number>()
+  const getNextCitationOccurrence = (citationNum: number): number => {
+    const nextOccurrence = (citationRenderCounts.get(citationNum) || 0) + 1
+    citationRenderCounts.set(citationNum, nextOccurrence)
+    return nextOccurrence
+  }
+
+  const renderCitationButton = (citationNum: number, occurrence: number) => {
     const isCited = citedIndices.includes(citationNum)
+    const isFocusedCitation = focusedSourceIndex === citationNum - 1
     return (
       <button
+        type="button"
         onClick={() => handleCitationClick(citationNum)}
         aria-label={`Jump to source ${citationNum}`}
+        aria-current={isFocusedCitation ? "true" : undefined}
+        data-knowledge-citation-index={citationNum}
+        data-knowledge-citation-occurrence={occurrence}
         className={cn(
           "inline-flex items-center justify-center",
           "min-w-8 h-8 px-2 mx-0.5 sm:min-w-[1.5rem] sm:h-5 sm:px-1.5",
@@ -188,7 +283,8 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
           "transition-colors duration-200",
           isCited
             ? "bg-primary text-white dark:text-slate-900 hover:brightness-105"
-            : "bg-surface2 text-text-muted border border-border hover:bg-muted hover:text-text"
+            : "bg-surface text-text-subtle border border-border hover:bg-hover hover:text-text",
+          isFocusedCitation && "ring-2 ring-primary/40 ring-offset-1 ring-offset-surface"
         )}
         title={`Jump to source ${citationNum}`}
       >
@@ -378,7 +474,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
             onClick={() => {
               void handleCopyAnswer()
             }}
-            className="rounded-md border px-2 py-1 text-xs transition-colors border-border text-text-muted hover:bg-muted hover:text-text"
+            className="rounded-md border px-2 py-1 text-xs transition-colors border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
           >
             {copiedAnswer ? "Copied" : "Copy answer"}
           </button>
@@ -390,7 +486,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
             disabled={workspaceHandoffPending}
             className={cn(
               "rounded-md border px-2 py-1 text-xs transition-colors",
-              "border-border text-text-muted hover:bg-muted hover:text-text",
+              "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text",
               workspaceHandoffPending && "opacity-60 cursor-not-allowed"
             )}
           >
@@ -401,6 +497,36 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
               {citations.length} citation{citations.length !== 1 ? "s" : ""}
             </span>
           )}
+          {groundingCoverage ? (
+            <span
+              className="inline-flex items-center rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary"
+              title={`${groundingCoverage.citedSentences}/${groundingCoverage.totalSentences} answer sentences include citations.`}
+            >
+              Grounding: {groundingCoverage.percent}% cited
+            </span>
+          ) : null}
+          {faithfulnessDescriptor ? (
+            <span
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-0.5 text-xs",
+                faithfulnessDescriptor.className
+              )}
+              title={`${trustScoreLabel} score ${Math.round((trustScore || 0) * 100)}% based on server-side claim verification.`}
+            >
+              Verified: {faithfulnessDescriptor.label}
+            </span>
+          ) : null}
+          {searchDetails?.verificationReportAvailable ? (
+            <span
+              className="inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs text-text-muted"
+              title="Structured verification report is available for this answer."
+            >
+              Verification report
+              {searchDetails.verificationTotalClaims != null
+                ? ` (${searchDetails.verificationTotalClaims} claims)`
+                : ""}
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -413,6 +539,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
           </p>
         ) : null}
         <div
+          id="knowledge-answer-content"
           data-testid="knowledge-answer-content"
           aria-describedby={
             citations.length > 0 ? "knowledge-answer-citation-guidance" : undefined
@@ -448,7 +575,10 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
                     ? Number.parseInt(childCitationMatch[1], 10)
                     : NaN
                 if (Number.isFinite(citationNum)) {
-                  return renderCitationButton(citationNum)
+                  return renderCitationButton(
+                    citationNum,
+                    getNextCitationOccurrence(citationNum)
+                  )
                 }
                 return (
                   <a
@@ -498,8 +628,21 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
                 )
               },
               p({ children, ...props }) {
+                const paragraphText = extractTextFromNode(children)
+                const paragraphHasCitation = /\[\d+\]/.test(paragraphText)
+                const shouldHighlightUncited =
+                  Boolean(citations.length) &&
+                  paragraphText.trim().length > 0 &&
+                  !paragraphHasCitation
                 return (
-                  <p className="leading-relaxed whitespace-pre-wrap" {...props}>
+                  <p
+                    className={cn(
+                      "leading-relaxed whitespace-pre-wrap",
+                      shouldHighlightUncited &&
+                        "rounded-md bg-amber-500/10 px-2 py-1"
+                    )}
+                    {...props}
+                  >
                     {children}
                   </p>
                 )
@@ -529,16 +672,26 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
           {citations.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-text-muted">Sources:</span>
-              {citations.map((citation) => (
-                <button
-                  key={citation.index}
-                  onClick={() => handleCitationClick(citation.index)}
-                  aria-label={`Jump to source ${citation.index}`}
-                  className="inline-flex h-8 min-w-8 items-center justify-center rounded border border-border bg-surface px-2 text-sm text-text-muted transition-colors hover:bg-surface2 hover:text-text sm:h-6 sm:min-w-[1.5rem] sm:px-1.5 sm:text-xs"
-                >
-                  [{citation.index}]
-                </button>
-              ))}
+              {citations.map((citation) => {
+                const isFocusedCitation = focusedSourceIndex === citation.index - 1
+                return (
+                  <button
+                    type="button"
+                    key={citation.index}
+                    onClick={() => handleCitationClick(citation.index)}
+                    aria-label={`Jump to source ${citation.index}`}
+                    aria-current={isFocusedCitation ? "true" : undefined}
+                    data-knowledge-citation-index={citation.index}
+                    className={cn(
+                      "inline-flex h-8 min-w-8 items-center justify-center rounded border border-border bg-surface px-2 text-sm text-text-muted transition-colors hover:bg-surface2 hover:text-text sm:h-6 sm:min-w-[1.5rem] sm:px-1.5 sm:text-xs",
+                      isFocusedCitation &&
+                        "border-primary/60 bg-primary/10 text-primary ring-2 ring-primary/30"
+                    )}
+                  >
+                    [{citation.index}]
+                  </button>
+                )
+              })}
             </div>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -564,7 +717,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
                 "inline-flex items-center gap-1 rounded-md border px-2 py-1 transition-colors",
                 answerFeedback === "up"
                   ? "border-primary bg-primary/10 text-primary"
-                  : "border-border text-text-muted hover:text-text hover:bg-muted",
+                  : "border-border bg-surface text-text-subtle hover:text-text hover:bg-hover",
                 answerFeedbackSubmitting && "opacity-60 cursor-not-allowed"
               )}
             >
@@ -582,7 +735,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
                 "inline-flex items-center gap-1 rounded-md border px-2 py-1 transition-colors",
                 answerFeedback === "down"
                   ? "border-primary bg-primary/10 text-primary"
-                  : "border-border text-text-muted hover:text-text hover:bg-muted",
+                  : "border-border bg-surface text-text-subtle hover:text-text hover:bg-hover",
                 answerFeedbackSubmitting && "opacity-60 cursor-not-allowed"
               )}
             >
@@ -609,7 +762,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
                 void handleAdjustAnswerLength("shorter")
               }}
               disabled={isSearching || answerLengthAction !== null}
-              className="rounded-md border border-border px-2 py-1 text-text-muted hover:bg-muted hover:text-text disabled:opacity-60 disabled:cursor-not-allowed"
+              className="rounded-md border border-border bg-surface px-2 py-1 text-text-subtle hover:bg-hover hover:text-text disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {answerLengthAction === "shorter" ? "Summarizing..." : "Summarize"}
             </button>
@@ -619,7 +772,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
                 void handleAdjustAnswerLength("longer")
               }}
               disabled={isSearching || answerLengthAction !== null}
-              className="rounded-md border border-border px-2 py-1 text-text-muted hover:bg-muted hover:text-text disabled:opacity-60 disabled:cursor-not-allowed"
+              className="rounded-md border border-border bg-surface px-2 py-1 text-text-subtle hover:bg-hover hover:text-text disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {answerLengthAction === "longer" ? "Expanding..." : "Show more"}
             </button>

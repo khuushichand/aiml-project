@@ -7,14 +7,21 @@ import { PlaygroundMessage } from "@/components/Common/Playground/Message"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
-import { Clock, Hash } from "lucide-react"
+import { Clock, DollarSign, Hash } from "lucide-react"
 import { generateID } from "@/db/dexie/helpers"
 import { decodeChatErrorPayload } from "@/utils/chat-error-message"
 import { humanizeMilliseconds } from "@/utils/humanize-milliseconds"
 import { trackCompareMetric } from "@/utils/compare-metrics"
+import { resolveMessageCostUsd } from "@/components/Common/Playground/message-usage"
+import { formatCost } from "@/utils/model-pricing"
 import { fetchChatModels } from "@/services/tldw-server"
 import { tldwModels } from "@/services/tldw"
 import { applyVariantToMessage } from "@/utils/message-variants"
+import {
+  buildNormalizedPreview,
+  computeNormalizedPreviewBudget
+} from "./compare-normalized-preview"
+import { computeResponseDiffPreview } from "./compare-response-diff"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
@@ -27,6 +34,12 @@ type TimelineBlock =
       assistantIndices: number[]
       clusterId: string
     }
+
+type PlaygroundChatProps = {
+  searchQuery?: string
+  matchedMessageIndices?: Set<number>
+  activeSearchMessageIndex?: number | null
+}
 
 const PerModelMiniComposer: React.FC<{
   placeholder: string
@@ -107,7 +120,11 @@ const buildBlocks = (messages: { messageType?: string; clusterId?: string }[]): 
   return blocks
 }
 
-export const PlaygroundChat = () => {
+export const PlaygroundChat = ({
+  searchQuery,
+  matchedMessageIndices,
+  activeSearchMessageIndex = null
+}: PlaygroundChatProps) => {
   const { t } = useTranslation(["playground", "common"])
   const notification = useAntdNotification()
   const {
@@ -148,6 +165,8 @@ export const PlaygroundChat = () => {
     sendPerModelReply,
     compareCanonicalByCluster,
     setCompareCanonicalForCluster,
+    compareContinuationModeByCluster,
+    setCompareContinuationModeForCluster,
     setCompareParentForHistory,
     compareSplitChats,
     setCompareSplitChat,
@@ -165,6 +184,11 @@ export const PlaygroundChat = () => {
   >({})
   const [hiddenModelsByCluster, setHiddenModelsByCluster] = React.useState<
     Record<string, string[]>
+  >({})
+  const [normalizedPreviewByCluster, setNormalizedPreviewByCluster] =
+    React.useState<Record<string, boolean>>({})
+  const [diffPreviewByCluster, setDiffPreviewByCluster] = React.useState<
+    Record<string, boolean>
   >({})
   const compareModeActive = compareFeatureEnabled && compareMode
   const stableHistoryId =
@@ -186,6 +210,16 @@ export const PlaygroundChat = () => {
     previousMessageCount.current = messages.length
   }, [messages.length, serverChatId, stableHistoryId])
   const blocks = React.useMemo(() => buildBlocks(messages), [messages])
+  const normalizedSearchQuery =
+    typeof searchQuery === "string" ? searchQuery.trim() : ""
+  const resolveSearchMatch = React.useCallback(
+    (messageIndex: number): "active" | "match" | null => {
+      if (!normalizedSearchQuery) return null
+      if (!matchedMessageIndices?.has(messageIndex)) return null
+      return activeSearchMessageIndex === messageIndex ? "active" : "match"
+    },
+    [activeSearchMessageIndex, matchedMessageIndices, normalizedSearchQuery]
+  )
   const runContinue = React.useCallback(() => {
     void onSubmit({
       image: "",
@@ -437,6 +471,8 @@ export const PlaygroundChat = () => {
                 moodLabel={message.moodLabel ?? null}
                 moodConfidence={message.moodConfidence ?? null}
                 moodTopic={message.moodTopic ?? null}
+                searchQuery={normalizedSearchQuery || undefined}
+                searchMatch={resolveSearchMatch(block.index)}
                 message_type={resolveMessageType(message, block.index)}
                 variants={message.variants}
                 activeVariantIndex={message.activeVariantIndex}
@@ -487,8 +523,14 @@ export const PlaygroundChat = () => {
           )
           const selectedModelKey =
             clusterSelection.length === 1 ? clusterSelection[0] : null
+          const continuationMode =
+            compareContinuationModeByCluster[block.clusterId] ||
+            (clusterActiveModels.length > 1 ? "compare" : "winner")
           const isChosenState = !compareModeActive && !!selectedModelKey
           const hiddenModels = hiddenModelsByCluster[block.clusterId] || []
+          const normalizedPreviewEnabled =
+            normalizedPreviewByCluster[block.clusterId] ?? false
+          const diffPreviewEnabled = diffPreviewByCluster[block.clusterId] ?? false
           const filteredReplyItems =
             hiddenModels.length > 0
               ? replyItems.filter((item) => !hiddenModels.includes(item.modelKey))
@@ -538,12 +580,45 @@ export const PlaygroundChat = () => {
               return next
             })
           }
+          const setNormalizedPreview = (nextValue: boolean) => {
+            setNormalizedPreviewByCluster((prev) => ({
+              ...prev,
+              [block.clusterId]: nextValue
+            }))
+          }
+          const setDiffPreview = (nextValue: boolean) => {
+            setDiffPreviewByCluster((prev) => ({
+              ...prev,
+              [block.clusterId]: nextValue
+            }))
+          }
+          const diffBaselineModelKey =
+            selectedModelKey ||
+            clusterSelection[0] ||
+            filteredReplyItems[0]?.modelKey ||
+            null
+          const diffBaselineItem = diffBaselineModelKey
+            ? replyItems.find((item) => item.modelKey === diffBaselineModelKey) ||
+              null
+            : null
+          const diffBaselineText =
+            typeof diffBaselineItem?.message?.message === "string"
+              ? diffBaselineItem.message.message
+              : ""
           const handleContinueWithModel = (modelKey: string) => {
             setCompareMode(false)
             setSelectedModel(modelKey)
             setCompareSelectedModels([modelKey])
             setCompareActiveModelsForCluster(block.clusterId, [modelKey])
+            setCompareContinuationModeForCluster(block.clusterId, "winner")
             setClusterCollapsed(true)
+            notification.success({
+              message: t(
+                "playground:composer.compareContinueContract",
+                "Next turns continue with {{model}} only. Re-enable Compare to send to multiple models again.",
+                { model: getModelLabel(modelKey) } as any
+              )
+            })
           }
           const handleCompareAgain = () => {
             if (!compareFeatureEnabled) {
@@ -555,7 +630,14 @@ export const PlaygroundChat = () => {
                 : clusterModelKeys.length
             setCompareSelectedModels(clusterModelKeys.slice(0, maxModels))
             setCompareMode(true)
+            setCompareContinuationModeForCluster(block.clusterId, "compare")
             setClusterCollapsed(false)
+            notification.info({
+              message: t(
+                "playground:composer.compareResumeContract",
+                "Compare mode resumed. Next turn will fan out to selected models."
+              )
+            })
           }
 
           const handleBulkSplit = async () => {
@@ -675,6 +757,8 @@ export const PlaygroundChat = () => {
                 moodLabel={userMessage.moodLabel ?? null}
                 moodConfidence={userMessage.moodConfidence ?? null}
                 moodTopic={userMessage.moodTopic ?? null}
+                searchQuery={normalizedSearchQuery || undefined}
+                searchMatch={resolveSearchMatch(block.userIndex)}
                 message_type={resolveMessageType(userMessage, block.userIndex)}
                 variants={userMessage.variants}
                 activeVariantIndex={userMessage.activeVariantIndex}
@@ -793,6 +877,69 @@ export const PlaygroundChat = () => {
                         }
                       )}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNormalizedPreview(!normalizedPreviewEnabled)
+                      }
+                      title={
+                        normalizedPreviewEnabled
+                          ? (t(
+                              "playground:composer.comparePreviewFullTitle",
+                              "Switch to full responses"
+                            ) as string)
+                          : (t(
+                              "playground:composer.comparePreviewNormalizedTitle",
+                              "Switch to normalized previews"
+                            ) as string)
+                      }
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
+                        normalizedPreviewEnabled
+                          ? "border-primary bg-primary/10 text-primaryStrong"
+                          : "border-border bg-surface text-text-muted hover:bg-surface2 hover:text-text"
+                      }`}
+                    >
+                      {normalizedPreviewEnabled
+                        ? t(
+                            "playground:composer.comparePreviewFull",
+                            "Full responses"
+                          )
+                        : t(
+                            "playground:composer.comparePreviewNormalized",
+                            "Normalized previews"
+                          )}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`compare-diff-toggle-${block.clusterId}`}
+                      onClick={() => setDiffPreview(!diffPreviewEnabled)}
+                      title={
+                        diffPreviewEnabled
+                          ? (t(
+                              "playground:composer.compareDiffHideTitle",
+                              "Hide response differences"
+                            ) as string)
+                          : (t(
+                              "playground:composer.compareDiffShowTitle",
+                              "Show response differences"
+                            ) as string)
+                      }
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
+                        diffPreviewEnabled
+                          ? "border-primary bg-primary/10 text-primaryStrong"
+                          : "border-border bg-surface text-text-muted hover:bg-surface2 hover:text-text"
+                      }`}
+                    >
+                      {diffPreviewEnabled
+                        ? t(
+                            "playground:composer.compareDiffHide",
+                            "Hide differences"
+                          )
+                        : t(
+                            "playground:composer.compareDiffShow",
+                            "Diff highlights"
+                          )}
+                    </button>
                   </div>
                 )}
                 {compareFeatureEnabled && clusterSelection.length > 1 && (
@@ -849,8 +996,42 @@ export const PlaygroundChat = () => {
                           { count: tokenCount }
                         )
                       : null
+                  const costUsd = resolveMessageCostUsd(message?.generationInfo)
+                  const costLabel = costUsd != null ? formatCost(costUsd) : null
                   const splitMap = compareSplitChats[block.clusterId] || {}
                   const spawnedHistoryId = splitMap[modelKey]
+                  const normalizedPreviewBudget =
+                    normalizedPreviewEnabled
+                      ? computeNormalizedPreviewBudget(
+                          filteredReplyItems.map((item) =>
+                            typeof item.message?.message === "string"
+                              ? item.message.message
+                              : ""
+                          )
+                        )
+                      : 0
+                  const normalizedPreviewText = normalizedPreviewEnabled
+                    ? buildNormalizedPreview(
+                        typeof message?.message === "string"
+                          ? message.message
+                          : "",
+                        normalizedPreviewBudget
+                      )
+                    : ""
+                  const isDiffBaselineCard =
+                    Boolean(diffBaselineModelKey) &&
+                    modelKey === diffBaselineModelKey
+                  const diffPreview =
+                    diffPreviewEnabled && diffBaselineItem
+                      ? computeResponseDiffPreview({
+                          baseline: diffBaselineText,
+                          candidate:
+                            typeof message?.message === "string"
+                              ? message.message
+                              : "",
+                          maxHighlights: 2
+                        })
+                      : null
 
                   const handleToggle = () => {
                     if (!isSelectable) {
@@ -881,6 +1062,17 @@ export const PlaygroundChat = () => {
                     setCompareSelectionForCluster(block.clusterId, next)
                     setCompareActiveModelsForCluster(block.clusterId, next)
                     setCompareSelectedModels(next)
+                    if (next.length > 1) {
+                      setCompareContinuationModeForCluster(
+                        block.clusterId,
+                        "compare"
+                      )
+                    } else if (next.length === 1) {
+                      setCompareContinuationModeForCluster(
+                        block.clusterId,
+                        "winner"
+                      )
+                    }
                     void trackCompareMetric({
                       type: "selection",
                       count: next.length
@@ -953,11 +1145,169 @@ export const PlaygroundChat = () => {
                   return (
                     <div
                       key={`c-${blockIndex}-${index}`}
+                      role="article"
+                      aria-label={t(
+                        "playground:composer.compareCardAria",
+                        "{{model}} response from {{provider}}",
+                        {
+                          model: getModelLabel(modelKey),
+                          provider:
+                            providerLabel ||
+                            t(
+                              "playground:composer.compareProviderCustom",
+                              "Custom provider"
+                            )
+                        } as any
+                      )}
                       className={`rounded-md border border-border bg-surface p-2 shadow-sm ${
                         isChosenCard
                           ? "ring-1 ring-success"
                           : ""
                       }`}>
+                      <div
+                        data-testid={`compare-model-identity-${block.clusterId}-${modelKey}`}
+                        className="mb-2 flex items-center justify-between gap-2 rounded-md border border-border bg-surface2 px-2 py-1 text-[11px]"
+                      >
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <ProviderIcons
+                            provider={providerKey}
+                            className="h-3.5 w-3.5 flex-shrink-0 text-text-subtle"
+                          />
+                          <span className="truncate font-semibold text-text">
+                            {getModelLabel(modelKey)}
+                          </span>
+                          <span className="truncate text-[10px] text-text-subtle">
+                            {providerLabel ||
+                              t(
+                                "playground:composer.compareProviderCustom",
+                                "Custom provider"
+                              )}
+                          </span>
+                        </div>
+                        <span className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[9px] font-medium text-text-muted">
+                          {t(
+                            "playground:composer.compareModelIdentityTag",
+                            "Model"
+                          )}
+                        </span>
+                      </div>
+                      {normalizedPreviewEnabled && (
+                        <div
+                          data-testid={`compare-normalized-preview-${block.clusterId}-${modelKey}`}
+                          className="mb-2 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5 text-[11px] text-primaryStrong"
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide">
+                              {t(
+                                "playground:composer.comparePreviewLabel",
+                                "Normalized preview"
+                              )}
+                            </span>
+                            <span className="text-[10px] text-primaryStrong/80">
+                              {t(
+                                "playground:composer.comparePreviewBudget",
+                                "~{{count}} chars",
+                                { count: normalizedPreviewBudget } as any
+                              )}
+                            </span>
+                          </div>
+                          <p className="whitespace-pre-wrap">
+                            {normalizedPreviewText ||
+                              t(
+                                "playground:composer.comparePreviewEmpty",
+                                "No preview text available."
+                              )}
+                          </p>
+                        </div>
+                      )}
+                      {diffPreview && (
+                        <div
+                          data-testid={`compare-diff-preview-${block.clusterId}-${modelKey}`}
+                          className="mb-2 rounded-md border border-accent/35 bg-accent/5 px-2 py-1.5 text-[11px] text-text"
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-text">
+                              {isDiffBaselineCard
+                                ? t(
+                                    "playground:composer.compareDiffBaselineLabel",
+                                    "Diff baseline"
+                                  )
+                                : t(
+                                    "playground:composer.compareDiffVsLabel",
+                                    "Diff vs {{model}}",
+                                    {
+                                      model: getModelLabel(
+                                        diffBaselineModelKey || modelKey
+                                      )
+                                    } as any
+                                  )}
+                            </span>
+                            <span className="text-[10px] text-text-subtle">
+                              {t(
+                                "playground:composer.compareDiffOverlap",
+                                "{{percent}}% overlap",
+                                {
+                                  percent: Math.round(diffPreview.overlapRatio * 100)
+                                } as any
+                              )}
+                            </span>
+                          </div>
+                          {isDiffBaselineCard ? (
+                            <p className="text-[10px] text-text-subtle">
+                              {t(
+                                "playground:composer.compareDiffBaselineHint",
+                                "Other responses are compared against this card."
+                              )}
+                            </p>
+                          ) : diffPreview.hasMeaningfulDifference ? (
+                            <div className="space-y-1">
+                              {diffPreview.addedHighlights.length > 0 && (
+                                <div className="rounded border border-success/30 bg-success/10 px-2 py-1">
+                                  <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-success">
+                                    {t(
+                                      "playground:composer.compareDiffAddedLabel",
+                                      "Added"
+                                    )}
+                                  </div>
+                                  {diffPreview.addedHighlights.map((entry) => (
+                                    <p
+                                      key={`diff-add-${block.clusterId}-${modelKey}-${entry}`}
+                                      className="line-clamp-2 text-[11px] text-success"
+                                    >
+                                      + {entry}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                              {diffPreview.removedHighlights.length > 0 && (
+                                <div className="rounded border border-warn/30 bg-warn/10 px-2 py-1">
+                                  <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-warn">
+                                    {t(
+                                      "playground:composer.compareDiffRemovedLabel",
+                                      "Removed"
+                                    )}
+                                  </div>
+                                  {diffPreview.removedHighlights.map((entry) => (
+                                    <p
+                                      key={`diff-remove-${block.clusterId}-${modelKey}-${entry}`}
+                                      className="line-clamp-2 text-[11px] text-warn"
+                                    >
+                                      - {entry}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-text-subtle">
+                              {t(
+                                "playground:composer.compareDiffNoChanges",
+                                "No meaningful differences in previewed segments."
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      )}
                       <PlaygroundMessage
                         isBot={message.isBot}
                         message={message.message}
@@ -1014,6 +1364,8 @@ export const PlaygroundChat = () => {
                         moodLabel={message.moodLabel ?? null}
                         moodConfidence={message.moodConfidence ?? null}
                         moodTopic={message.moodTopic ?? null}
+                        searchQuery={normalizedSearchQuery || undefined}
+                        searchMatch={resolveSearchMatch(index)}
                         message_type={resolveMessageType(message, index)}
                         compareSelectable={isSelectable}
                         compareSelected={isSelected}
@@ -1092,18 +1444,6 @@ export const PlaygroundChat = () => {
                               "Open as full chat"
                             )}
                           </button>
-                          {providerLabel && (
-                            <span
-                              className="inline-flex items-center gap-1 text-[10px] text-text-subtle"
-                              aria-label={providerLabel}
-                            >
-                              <ProviderIcons
-                                provider={providerKey}
-                                className="h-3 w-3"
-                              />
-                              {providerLabel}
-                            </span>
-                          )}
                           {tokenLabel && (
                             <span
                               className="inline-flex items-center gap-1 text-[10px] text-text-subtle"
@@ -1111,6 +1451,19 @@ export const PlaygroundChat = () => {
                             >
                               <Hash className="h-3 w-3" aria-hidden="true" />
                               {tokenLabel}
+                            </span>
+                          )}
+                          {costLabel && (
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] text-text-subtle"
+                              aria-label={t(
+                                "playground:composer.compareCost",
+                                "Cost: {{cost}}",
+                                { cost: costLabel } as any
+                              )}
+                            >
+                              <DollarSign className="h-3 w-3" aria-hidden="true" />
+                              {costLabel}
                             </span>
                           )}
                           {latencyLabel && (
@@ -1160,12 +1513,12 @@ export const PlaygroundChat = () => {
                               title={
                                 compareCanonicalByCluster[block.clusterId] === message.id
                                   ? (t(
-                                      "playground:composer.compareCanonicalOn",
-                                      "Canonical"
+                                      "playground:composer.comparePrimaryOn",
+                                      "Main response"
                                     ) as string)
                                   : (t(
-                                      "playground:composer.compareCanonicalOff",
-                                      "Pin as canonical"
+                                      "playground:composer.comparePrimaryOff",
+                                      "Use as main response"
                                     ) as string)
                               }
                               className={`rounded px-2 py-0.5 text-[10px] font-medium border transition ${
@@ -1177,12 +1530,12 @@ export const PlaygroundChat = () => {
                               {compareCanonicalByCluster[block.clusterId] ===
                               message.id
                                 ? t(
-                                    "playground:composer.compareCanonicalOn",
-                                    "Canonical"
+                                    "playground:composer.comparePrimaryOn",
+                                    "Main response"
                                   )
                                 : t(
-                                    "playground:composer.compareCanonicalOff",
-                                    "Pin as canonical"
+                                    "playground:composer.comparePrimaryOff",
+                                    "Use as main response"
                                   )}
                             </button>
                           )}
@@ -1221,7 +1574,7 @@ export const PlaygroundChat = () => {
                               )
                             : t(
                                 "playground:composer.compareChosenHint",
-                                "Continue with the chosen answer or compare again."
+                                "Continue with the selected answer or keep comparing."
                               )}
                         </span>
                         {compareModeActive ? (
@@ -1231,13 +1584,13 @@ export const PlaygroundChat = () => {
                               handleContinueWithModel(clusterActiveModels[0])
                             }
                             title={t(
-                              "playground:composer.compareContinue",
-                              "Continue with this model"
+                              "playground:composer.compareContinueWinner",
+                              "Continue with winner"
                             ) as string}
                             className="rounded border border-primary bg-primary px-2 py-0.5 text-[10px] font-medium text-white hover:bg-primaryStrong">
                             {t(
-                              "playground:composer.compareContinue",
-                              "Continue with this model"
+                              "playground:composer.compareContinueWinner",
+                              "Continue with winner"
                             )}
                           </button>
                         ) : (
@@ -1246,8 +1599,8 @@ export const PlaygroundChat = () => {
                             onClick={handleCompareAgain}
                             disabled={!compareFeatureEnabled}
                             title={t(
-                              "playground:composer.compareButton",
-                              "Compare models"
+                              "playground:composer.compareKeepComparing",
+                              "Keep comparing"
                             ) as string}
                             className={`rounded border border-primary px-2 py-0.5 text-[10px] font-medium ${
                               compareFeatureEnabled
@@ -1255,8 +1608,8 @@ export const PlaygroundChat = () => {
                                 : "border-primary/40 bg-surface text-text-subtle cursor-not-allowed opacity-60"
                             }`}>
                             {t(
-                              "playground:composer.compareButton",
-                              "Compare models"
+                              "playground:composer.compareKeepComparing",
+                              "Keep comparing"
                             )}
                           </button>
                         )}
@@ -1269,6 +1622,25 @@ export const PlaygroundChat = () => {
                         )}
                       </div>
                     )}
+                    <div className="mt-2 flex items-center gap-2 text-[10px] text-text-subtle">
+                      <span className="font-medium">
+                        {t(
+                          "playground:composer.compareContinuationLabel",
+                          "Continuation mode:"
+                        )}
+                      </span>
+                      <span className="rounded-full border border-border bg-surface px-2 py-0.5">
+                        {continuationMode === "compare"
+                          ? t(
+                              "playground:composer.compareContinuationCompare",
+                              "Keep comparing"
+                            )
+                          : t(
+                              "playground:composer.compareContinuationWinner",
+                              "Winner only"
+                            )}
+                      </span>
+                    </div>
                   </div>
                 )}
 
@@ -1289,8 +1661,8 @@ export const PlaygroundChat = () => {
                       <div className="mb-1 flex items-center gap-2 text-[11px] font-medium">
                         <span className="uppercase tracking-wide">
                           {t(
-                            "playground:composer.compareCanonicalLabel",
-                            "Canonical answer"
+                            "playground:composer.comparePrimaryLabel",
+                            "Main response"
                           )}
                         </span>
                         <span className="text-success/80">

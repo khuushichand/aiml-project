@@ -2,6 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { AddSourceModal } from "../SourcesPane/AddSourceModal"
 
+const ADD_SOURCE_TAB_USAGE_STORAGE_KEY =
+  "tldw:workspace-playground:add-source-tab-usage:v1"
+
 const {
   mockAddMedia,
   mockWebSearch,
@@ -78,6 +81,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 describe("AddSourceModal Stage 2 intake and relevance", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.removeItem(ADD_SOURCE_TAB_USAGE_STORAGE_KEY)
     workspaceStoreState.addSourceModalOpen = true
     workspaceStoreState.addSourceError = null
     workspaceStoreState.sources = []
@@ -101,6 +105,46 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
       "Paste",
       "Search"
     ])
+  })
+
+  it("reorders non-upload tabs based on prior usage frequency", async () => {
+    window.localStorage.setItem(
+      ADD_SOURCE_TAB_USAGE_STORAGE_KEY,
+      JSON.stringify({
+        upload: 0,
+        existing: 2,
+        url: 5,
+        paste: 1,
+        search: 9
+      })
+    )
+
+    render(<AddSourceModal />)
+
+    const tabLabels = screen
+      .getAllByRole("tab")
+      .map((tab) => tab.textContent?.replace(/\s+/g, " ").trim())
+
+    expect(tabLabels).toEqual([
+      "Upload",
+      "Search",
+      "URL",
+      "Library",
+      "Paste"
+    ])
+  })
+
+  it("persists updated tab usage when switching tabs", async () => {
+    render(<AddSourceModal />)
+
+    fireEvent.click(screen.getByRole("tab", { name: "Search" }))
+
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(ADD_SOURCE_TAB_USAGE_STORAGE_KEY)
+      expect(raw).toBeTruthy()
+      const parsed = JSON.parse(raw || "{}")
+      expect(parsed.search).toBeGreaterThan(0)
+    })
   })
 
   it("supports batch URL ingestion with per-URL status reporting", async () => {

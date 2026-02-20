@@ -172,7 +172,7 @@ export function AvatarField({
       } else {
         message.error(
           t("settings:manageCharacters.avatar.formatError", {
-            defaultValue: "Only PNG, JPEG, and GIF images are supported"
+            defaultValue: "Only PNG, JPEG, GIF, and WebP images are supported"
           })
         )
       }

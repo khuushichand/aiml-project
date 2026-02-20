@@ -60,15 +60,23 @@ import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { MentionsDropdown } from "./MentionsDropdown"
 import { ComposerTextarea } from "./ComposerTextarea"
-import { ComposerToolbar } from "./ComposerToolbar"
+import { ComposerToolbar, type ComposerContextItem } from "./ComposerToolbar"
+import { ContextFootprintPanel } from "./ContextFootprintPanel"
+import { CompareToggle } from "./CompareToggle"
+import { detectCurrentPreset, getPresetByKey } from "./ParameterPresets"
+import {
+  buildCompareModelMetaById,
+  compareModelsSupportCapability as compareModelsSupportCapabilityCheck,
+  getCompareCapabilityIncompatibilities
+} from "./compare-preflight"
+import { useMobileComposerViewport } from "./useMobileComposerViewport"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
-import { PromptSelect } from "@/components/Common/PromptSelect"
 import { useConnectionState } from "@/hooks/useConnectionState"
-import { ConnectionPhase } from "@/types/connection"
+import { ConnectionPhase, deriveConnectionUxState } from "@/types/connection"
 import { Link, useNavigate } from "react-router-dom"
 import { fetchChatModels, fetchImageModels } from "@/services/tldw-server"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -98,17 +106,16 @@ import { BetaTag } from "@/components/Common/Beta"
 import type { SlashCommandItem } from "@/components/Sidepanel/Chat/SlashCommandMenu"
 import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
 import { useUiModeStore } from "@/store/ui-mode"
-import { useStoreChatModelSettings } from "@/store/model"
+import {
+  useStoreChatModelSettings,
+  type ChatModelSettings
+} from "@/store/model"
+import type { Prompt } from "@/db/dexie/types"
+import { getAllPrompts } from "@/db/dexie/helpers"
 import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
 import { VoiceChatIndicator } from "./VoiceChatIndicator"
 import { VoiceModeSelector } from "./VoiceModeSelector"
-import {
-  ParameterPresets,
-  SystemPromptTemplatesButton,
-  SessionCostEstimation,
-  type PromptTemplate
-} from "./playground-features"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { clearSetting, getSetting } from "@/services/settings/registry"
 import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
@@ -138,9 +145,58 @@ import {
   type ModelSortMode
 } from "@/hooks/playground"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
+import { formatCost } from "@/utils/model-pricing"
+import {
+  aggregateSessionUsage,
+  projectTokenBudget
+} from "./usage-metrics"
+import {
+  createStartupTemplateBundle,
+  describeStartupTemplatePrompt,
+  inferStartupTemplatePromptSource,
+  parseStartupTemplateBundles,
+  removeStartupTemplateBundle,
+  resolveStartupTemplatePrompt,
+  sanitizeStartupTemplateName,
+  serializeStartupTemplateBundles,
+  upsertStartupTemplateBundle,
+  type StartupTemplateBundle
+} from "./startup-template-bundles"
 
 type Props = {
   droppedFiles: File[]
+}
+
+const CONTEXT_FOOTPRINT_THRESHOLD_PERCENT = 40
+
+const estimateTokensFromText = (value: string): number => {
+  const normalized = value.trim()
+  if (!normalized) return 0
+  return Math.max(1, Math.ceil(normalized.length / 4))
+}
+
+const collectStringSegments = (
+  value: unknown,
+  segments: string[],
+  depth = 0
+) => {
+  if (depth > 4 || value == null) return
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (trimmed.length > 0) {
+      segments.push(trimmed)
+    }
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectStringSegments(entry, segments, depth + 1))
+    return
+  }
+  if (typeof value === "object") {
+    Object.values(value as Record<string, unknown>).forEach((entry) =>
+      collectStringSegments(entry, segments, depth + 1)
+    )
+  }
 }
 
 export const PlaygroundForm = ({ droppedFiles }: Props) => {
@@ -220,9 +276,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ragMediaIds
   } = useMessageOption()
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
+  const setRagPinnedResults = useStoreMessageOption((s) => s.setRagPinnedResults)
 
   const [autoSubmitVoiceMessage] = useStorage("autoSubmitVoiceMessage", false)
   const isMobileViewport = useMobile()
+  const mobileComposerViewport = useMobileComposerViewport(isMobileViewport)
   const [openModelSettings, setOpenModelSettings] = React.useState(false)
   const [openActorSettings, setOpenActorSettings] = React.useState(false)
   const systemPrompt = useStoreChatModelSettings((state) => state.systemPrompt)
@@ -233,8 +291,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     temperature: state.temperature,
     numPredict: state.numPredict,
     topP: state.topP,
+    topK: state.topK,
     frequencyPenalty: state.frequencyPenalty,
     presencePenalty: state.presencePenalty,
+    repeatPenalty: state.repeatPenalty,
     reasoningEffort: state.reasoningEffort,
     historyMessageLimit: state.historyMessageLimit,
     historyMessageOrder: state.historyMessageOrder,
@@ -248,6 +308,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const updateChatModelSetting = useStoreChatModelSettings(
     (state) => state.updateSetting
   )
+  const updateChatModelSettings = useStoreChatModelSettings(
+    (state) => state.updateSettings
+  )
+  const { data: promptLibrary = [] } = useQuery({
+    queryKey: ["playgroundStartupPromptLibrary"],
+    queryFn: getAllPrompts
+  })
   const {
     voiceChatEnabled,
     setVoiceChatEnabled,
@@ -273,7 +340,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setVoiceChatTriggerInput((prev) => (prev === next ? prev : next))
   }, [voiceChatTriggerPhrases])
 
-  const { phase, isConnected } = useConnectionState()
+  const connectionState = useConnectionState()
+  const { phase, isConnected } = connectionState
+  const connectionUxState = React.useMemo(
+    () => deriveConnectionUxState(connectionState),
+    [connectionState]
+  )
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const {
@@ -354,6 +426,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [contextWindowDraftValue, setContextWindowDraftValue] = React.useState<
     number | undefined
   >(undefined)
+  const [modeLauncherOpen, setModeLauncherOpen] = React.useState(false)
+  const [modeAnnouncement, setModeAnnouncement] = React.useState<string | null>(
+    null
+  )
+  const previousPresetKeyRef = React.useRef<string | null>(null)
+  const previousJsonModeRef = React.useRef<boolean | null>(null)
+  const previousCharacterNameRef = React.useRef<string | null>(null)
   const [toolsPopoverOpen, setToolsPopoverOpen] = React.useState(false)
   const [attachmentMenuOpen, setAttachmentMenuOpen] = React.useState(false)
   const [sendMenuOpen, setSendMenuOpen] = React.useState(false)
@@ -382,7 +461,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   const [sttSegEmbeddingsProvider] = useStorage("sttSegEmbeddingsProvider", "")
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
-  const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
+  const [selectedCharacter, setSelectedCharacter] =
+    useSelectedCharacter<Character | null>(null)
+  const [startupTemplatesRaw, setStartupTemplatesRaw] = useStorage(
+    "playgroundStartupTemplateBundles",
+    "[]"
+  )
+  const [startupTemplateDraftName, setStartupTemplateDraftName] =
+    React.useState("")
+  const [startupTemplatePreview, setStartupTemplatePreview] =
+    React.useState<StartupTemplateBundle | null>(null)
   const [serverPersistenceHintSeen, setServerPersistenceHintSeen] = useStorage(
     "serverPersistenceHintSeen",
     false
@@ -408,6 +496,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     React.useState<KnowledgeTab>("search")
   const [knowledgePanelTabRequestId, setKnowledgePanelTabRequestId] =
     React.useState(0)
+  const [lastSubmittedContext, setLastSubmittedContext] = React.useState<{
+    model: string | null
+    compareEnabled: boolean
+    compareCount: number
+    characterName: string | null
+    promptSummary: string
+    jsonMode: boolean
+    temporaryChat: boolean
+    webSearch: boolean
+    contextToolsOpen: boolean
+  } | null>(null)
   const replyLabel = replyTarget
     ? [
         t("common:replyingTo", "Replying to"),
@@ -426,6 +525,25 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       window.removeEventListener("tldw:open-actor-settings", handler)
     }
   }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = () => setOpenModelSettings(true)
+    window.addEventListener("tldw:open-model-settings", handler)
+    return () => {
+      window.removeEventListener("tldw:open-model-settings", handler)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (!modeAnnouncement) return
+    const timer = window.setTimeout(() => {
+      setModeAnnouncement(null)
+    }, 3000)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [modeAnnouncement])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -549,6 +667,122 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   ])
 
   const compareModeActive = compareFeatureEnabled && compareMode
+  const compareModelMetaById = React.useMemo(() => {
+    return buildCompareModelMetaById((composerModels as any[]) || [])
+  }, [composerModels])
+  const availableCompareModels = React.useMemo(
+    () =>
+      ((composerModels as any[]) || [])
+        .filter((model) => model?.model)
+        .map((model) => ({
+          model: String(model.model),
+          nickname:
+            typeof model.nickname === "string" ? model.nickname : undefined,
+          provider:
+            typeof model.provider === "string" ? model.provider : undefined
+        })),
+    [composerModels]
+  )
+  const compareModelLabelById = React.useMemo(() => {
+    return new Map(
+      availableCompareModels.map((model) => [
+        model.model,
+        model.nickname || model.model
+      ])
+    )
+  }, [availableCompareModels])
+  const compareSelectedModelLabels = React.useMemo(
+    () =>
+      compareSelectedModels.map(
+        (modelId) => compareModelLabelById.get(modelId) || modelId
+      ),
+    [compareModelLabelById, compareSelectedModels]
+  )
+  const compareNeedsMoreModels =
+    compareModeActive && compareSelectedModels.length < 2
+  const compareModelsSupportCapability = React.useCallback(
+    (modelIds: string[], capability: string) => {
+      return compareModelsSupportCapabilityCheck(
+        modelIds,
+        capability,
+        compareModelMetaById
+      )
+    },
+    [compareModelMetaById]
+  )
+  const compareCapabilityIncompatibilities = React.useMemo(() => {
+    if (!compareModeActive || compareSelectedModels.length < 2) return []
+    return getCompareCapabilityIncompatibilities({
+      modelIds: compareSelectedModels,
+      modelMetaById: compareModelMetaById,
+      labels: {
+        vision: t(
+          "playground:composer.compareIncompatVision",
+          "Mixed vision support"
+        ),
+        tools: t(
+          "playground:composer.compareIncompatTools",
+          "Mixed tool support"
+        ),
+        streaming: t(
+          "playground:composer.compareIncompatStreaming",
+          "Mixed streaming behavior"
+        ),
+        context: t(
+          "playground:composer.compareIncompatContext",
+          "Large context-window differences"
+        )
+      }
+    })
+  }, [
+    compareModeActive,
+    compareModelMetaById,
+    compareSelectedModels,
+    t
+  ])
+  const toggleCompareMode = React.useCallback(() => {
+    if (!compareFeatureEnabled) {
+      return
+    }
+    const next = !compareModeActive
+    setCompareMode(next)
+    if (
+      next &&
+      compareSelectedModels.length === 0 &&
+      selectedModel
+    ) {
+      setCompareSelectedModels([selectedModel])
+    }
+  }, [
+    compareFeatureEnabled,
+    compareModeActive,
+    compareSelectedModels.length,
+    selectedModel,
+    setCompareMode,
+    setCompareSelectedModels
+  ])
+  const handleAddCompareModel = React.useCallback(
+    (modelId: string) => {
+      if (!modelId) return
+      if (compareSelectedModels.includes(modelId)) return
+      if (compareSelectedModels.length >= compareMaxModels) return
+      setCompareSelectedModels([...compareSelectedModels, modelId])
+    },
+    [
+      compareMaxModels,
+      compareSelectedModels,
+      setCompareSelectedModels
+    ]
+  )
+  const handleRemoveCompareModel = React.useCallback(
+    (modelId: string) => {
+      if (!modelId) return
+      setCompareSelectedModels(
+        compareSelectedModels.filter((id) => id !== modelId)
+      )
+    },
+    [compareSelectedModels, setCompareSelectedModels]
+  )
   const availableChatModelIds = React.useMemo(
     () => buildAvailableChatModelIds(Array.isArray(composerModels) ? (composerModels as any[]) : []),
     [composerModels]
@@ -577,13 +811,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [composerModels, t])
 
   const sendLabel = React.useMemo(() => {
+    if (compareNeedsMoreModels) {
+      return t(
+        "playground:composer.compareAddModelToSend",
+        "Add one more model"
+      )
+    }
     if (compareModeActive && compareSelectedModels.length > 1) {
       return t("playground:composer.compareSendToModels", "Send to {{count}} models", {
         count: compareSelectedModels.length
       })
     }
     return t("common:send", "Send")
-  }, [compareModeActive, compareSelectedModels.length, t])
+  }, [
+    compareModeActive,
+    compareNeedsMoreModels,
+    compareSelectedModels.length,
+    t
+  ])
 
   const promptSummaryLabel = React.useMemo(() => {
     if (selectedSystemPrompt) {
@@ -603,6 +848,331 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       "No prompt"
     )
   }, [selectedQuickPrompt, selectedSystemPrompt, t])
+  const currentPresetKey = React.useMemo(
+    () =>
+      detectCurrentPreset(
+        currentChatModelSettings as unknown as ChatModelSettings
+      ),
+    [currentChatModelSettings]
+  )
+  const currentPreset = React.useMemo(
+    () => getPresetByKey(currentPresetKey),
+    [currentPresetKey]
+  )
+  React.useEffect(() => {
+    if (previousPresetKeyRef.current == null) {
+      previousPresetKeyRef.current = currentPresetKey
+      return
+    }
+    if (previousPresetKeyRef.current !== currentPresetKey) {
+      if (currentPresetKey === "custom") {
+        setModeAnnouncement(
+          t(
+            "playground:composer.presetChangedCustom",
+            "Preset switched to Custom."
+          )
+        )
+      } else {
+        const presetLabel = currentPreset
+          ? t(`playground:presets.${currentPreset.key}.label`, currentPreset.label)
+          : currentPresetKey
+        setModeAnnouncement(
+          t("playground:composer.presetChanged", "{{preset}} preset applied.", {
+            preset: presetLabel
+          } as any)
+        )
+      }
+    }
+    previousPresetKeyRef.current = currentPresetKey
+  }, [currentPreset, currentPresetKey, t])
+  const isJsonModeActive = Boolean(currentChatModelSettings.jsonMode)
+  React.useEffect(() => {
+    if (previousJsonModeRef.current == null) {
+      previousJsonModeRef.current = isJsonModeActive
+      return
+    }
+    if (previousJsonModeRef.current !== isJsonModeActive) {
+      setModeAnnouncement(
+        isJsonModeActive
+          ? t("playground:composer.jsonModeEnabledNotice", "JSON mode enabled.")
+          : t("playground:composer.jsonModeDisabledNotice", "JSON mode disabled.")
+      )
+    }
+    previousJsonModeRef.current = isJsonModeActive
+  }, [isJsonModeActive, t])
+  React.useEffect(() => {
+    const currentCharacterName =
+      typeof selectedCharacter?.name === "string" &&
+      selectedCharacter.name.trim().length > 0
+        ? selectedCharacter.name.trim()
+        : null
+    if (previousCharacterNameRef.current == null) {
+      previousCharacterNameRef.current = currentCharacterName
+      return
+    }
+    if (currentCharacterName !== previousCharacterNameRef.current) {
+      setModeAnnouncement(
+        currentCharacterName
+          ? t(
+              "playground:composer.characterAppliesNextTurn",
+              "Character updates apply on the next turn."
+            )
+          : t(
+              "playground:composer.characterClearedNotice",
+              "Character mode cleared."
+            )
+      )
+    }
+    previousCharacterNameRef.current = currentCharacterName
+  }, [selectedCharacter?.name, t])
+  const connectionStatusLabel = React.useMemo(() => {
+    if (!isConnectionReady) {
+      return t("playground:composer.providerStatusOffline", "Offline")
+    }
+    if (connectionUxState === "connected_degraded") {
+      return t("playground:composer.providerStatusDegraded", "Degraded")
+    }
+    return t("playground:composer.providerStatusHealthy", "Healthy")
+  }, [connectionUxState, isConnectionReady, t])
+  const currentContextSnapshot = React.useMemo(
+    () => ({
+      model: selectedModel || null,
+      compareEnabled: compareModeActive,
+      compareCount: compareSelectedModels.length,
+      characterName: selectedCharacter?.name || null,
+      promptSummary: promptSummaryLabel,
+      jsonMode: Boolean(currentChatModelSettings.jsonMode),
+      temporaryChat,
+      webSearch,
+      contextToolsOpen
+    }),
+    [
+      compareModeActive,
+      compareSelectedModels.length,
+      contextToolsOpen,
+      currentChatModelSettings.jsonMode,
+      promptSummaryLabel,
+      selectedCharacter?.name,
+      selectedModel,
+      temporaryChat,
+      webSearch
+    ]
+  )
+  const contextDeltaLabels = React.useMemo(() => {
+    if (!lastSubmittedContext) return []
+    const deltas: string[] = []
+    if (lastSubmittedContext.model !== currentContextSnapshot.model) {
+      deltas.push(t("playground:composer.delta.model", "Model changed"))
+    }
+    if (
+      lastSubmittedContext.compareEnabled !== currentContextSnapshot.compareEnabled ||
+      lastSubmittedContext.compareCount !== currentContextSnapshot.compareCount
+    ) {
+      deltas.push(t("playground:composer.delta.compare", "Compare settings changed"))
+    }
+    if (
+      lastSubmittedContext.characterName !== currentContextSnapshot.characterName
+    ) {
+      deltas.push(t("playground:composer.delta.character", "Character changed"))
+    }
+    if (lastSubmittedContext.promptSummary !== currentContextSnapshot.promptSummary) {
+      deltas.push(t("playground:composer.delta.prompt", "Prompt settings changed"))
+    }
+    if (lastSubmittedContext.jsonMode !== currentContextSnapshot.jsonMode) {
+      deltas.push(t("playground:composer.delta.json", "JSON mode changed"))
+    }
+    if (lastSubmittedContext.temporaryChat !== currentContextSnapshot.temporaryChat) {
+      deltas.push(t("playground:composer.delta.temporary", "Save mode changed"))
+    }
+    if (lastSubmittedContext.webSearch !== currentContextSnapshot.webSearch) {
+      deltas.push(t("playground:composer.delta.webSearch", "Web search changed"))
+    }
+    if (lastSubmittedContext.contextToolsOpen !== currentContextSnapshot.contextToolsOpen) {
+      deltas.push(t("playground:composer.delta.knowledge", "Knowledge panel state changed"))
+    }
+    return deltas
+  }, [currentContextSnapshot, lastSubmittedContext, t])
+  const characterPendingApply = React.useMemo(() => {
+    const currentName =
+      typeof selectedCharacter?.name === "string"
+        ? selectedCharacter.name.trim()
+        : ""
+    const previousName =
+      typeof lastSubmittedContext?.characterName === "string"
+        ? lastSubmittedContext.characterName.trim()
+        : ""
+    if (!currentName) return false
+    if (!lastSubmittedContext) return false
+    return currentName !== previousName
+  }, [lastSubmittedContext, selectedCharacter?.name])
+  const selectedCharacterGreeting = React.useMemo(() => {
+    const raw =
+      typeof selectedCharacter?.greeting === "string"
+        ? selectedCharacter.greeting
+        : ""
+    const trimmed = raw.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }, [selectedCharacter?.greeting])
+  const startupTemplates = React.useMemo(
+    () => parseStartupTemplateBundles(startupTemplatesRaw),
+    [startupTemplatesRaw]
+  )
+  const selectedSystemPromptRecord = React.useMemo<Prompt | null>(() => {
+    if (!selectedSystemPrompt) return null
+    return (
+      promptLibrary.find((prompt) => prompt.id === selectedSystemPrompt) || null
+    )
+  }, [promptLibrary, selectedSystemPrompt])
+  const startupTemplateNameFallback = React.useMemo(() => {
+    const nameParts = [
+      selectedCharacter?.name?.trim(),
+      currentPreset && currentPreset.key !== "custom"
+        ? t(`playground:presets.${currentPreset.key}.label`, currentPreset.label)
+        : null,
+      selectedModel
+    ].filter((part): part is string => Boolean(part && part.trim().length > 0))
+    if (nameParts.length > 0) {
+      return sanitizeStartupTemplateName(
+        `${nameParts.join(" · ")} template`,
+        "New startup template"
+      )
+    }
+    return "New startup template"
+  }, [currentPreset, selectedCharacter?.name, selectedModel, t])
+  const persistStartupTemplates = React.useCallback(
+    (nextTemplates: StartupTemplateBundle[]) => {
+      setStartupTemplatesRaw(serializeStartupTemplateBundles(nextTemplates))
+    },
+    [setStartupTemplatesRaw]
+  )
+  const handleSaveStartupTemplate = React.useCallback(() => {
+    const trimmedSystemPrompt = String(systemPrompt || "").trim()
+    const promptSource = inferStartupTemplatePromptSource(
+      selectedSystemPromptRecord,
+      trimmedSystemPrompt.length > 0
+    )
+    const templateName = sanitizeStartupTemplateName(
+      startupTemplateDraftName,
+      startupTemplateNameFallback
+    )
+    const nextTemplate = createStartupTemplateBundle({
+      name: templateName,
+      selectedModel,
+      systemPrompt: trimmedSystemPrompt,
+      selectedSystemPromptId: selectedSystemPrompt || null,
+      promptStudioPromptId:
+        selectedSystemPromptRecord?.studioPromptId ??
+        selectedSystemPromptRecord?.serverId ??
+        null,
+      promptTitle: selectedSystemPromptRecord?.title || null,
+      promptSource,
+      presetKey: currentPresetKey,
+      character: selectedCharacter || null,
+      ragPinnedResults
+    })
+    const nextTemplates = upsertStartupTemplateBundle(startupTemplates, nextTemplate)
+    persistStartupTemplates(nextTemplates)
+    setStartupTemplateDraftName(templateName)
+    setModeAnnouncement(
+      t(
+        "playground:composer.startupTemplateSavedNotice",
+        "Startup template saved."
+      )
+    )
+  }, [
+    currentPresetKey,
+    persistStartupTemplates,
+    ragPinnedResults,
+    selectedCharacter,
+    selectedModel,
+    selectedSystemPrompt,
+    selectedSystemPromptRecord,
+    startupTemplateDraftName,
+    startupTemplateNameFallback,
+    startupTemplates,
+    systemPrompt,
+    t
+  ])
+  const handleOpenStartupTemplatePreview = React.useCallback(
+    (templateId: string) => {
+      const template = startupTemplates.find((entry) => entry.id === templateId) || null
+      setStartupTemplatePreview(template)
+    },
+    [startupTemplates]
+  )
+  const handleApplyStartupTemplate = React.useCallback(() => {
+    if (!startupTemplatePreview) return
+
+    const promptResolution = resolveStartupTemplatePrompt(
+      startupTemplatePreview,
+      promptLibrary
+    )
+    const resolvedPromptContent =
+      promptResolution.prompt?.content ?? startupTemplatePreview.systemPrompt
+    const resolvedPromptId = promptResolution.prompt?.id || null
+
+    if (startupTemplatePreview.selectedModel) {
+      setSelectedModel(startupTemplatePreview.selectedModel)
+      if (compareModeActive) {
+        setCompareSelectedModels([startupTemplatePreview.selectedModel])
+      }
+    }
+
+    if (resolvedPromptId) {
+      setSelectedSystemPrompt(resolvedPromptId)
+    } else {
+      setSelectedSystemPrompt(undefined)
+    }
+    setSystemPrompt(resolvedPromptContent)
+
+    const preset = getPresetByKey(startupTemplatePreview.presetKey)
+    if (preset && preset.key !== "custom") {
+      updateChatModelSettings(preset.settings)
+    }
+
+    void setSelectedCharacter(startupTemplatePreview.character || null)
+    setRagPinnedResults(startupTemplatePreview.ragPinnedResults || [])
+    setStartupTemplatePreview(null)
+    setModeAnnouncement(
+      t(
+        "playground:composer.startupTemplateAppliedNotice",
+        "Startup template applied."
+      )
+    )
+  }, [
+    compareModeActive,
+    promptLibrary,
+    setCompareSelectedModels,
+    setRagPinnedResults,
+    setSelectedCharacter,
+    setSelectedModel,
+    setSelectedSystemPrompt,
+    setSystemPrompt,
+    startupTemplatePreview,
+    t,
+    updateChatModelSettings
+  ])
+  const handleDeleteStartupTemplate = React.useCallback(
+    (templateId: string) => {
+      const nextTemplates = removeStartupTemplateBundle(startupTemplates, templateId)
+      persistStartupTemplates(nextTemplates)
+      if (startupTemplatePreview?.id === templateId) {
+        setStartupTemplatePreview(null)
+      }
+      setModeAnnouncement(
+        t(
+          "playground:composer.startupTemplateRemovedNotice",
+          "Startup template removed."
+        )
+      )
+    },
+    [
+      persistStartupTemplates,
+      startupTemplatePreview?.id,
+      startupTemplates,
+      t
+    ]
+  )
 
   // Enable focus shortcuts (Shift+Esc to focus textarea)
   useFocusShortcuts(textareaRef, true)
@@ -739,7 +1309,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     conversationTokenCount,
     tokenUsageLabel,
     tokenUsageCompactLabel,
-    tokenUsageTooltip
+    tokenUsageTooltip,
+    estimateTokensForText
   } = useComposerTokens({
     message: form.values.message || "",
     messages,
@@ -751,6 +1322,158 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const tokenUsageDisplay = isProMode
     ? tokenUsageLabel
     : tokenUsageCompactLabel
+  const sessionUsageSummary = React.useMemo(
+    () => aggregateSessionUsage(messages as any[], selectedModel, resolvedProviderKey),
+    [messages, resolvedProviderKey, selectedModel]
+  )
+  const sessionUsageLabel = React.useMemo(() => {
+    const tokenPart = t("playground:tokens.total", "tokens")
+    const base = `${sessionUsageSummary.totalTokens.toLocaleString()} ${tokenPart}`
+    if (sessionUsageSummary.estimatedCostUsd == null) {
+      return base
+    }
+    return `${base} (${formatCost(sessionUsageSummary.estimatedCostUsd)})`
+  }, [sessionUsageSummary.estimatedCostUsd, sessionUsageSummary.totalTokens, t])
+  const projectedBudget = React.useMemo(
+    () =>
+      projectTokenBudget({
+        conversationTokens: conversationTokenCount,
+        draftTokens: draftTokenCount,
+        maxTokens: resolvedMaxContext
+      }),
+    [conversationTokenCount, draftTokenCount, resolvedMaxContext]
+  )
+  const showTokenBudgetWarning =
+    projectedBudget.isOverLimit || projectedBudget.isNearLimit
+  const tokenBudgetWarningText = React.useMemo(() => {
+    if (!showTokenBudgetWarning) return null
+    if (projectedBudget.isOverLimit) {
+      return t(
+        "playground:tokens.preSendOverLimit",
+        "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
+      )
+    }
+    return t(
+      "playground:tokens.preSendNearLimit",
+      "Projected send is near the context window limit."
+    )
+  }, [projectedBudget.isOverLimit, showTokenBudgetWarning, t])
+  const characterContextTokenEstimate = React.useMemo(() => {
+    if (!selectedCharacter) return 0
+    const segments: string[] = []
+    collectStringSegments(selectedCharacter.name, segments)
+    collectStringSegments(selectedCharacter.title, segments)
+    collectStringSegments(selectedCharacter.system_prompt, segments)
+    collectStringSegments(selectedCharacter.greeting, segments)
+    collectStringSegments(selectedCharacter.extensions, segments)
+    const unique = Array.from(new Set(segments))
+    if (unique.length === 0) return 0
+    return unique.reduce(
+      (total, segment) => total + estimateTokensFromText(segment),
+      0
+    )
+  }, [selectedCharacter])
+  const systemPromptTokenEstimate = React.useMemo(() => {
+    const promptSegments = [
+      String(systemPrompt || ""),
+      String(selectedQuickPrompt || ""),
+      String(selectedSystemPrompt || "")
+    ]
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    if (promptSegments.length === 0) return 0
+    return promptSegments.reduce(
+      (total, segment) => total + estimateTokensFromText(segment),
+      0
+    )
+  }, [selectedQuickPrompt, selectedSystemPrompt, systemPrompt])
+  const pinnedSourceTokenEstimate = React.useMemo(() => {
+    if (!Array.isArray(ragPinnedResults) || ragPinnedResults.length === 0) {
+      return 0
+    }
+    return ragPinnedResults.reduce((total, result) => {
+      const snippet =
+        typeof result?.snippet === "string" ? result.snippet : ""
+      const title = typeof result?.title === "string" ? result.title : ""
+      const sourceLine = typeof result?.source === "string" ? result.source : ""
+      const payload = [title, snippet, sourceLine].filter(Boolean).join("\n")
+      return total + estimateTokensFromText(payload)
+    }, 0)
+  }, [ragPinnedResults])
+  const historyTokenEstimate = React.useMemo(() => {
+    if (!Array.isArray(messages) || messages.length === 0) return 0
+    return messages.reduce((total, entry) => {
+      const text =
+        typeof entry?.message === "string" ? entry.message : ""
+      return total + estimateTokensFromText(text)
+    }, 0)
+  }, [messages])
+  const contextFootprintRows = React.useMemo(
+    () => [
+      {
+        id: "character",
+        label: t("playground:tokens.breakdown.character", "Character + world book"),
+        tokens: characterContextTokenEstimate
+      },
+      {
+        id: "prompt",
+        label: t("playground:tokens.breakdown.prompt", "System/prompt steering"),
+        tokens: systemPromptTokenEstimate
+      },
+      {
+        id: "pinned",
+        label: t("playground:tokens.breakdown.pinned", "Pinned sources"),
+        tokens: pinnedSourceTokenEstimate
+      },
+      {
+        id: "history",
+        label: t("playground:tokens.breakdown.history", "Chat history"),
+        tokens: historyTokenEstimate
+      },
+      {
+        id: "draft",
+        label: t("playground:tokens.breakdown.draft", "Current draft"),
+        tokens: draftTokenCount
+      }
+    ],
+    [
+      characterContextTokenEstimate,
+      draftTokenCount,
+      historyTokenEstimate,
+      pinnedSourceTokenEstimate,
+      systemPromptTokenEstimate,
+      t
+    ]
+  )
+  const nonMessageContextTokenEstimate = React.useMemo(
+    () =>
+      characterContextTokenEstimate +
+      systemPromptTokenEstimate +
+      pinnedSourceTokenEstimate,
+    [
+      characterContextTokenEstimate,
+      pinnedSourceTokenEstimate,
+      systemPromptTokenEstimate
+    ]
+  )
+  const nonMessageContextPercent = React.useMemo(() => {
+    if (
+      typeof resolvedMaxContext !== "number" ||
+      !Number.isFinite(resolvedMaxContext) ||
+      resolvedMaxContext <= 0
+    ) {
+      return null
+    }
+    return (nonMessageContextTokenEstimate / resolvedMaxContext) * 100
+  }, [nonMessageContextTokenEstimate, resolvedMaxContext])
+  const showNonMessageContextWarning =
+    typeof nonMessageContextPercent === "number" &&
+    nonMessageContextPercent > CONTEXT_FOOTPRINT_THRESHOLD_PERCENT
+  const largestContextContributor = React.useMemo(() => {
+    return contextFootprintRows
+      .filter((entry) => entry.tokens > 0)
+      .sort((left, right) => right.tokens - left.tokens)[0]
+  }, [contextFootprintRows])
   const contextWindowFormatter = React.useMemo(() => new Intl.NumberFormat(), [])
   const formatContextWindowValue = React.useCallback(
     (value: number | null | undefined) => {
@@ -807,6 +1530,40 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     setContextWindowDraftValue(undefined)
   }, [modelContextLength, updateChatModelSetting])
+  const clearPromptContext = React.useCallback(() => {
+    setSelectedQuickPrompt(null)
+    setSelectedSystemPrompt("")
+    setSystemPrompt("")
+  }, [setSelectedQuickPrompt, setSelectedSystemPrompt, setSystemPrompt])
+  const clearPinnedSourceContext = React.useCallback(() => {
+    setRagPinnedResults([])
+  }, [setRagPinnedResults])
+  const clearHistoryContext = React.useCallback(() => {
+    clearChat()
+  }, [clearChat])
+  const trimLargestContextContributor = React.useCallback(() => {
+    if (!largestContextContributor) return
+    if (largestContextContributor.id === "character") {
+      setOpenActorSettings(true)
+      return
+    }
+    if (largestContextContributor.id === "prompt") {
+      clearPromptContext()
+      return
+    }
+    if (largestContextContributor.id === "pinned") {
+      clearPinnedSourceContext()
+      return
+    }
+    if (largestContextContributor.id === "history") {
+      clearHistoryContext()
+    }
+  }, [
+    clearHistoryContext,
+    clearPinnedSourceContext,
+    clearPromptContext,
+    largestContextContributor
+  ])
 
   const {
     imageBackendDefault: imageBackendDefaultTrimmed,
@@ -898,6 +1655,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           <span className="truncate max-w-[120px]">
             {apiModelLabel}
           </span>
+          <span
+            className={`rounded-full px-1.5 py-0.5 text-[9px] ${
+              !isConnectionReady || connectionUxState === "connected_degraded"
+                ? "bg-warn/10 text-warn"
+                : "bg-success/10 text-success"
+            }`}
+            title={t(
+              "playground:composer.providerStatusTooltip",
+              "Provider status"
+            ) as string}
+          >
+            {connectionStatusLabel}
+          </span>
         </button>
       </Tooltip>
     </Dropdown>
@@ -911,6 +1681,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       modelLabel={isProMode ? apiModelLabel : undefined}
       compact={!isProMode}
       onClick={openContextWindowModal}
+    />
+  )
+  const compareControl = (
+    <CompareToggle
+      featureEnabled={compareFeatureEnabled}
+      active={compareModeActive}
+      onToggle={toggleCompareMode}
+      selectedModels={compareSelectedModels}
+      availableModels={availableCompareModels}
+      maxModels={compareMaxModels}
+      onAddModel={handleAddCompareModel}
+      onRemoveModel={handleRemoveCompareModel}
+      onOpenSettings={() => setOpenModelSettings(true)}
     />
   )
   const imageProviderControl = (
@@ -970,6 +1753,28 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     window.addEventListener('tldw:set-composer-message', handler as EventListener)
     return () => window.removeEventListener('tldw:set-composer-message', handler as EventListener)
   }, [form])
+
+  React.useEffect(() => {
+    const handleToggleCompareMode = () => {
+      toggleCompareMode()
+    }
+    const handleToggleModeLauncher = () => {
+      setModeLauncherOpen((prev) => !prev)
+    }
+
+    window.addEventListener("tldw:toggle-compare-mode", handleToggleCompareMode)
+    window.addEventListener("tldw:toggle-mode-launcher", handleToggleModeLauncher)
+    return () => {
+      window.removeEventListener(
+        "tldw:toggle-compare-mode",
+        handleToggleCompareMode
+      )
+      window.removeEventListener(
+        "tldw:toggle-mode-launcher",
+        handleToggleModeLauncher
+      )
+    }
+  }, [toggleCompareMode])
 
   const applyDiscussMediaPayload = React.useCallback(
     (
@@ -1857,18 +2662,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
             return
           }
-        } else if (!compareSelectedModels || compareSelectedModels.length === 0) {
+        } else if (
+          !compareSelectedModels ||
+          compareSelectedModels.length < 2
+        ) {
           form.setFieldError(
             "message",
             t(
-              "playground:composer.validationCompareSelectModelsInline",
-              "Select at least one model for Compare mode."
+              "playground:composer.validationCompareMinModelsInline",
+              "Select at least two models for Compare mode."
             )
           )
           return
         } else if (
           !validateSelectedChatModelsAvailability(compareSelectedModels)
         ) {
+          return
+        }
+        if (
+          compareModeActive &&
+          value.image.length > 0 &&
+          !compareModelsSupportCapability(compareSelectedModels, "vision")
+        ) {
+          form.setFieldError(
+            "message",
+            t(
+              "playground:composer.validationCompareVisionInline",
+              "One or more selected compare models do not support image input."
+            )
+          )
           return
         }
       }
@@ -1894,6 +2716,26 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       clearSelectedDocuments()
       clearUploadedFiles()
       textAreaFocus()
+      const projectedForSubmission = projectTokenBudget({
+        conversationTokens: conversationTokenCount,
+        draftTokens: estimateTokensForText(trimmed),
+        maxTokens: resolvedMaxContext
+      })
+      if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
+        notificationApi.warning({
+          message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
+          description: projectedForSubmission.isOverLimit
+            ? t(
+                "playground:tokens.preSendOverLimit",
+                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
+              )
+            : t(
+                "playground:tokens.preSendNearLimit",
+                "Projected send is near the context window limit."
+              )
+        })
+      }
+      setLastSubmittedContext(currentContextSnapshot)
       await sendMessage({
         image: intent.isImageCommand ? "" : value.image,
         message: trimmed,
@@ -1959,18 +2801,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
             return
           }
-        } else if (!compareSelectedModels || compareSelectedModels.length === 0) {
+        } else if (
+          !compareSelectedModels ||
+          compareSelectedModels.length < 2
+        ) {
           form.setFieldError(
             "message",
             t(
-              "playground:composer.validationCompareSelectModelsInline",
-              "Select at least one model for Compare mode."
+              "playground:composer.validationCompareMinModelsInline",
+              "Select at least two models for Compare mode."
             )
           )
           return
         } else if (
           !validateSelectedChatModelsAvailability(compareSelectedModels)
         ) {
+          return
+        }
+        if (
+          compareModeActive &&
+          image.length > 0 &&
+          !compareModelsSupportCapability(compareSelectedModels, "vision")
+        ) {
+          form.setFieldError(
+            "message",
+            t(
+              "playground:composer.validationCompareVisionInline",
+              "One or more selected compare models do not support image input."
+            )
+          )
           return
         }
       }
@@ -1995,6 +2854,26 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       clearSelectedDocuments()
       clearUploadedFiles()
       textAreaFocus()
+      const projectedForSubmission = projectTokenBudget({
+        conversationTokens: conversationTokenCount,
+        draftTokens: estimateTokensForText(trimmed),
+        maxTokens: resolvedMaxContext
+      })
+      if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
+        notificationApi.warning({
+          message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
+          description: projectedForSubmission.isOverLimit
+            ? t(
+                "playground:tokens.preSendOverLimit",
+                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
+              )
+            : t(
+                "playground:tokens.preSendNearLimit",
+                "Projected send is near the context window limit."
+              )
+        })
+      }
+      setLastSubmittedContext(currentContextSnapshot)
       await sendMessage({
         image: intent.isImageCommand ? "" : image,
         message: trimmed,
@@ -2378,6 +3257,111 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     },
     [contextToolsOpen, requestKnowledgePanelTab, setContextToolsOpen]
   )
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab?: KnowledgeTab }>).detail
+      const tab = detail?.tab === "context" ? "context" : "search"
+      openKnowledgePanel(tab)
+      setModeAnnouncement(
+        t("playground:starter.noticeKnowledge", "Opened Search & Context panel.")
+      )
+    }
+    window.addEventListener(
+      "tldw:open-knowledge-panel",
+      handler as EventListener
+    )
+    return () => {
+      window.removeEventListener(
+        "tldw:open-knowledge-panel",
+        handler as EventListener
+      )
+    }
+  }, [openKnowledgePanel, t])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ mode?: string; prompt?: string }>)
+        .detail
+      const mode = String(detail?.mode || "").trim().toLowerCase()
+      if (mode === "compare") {
+        if (!compareFeatureEnabled) {
+          notificationApi.warning({
+            message: t("playground:starter.compareUnavailable", "Compare mode unavailable")
+          })
+          return
+        }
+        setCompareMode(true)
+        if (selectedModel && compareSelectedModels.length === 0) {
+          setCompareSelectedModels([selectedModel])
+        }
+        setModeAnnouncement(
+          t(
+            "playground:starter.noticeCompare",
+            "Compare mode enabled. Select models and send your first prompt."
+          )
+        )
+        textAreaFocus()
+        return
+      }
+      if (mode === "character") {
+        setOpenActorSettings(true)
+        setModeAnnouncement(
+          t(
+            "playground:starter.noticeCharacter",
+            "Character mode starter selected. Choose a character before sending."
+          )
+        )
+        return
+      }
+      if (mode === "rag" || mode === "knowledge") {
+        setChatMode("rag")
+        openKnowledgePanel("search")
+        setModeAnnouncement(
+          t(
+            "playground:starter.noticeRag",
+            "Knowledge starter selected. Search and pin sources before sending."
+          )
+        )
+        if (detail?.prompt) {
+          form.setFieldValue("message", String(detail.prompt))
+        }
+        textAreaFocus()
+        return
+      }
+      if (detail?.prompt) {
+        form.setFieldValue("message", String(detail.prompt))
+      }
+      setModeAnnouncement(
+        t(
+          "playground:starter.noticeGeneral",
+          "General chat starter selected."
+        )
+      )
+      textAreaFocus()
+    }
+    window.addEventListener("tldw:playground-starter", handler as EventListener)
+    return () => {
+      window.removeEventListener(
+        "tldw:playground-starter",
+        handler as EventListener
+      )
+    }
+  }, [
+    compareFeatureEnabled,
+    compareSelectedModels.length,
+    form,
+    notificationApi,
+    openKnowledgePanel,
+    selectedModel,
+    setChatMode,
+    setCompareMode,
+    setCompareSelectedModels,
+    t,
+    textAreaFocus
+  ])
 
   const handleToggleWebSearch = React.useCallback(() => {
     setWebSearch(!webSearch)
@@ -3830,6 +4814,636 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     isConnectionReady
   })
 
+  const contextItems = React.useMemo<ComposerContextItem[]>(() => {
+    const items: ComposerContextItem[] = []
+    items.push({
+      id: "model",
+      label: t("playground:composer.context.model", "Model"),
+      value: selectedModel ? modelSummaryLabel : t("common:none", "None"),
+      tone: selectedModel ? "active" : "warning",
+      onClick: () => setModelDropdownOpen(true)
+    })
+    const capabilityLabels: string[] = []
+    if (modelCapabilities.includes("vision")) {
+      capabilityLabels.push(t("playground:composer.context.capabilityVision", "Vision"))
+    }
+    if (modelCapabilities.includes("tools")) {
+      capabilityLabels.push(t("playground:composer.context.capabilityTools", "Tools"))
+    }
+    if (modelCapabilities.includes("streaming")) {
+      capabilityLabels.push(t("playground:composer.context.capabilityStreaming", "Streaming"))
+    }
+    if (
+      typeof modelContextLength === "number" &&
+      Number.isFinite(modelContextLength) &&
+      modelContextLength > 0
+    ) {
+      capabilityLabels.push(
+        t("playground:composer.context.capabilityContext", {
+          defaultValue: "{{count}}k ctx",
+          count: Math.max(1, Math.round(modelContextLength / 1000))
+        } as any) as string
+      )
+    }
+    if (capabilityLabels.length > 0) {
+      items.push({
+        id: "modelCapabilities",
+        label: t("playground:composer.context.capabilities", "Capabilities"),
+        value: capabilityLabels.slice(0, 3).join(" • "),
+        tone: "neutral",
+        onClick: () => setOpenModelSettings(true)
+      })
+    }
+    items.push({
+      id: "providerStatus",
+      label: t("playground:composer.context.providerStatus", "Provider"),
+      value: connectionStatusLabel,
+      tone:
+        !isConnectionReady || connectionUxState === "connected_degraded"
+          ? "warning"
+          : "active",
+      onClick: focusConnectionCard
+    })
+
+    if (compareModeActive) {
+      items.push({
+        id: "compare",
+        label: t("playground:composer.context.compare", "Compare"),
+        value:
+          compareSelectedModels.length > 0
+            ? String(
+                t("playground:composer.context.compareCount", {
+                  defaultValue: "{{count}} models",
+                  count: compareSelectedModels.length
+                } as any)
+              )
+            : String(t("playground:composer.context.compareOn", "On")),
+        tone: "active",
+        onClick: () => setOpenModelSettings(true)
+      })
+    }
+
+    if (currentPreset && currentPreset.key !== "custom") {
+      items.push({
+        id: "preset",
+        label: t("playground:composer.context.preset", "Preset"),
+        value: t(
+          `playground:presets.${currentPreset.key}.label`,
+          currentPreset.label
+        ),
+        tone: "active",
+        onClick: () => setOpenModelSettings(true)
+      })
+    }
+
+    if (selectedCharacter?.name) {
+      items.push({
+        id: "character",
+        label: t("playground:composer.context.character", "Character"),
+        value: characterPendingApply
+          ? t(
+              "playground:composer.context.characterNextTurn",
+              "{{name}} (next turn)",
+              { name: selectedCharacter.name } as any
+            )
+          : selectedCharacter.name,
+        tone: "active",
+        onClick: () => setOpenActorSettings(true)
+      })
+    }
+
+    if (contextToolsOpen) {
+      items.push({
+        id: "knowledge",
+        label: t("playground:composer.context.knowledge", "Knowledge"),
+        value: t("common:open", "Open"),
+        tone: "active",
+        onClick: () => setContextToolsOpen(false)
+      })
+    }
+
+    if (ragPinnedResults.length > 0) {
+      items.push({
+        id: "ragPinned",
+        label: t("playground:composer.context.pinnedSources", "Pinned"),
+        value: String(
+          t("playground:composer.context.pinnedCount", {
+            defaultValue: "{{count}} sources",
+            count: ragPinnedResults.length
+          } as any)
+        ),
+        tone: "active",
+        onClick: () => openKnowledgePanel("search")
+      })
+    }
+
+    if (webSearch) {
+      items.push({
+        id: "webSearch",
+        label: t("playground:composer.context.webSearch", "Web search"),
+        value: t("common:on", "On"),
+        tone: "active",
+        onClick: handleToggleWebSearch
+      })
+    }
+    if (sessionUsageSummary.totalTokens > 0) {
+      items.push({
+        id: "sessionUsage",
+        label: t("playground:composer.context.session", "Session"),
+        value: sessionUsageLabel,
+        tone: "neutral"
+      })
+    }
+
+    if (
+      selectedSystemPrompt ||
+      selectedQuickPrompt ||
+      String(systemPrompt || "").trim().length > 0
+    ) {
+      items.push({
+        id: "prompt",
+        label: t("playground:composer.context.prompt", "Prompt"),
+        value: promptSummaryLabel,
+        tone: "active"
+      })
+    }
+
+    if (currentChatModelSettings.jsonMode) {
+      items.push({
+        id: "json",
+        label: t("playground:composer.context.json", "JSON mode"),
+        value: t(
+          "playground:composer.context.jsonShort",
+          "Object responses"
+        ),
+        tone: "active",
+        onClick: () => updateChatModelSetting("jsonMode", undefined)
+      })
+    }
+
+    if (showTokenBudgetWarning) {
+      items.push({
+        id: "budget",
+        label: t("playground:composer.context.budget", "Budget"),
+        value:
+          projectedBudget.utilizationPercent != null
+            ? `${Math.round(projectedBudget.utilizationPercent)}%`
+            : t("common:warning", "Warning"),
+        tone: "warning",
+        onClick: openContextWindowModal
+      })
+    }
+    if (nonMessageContextPercent != null) {
+      items.push({
+        id: "contextMix",
+        label: t("playground:composer.context.contextMix", "Context mix"),
+        value: t(
+          "playground:composer.context.nonMessageShare",
+          "{{percent}}% non-message",
+          {
+            percent: Math.max(0, Math.round(nonMessageContextPercent))
+          } as any
+        ),
+        tone: showNonMessageContextWarning ? "warning" : "neutral",
+        onClick: openContextWindowModal
+      })
+    }
+
+    if (serverChatState) {
+      items.push({
+        id: "conversationState",
+        label: t("playground:composer.context.chatState", "State"),
+        value: serverChatState,
+        tone: "neutral"
+      })
+    }
+
+    if (temporaryChat) {
+      items.push({
+        id: "temporary",
+        label: t("playground:composer.context.temporary", "Temporary"),
+        value: t("playground:composer.context.notSaved", "Not saved"),
+        tone: "warning"
+      })
+    }
+
+    return items
+  }, [
+    compareModeActive,
+    compareSelectedModels.length,
+    connectionStatusLabel,
+    connectionUxState,
+    contextToolsOpen,
+    currentPreset,
+    currentChatModelSettings.jsonMode,
+    focusConnectionCard,
+    handleToggleWebSearch,
+    isConnectionReady,
+    modelCapabilities,
+    modelContextLength,
+    modelSummaryLabel,
+    openKnowledgePanel,
+    openContextWindowModal,
+    nonMessageContextPercent,
+    characterPendingApply,
+    promptSummaryLabel,
+    ragPinnedResults.length,
+    selectedCharacter?.name,
+    selectedModel,
+    selectedQuickPrompt,
+    selectedSystemPrompt,
+    serverChatState,
+    sessionUsageLabel,
+    sessionUsageSummary.totalTokens,
+    setContextToolsOpen,
+    setOpenModelSettings,
+    setModelDropdownOpen,
+    showTokenBudgetWarning,
+    projectedBudget.utilizationPercent,
+    showNonMessageContextWarning,
+    systemPrompt,
+    t,
+    temporaryChat,
+    updateChatModelSetting
+  ])
+
+  const compareSharedContextLabels = React.useMemo(() => {
+    const labels: string[] = []
+    const hasPromptContext =
+      Boolean(selectedSystemPrompt) ||
+      Boolean(selectedQuickPrompt) ||
+      String(systemPrompt || "").trim().length > 0
+    if (selectedCharacter?.name) {
+      labels.push(
+        String(
+          t(
+            "playground:composer.compareSharedCharacter",
+            "Character: {{name}}",
+            { name: selectedCharacter.name } as any
+          )
+        )
+      )
+    }
+    if (hasPromptContext) {
+      labels.push(
+        String(
+          t(
+            "playground:composer.compareSharedPrompt",
+            "Prompt steering enabled"
+          )
+        )
+      )
+    }
+    if (ragPinnedResults.length > 0) {
+      labels.push(
+        String(
+          t(
+            "playground:composer.compareSharedPinned",
+            "{{count}} pinned sources",
+            { count: ragPinnedResults.length } as any
+          )
+        )
+      )
+    }
+    if (webSearch) {
+      labels.push(
+        String(t("playground:composer.compareSharedWebSearch", "Web search on"))
+      )
+    }
+    if (currentChatModelSettings.jsonMode) {
+      labels.push(
+        String(t("playground:composer.compareSharedJson", "JSON mode on"))
+      )
+    }
+    return labels
+  }, [
+    currentChatModelSettings.jsonMode,
+    ragPinnedResults.length,
+    selectedCharacter?.name,
+    selectedQuickPrompt,
+    selectedSystemPrompt,
+    systemPrompt,
+    t,
+    webSearch
+  ])
+
+  const contextConflictWarnings = React.useMemo(
+    () => {
+      const warnings: Array<{
+        id: string
+        text: string
+        actionLabel?: string
+        onAction?: () => void
+      }> = []
+
+      const hasCustomPrompt =
+        Boolean(selectedSystemPrompt) ||
+        Boolean(selectedQuickPrompt) ||
+        String(systemPrompt || "").trim().length > 0
+
+      if (selectedCharacter?.name && ragPinnedResults.length > 0) {
+        warnings.push({
+          id: "character-rag",
+          text: t(
+            "playground:composer.conflict.characterRag",
+            "Character mode and pinned RAG sources are both active. Responses may blend persona and retrieval context."
+          ),
+          actionLabel: t(
+            "playground:composer.conflict.reviewContext",
+            "Review context"
+          ),
+          onAction: () => openKnowledgePanel("search")
+        })
+      }
+
+      if (selectedCharacter?.name && hasCustomPrompt) {
+        warnings.push({
+          id: "character-prompt",
+          text: t(
+            "playground:composer.conflict.characterPrompt",
+            "Character mode and custom prompt steering are both active. Verify intended behavior before sending."
+          ),
+          actionLabel: t(
+            "playground:composer.conflict.reviewModes",
+            "Review modes"
+          ),
+          onAction: () => setModeLauncherOpen(true)
+        })
+      }
+
+      if (compareModeActive && voiceChatEnabled) {
+        warnings.push({
+          id: "compare-voice",
+          text: t(
+            "playground:composer.conflict.compareVoice",
+            "Compare mode with voice can reduce output parity across models."
+          ),
+          actionLabel: t(
+            "playground:composer.conflict.adjustModes",
+            "Adjust modes"
+          ),
+          onAction: () => setModeLauncherOpen(true)
+        })
+      }
+
+      if (compareNeedsMoreModels) {
+        warnings.push({
+          id: "compare-min-models",
+          text: t(
+            "playground:composer.validationCompareMinModelsInline",
+            "Select at least two models for Compare mode."
+          ),
+          actionLabel: t(
+            "playground:composer.conflict.reviewModels",
+            "Review models"
+          ),
+          onAction: () => setOpenModelSettings(true)
+        })
+      }
+
+      if (compareModeActive && compareCapabilityIncompatibilities.length > 0) {
+        warnings.push({
+          id: "compare-capability",
+          text: t(
+            "playground:composer.conflict.compareCapabilities",
+            "Compare models have incompatible capabilities: {{details}}. Outputs may not be directly comparable.",
+            {
+              details: compareCapabilityIncompatibilities.join(", ")
+            } as any
+          ),
+          actionLabel: t(
+            "playground:composer.conflict.reviewModels",
+            "Review models"
+          ),
+          onAction: () => setModelDropdownOpen(true)
+        })
+      }
+
+      if (showTokenBudgetWarning && tokenBudgetWarningText) {
+        warnings.push({
+          id: "token-budget",
+          text: tokenBudgetWarningText,
+          actionLabel: t(
+            "playground:composer.conflict.adjustBudget",
+            "Adjust budget"
+          ),
+          onAction: () => openContextWindowModal()
+        })
+      }
+      if (showNonMessageContextWarning) {
+        warnings.push({
+          id: "context-footprint",
+          text: t(
+            "playground:composer.conflict.contextFootprint",
+            "Non-message context is using {{percent}}% of the context window. Trim character/prompt/source context before sending.",
+            {
+              percent: Math.round(nonMessageContextPercent || 0)
+            } as any
+          ),
+          actionLabel: largestContextContributor
+            ? t(
+                "playground:composer.conflict.trimLargest",
+                "Trim largest"
+              )
+            : t("playground:composer.conflict.reviewContext", "Review context"),
+          onAction: largestContextContributor
+            ? trimLargestContextContributor
+            : () => openContextWindowModal()
+        })
+      }
+
+      return warnings
+    },
+    [
+      compareCapabilityIncompatibilities,
+      compareModeActive,
+      compareNeedsMoreModels,
+      largestContextContributor,
+      nonMessageContextPercent,
+      openKnowledgePanel,
+      trimLargestContextContributor,
+      ragPinnedResults.length,
+      selectedCharacter?.name,
+      selectedQuickPrompt,
+      selectedSystemPrompt,
+      setOpenModelSettings,
+      setModeLauncherOpen,
+      setModelDropdownOpen,
+      showNonMessageContextWarning,
+      showTokenBudgetWarning,
+      systemPrompt,
+      t,
+      tokenBudgetWarningText,
+      openContextWindowModal,
+      voiceChatEnabled
+    ]
+  )
+
+  const modeLauncherContent = (
+    <div className="flex w-72 flex-col gap-1 p-1">
+      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+        {t("playground:composer.modes", "Modes")}
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          const next = !compareModeActive
+          toggleCompareMode()
+          setModeAnnouncement(
+            next
+              ? t(
+                  "playground:composer.modeCompareEnabled",
+                  "Compare mode enabled."
+                )
+              : t(
+                  "playground:composer.modeCompareDisabled",
+                  "Compare mode disabled."
+                )
+          )
+          setModeLauncherOpen(false)
+        }}
+        disabled={!compareFeatureEnabled}
+        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span>{t("playground:composer.modeCompare", "Compare responses")}</span>
+        <span className="text-xs text-text-muted">
+          {compareModeActive
+            ? t("common:on", "On")
+            : t("common:off", "Off")}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setOpenActorSettings(true)
+          setModeAnnouncement(
+            t(
+              "playground:composer.modeCharacterNotice",
+              "Character settings opened."
+            )
+          )
+          setModeLauncherOpen(false)
+        }}
+        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+      >
+        <span>{t("playground:composer.modeCharacter", "Character mode")}</span>
+        <span className="truncate text-xs text-text-muted">
+          {selectedCharacter?.name
+            ? t("playground:composer.modeCharacterActive", "Active: {{name}}", {
+                name: selectedCharacter.name
+              })
+            : t("common:off", "Off")}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const nextOpen = !contextToolsOpen
+          toggleKnowledgePanel()
+          setModeAnnouncement(
+            nextOpen
+              ? t(
+                  "playground:composer.modeKnowledgeOpened",
+                  "Search & Context panel opened."
+                )
+              : t(
+                  "playground:composer.modeKnowledgeClosed",
+                  "Search & Context panel closed."
+                )
+          )
+          setModeLauncherOpen(false)
+        }}
+        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
+      >
+        <span>{t("playground:composer.modeKnowledge", "Knowledge panel")}</span>
+        <span className="text-xs text-text-muted">
+          {contextToolsOpen
+            ? t("common:open", "Open")
+            : t("common:closed", "Closed")}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          handleVoiceChatToggle()
+          setModeAnnouncement(
+            voiceChatEnabled
+              ? t(
+                  "playground:composer.modeVoiceDisabled",
+                  "Voice mode disabled."
+                )
+              : t(
+                  "playground:composer.modeVoiceEnabled",
+                  "Voice mode enabled."
+                )
+          )
+          setModeLauncherOpen(false)
+        }}
+        disabled={!voiceChatAvailable || isSending}
+        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span>{t("playground:composer.modeVoice", "Voice mode")}</span>
+        <span className="text-xs text-text-muted">
+          {voiceChatEnabled
+            ? t("common:on", "On")
+            : t("common:off", "Off")}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (!capabilities?.hasWebSearch) return
+          handleToggleWebSearch()
+          setModeAnnouncement(
+            webSearch
+              ? t(
+                  "playground:composer.modeWebSearchDisabled",
+                  "Web search disabled."
+                )
+              : t(
+                  "playground:composer.modeWebSearchEnabled",
+                  "Web search enabled."
+                )
+          )
+          setModeLauncherOpen(false)
+        }}
+        disabled={!capabilities?.hasWebSearch}
+        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span>{t("playground:composer.modeWebSearch", "Web search")}</span>
+        <span className="text-xs text-text-muted">
+          {webSearch
+            ? t("common:on", "On")
+            : t("common:off", "Off")}
+        </span>
+      </button>
+    </div>
+  )
+
+  const modeLauncherButton = (
+    <Popover
+      trigger="click"
+      placement="topLeft"
+      content={modeLauncherContent}
+      open={modeLauncherOpen}
+      onOpenChange={setModeLauncherOpen}
+    >
+      <TldwButton
+        variant="outline"
+        size="sm"
+        shape="pill"
+        ariaLabel={t("playground:composer.modes", "Modes") as string}
+        title={t("playground:composer.modes", "Modes") as string}
+        className="min-h-[44px]"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <Settings2 className="h-4 w-4" aria-hidden="true" />
+          <span>{t("playground:composer.modes", "Modes")}</span>
+        </span>
+      </TldwButton>
+    </Popover>
+  )
+
   const externalPinSources =
     contextToolsOpen ||
     contextWindowModalOpen ||
@@ -3840,6 +5454,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     voiceModeSelectorOpen ||
     modelDropdownOpen ||
     mcpCtrl.mcpPopoverOpen ||
+    modeLauncherOpen ||
     toolsPopoverOpen ||
     attachmentMenuOpen ||
     sendMenuOpen
@@ -3917,6 +5532,94 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       }
     }
   }, [actionBarVisible, keepComposerBottomInView])
+
+  const previousKeyboardOpenRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!isMobileViewport) return
+    if (typeof window === "undefined") return
+
+    const wasOpen = previousKeyboardOpenRef.current
+    previousKeyboardOpenRef.current = mobileComposerViewport.keyboardOpen
+
+    if (!mobileComposerViewport.keyboardOpen && !wasOpen) {
+      return
+    }
+
+    let timeoutId: number | null = null
+    const rafId = window.requestAnimationFrame(() => {
+      keepComposerBottomInView()
+      timeoutId = window.setTimeout(() => {
+        keepComposerBottomInView()
+      }, 120)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(rafId)
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [
+    isMobileViewport,
+    keepComposerBottomInView,
+    mobileComposerViewport.keyboardInsetPx,
+    mobileComposerViewport.keyboardOpen
+  ])
+
+  React.useEffect(() => {
+    if (typeof document === "undefined") return
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (!composerShellRef.current?.contains(target)) return
+      keepComposerBottomInView()
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => {
+          keepComposerBottomInView()
+        }, 80)
+      }
+    }
+
+    document.addEventListener("focusin", handleFocusIn)
+    return () => {
+      document.removeEventListener("focusin", handleFocusIn)
+    }
+  }, [keepComposerBottomInView])
+
+  const previousSendStateRef = React.useRef(isSending)
+  React.useEffect(() => {
+    if (!isMobileViewport) {
+      previousSendStateRef.current = isSending
+      return
+    }
+    if (typeof window === "undefined") {
+      previousSendStateRef.current = isSending
+      return
+    }
+
+    const wasSending = previousSendStateRef.current
+    previousSendStateRef.current = isSending
+
+    if (!isSending && !wasSending) {
+      return
+    }
+
+    let timeoutId: number | null = null
+    const rafId = window.requestAnimationFrame(() => {
+      keepComposerBottomInView()
+      timeoutId = window.setTimeout(() => {
+        keepComposerBottomInView()
+      }, 100)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(rafId)
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [isMobileViewport, isSending, keepComposerBottomInView])
 
   const mcpControlContent = (
     <div className="flex w-64 flex-col gap-2 p-2">
@@ -4176,7 +5879,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       <Button
         size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
         htmlType="submit"
-        disabled={isSending || !isConnectionReady}
+        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
         className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
         title={
           !isConnectionReady
@@ -4184,6 +5887,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                 "playground:composer.connectToSend",
                 "Connect to your tldw server to start chatting."
               ) as string)
+            : compareNeedsMoreModels
+              ? (t(
+                  "playground:composer.validationCompareMinModelsInline",
+                  "Select at least two models for Compare mode."
+                ) as string)
             : sendWhenEnter
               ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
               : (t(
@@ -4227,7 +5935,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       <Dropdown
         open={sendMenuOpen}
         onOpenChange={(open) => setSendMenuOpen(open)}
-        disabled={isSending || !isConnectionReady}
+        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
         trigger={["click"]}
         menu={{
           items: [
@@ -4248,7 +5956,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       >
         <Button
           size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-          disabled={isSending || !isConnectionReady}
+          disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
           className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
           aria-label={
             t(
@@ -4296,6 +6004,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Tooltip>
   )
 
+  const startupTemplatePromptResolution = startupTemplatePreview
+    ? resolveStartupTemplatePrompt(startupTemplatePreview, promptLibrary)
+    : null
+  const startupTemplatePromptDescription = startupTemplatePreview
+    ? describeStartupTemplatePrompt(startupTemplatePreview, promptLibrary)
+    : null
+  const startupTemplatePreset = startupTemplatePreview
+    ? getPresetByKey(startupTemplatePreview.presetKey)
+    : undefined
 
   return (
     <div className="flex w-full flex-col items-center px-4 pb-6">
@@ -4307,10 +6024,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           <div
             ref={composerShellRef}
             data-istemporary-chat={temporaryChat}
+            data-mobile-keyboard={
+              isMobileViewport
+                ? mobileComposerViewport.keyboardOpen
+                  ? "open"
+                  : "closed"
+                : "desktop"
+            }
             onMouseEnter={actionBarHandlers.onMouseEnter}
             onMouseLeave={actionBarHandlers.onMouseLeave}
             onFocusCapture={actionBarHandlers.onFocusCapture}
             onBlurCapture={actionBarHandlers.onBlurCapture}
+            style={
+              isMobileViewport
+                ? {
+                    scrollMarginBottom: `${Math.max(
+                      mobileComposerViewport.keyboardInsetPx,
+                      16
+                    )}px`,
+                    paddingBottom:
+                      "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)"
+                  }
+                : undefined
+            }
             className={`relative w-full rounded-3xl border border-transparent bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
               !isConnectionReady ? "opacity-80" : ""
             }`}>
@@ -4354,19 +6090,40 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     }
                     if (!intent.isImageCommand) {
                       if (!compareModeActive) {
-                        if (!selectedModel || selectedModel.length === 0) {
+                        const normalizedSelectedModel = normalizeChatModelId(selectedModel)
+                        if (!normalizedSelectedModel) {
                           form.setFieldError("message", t("formError.noModel"))
+                          return
+                        }
+                        if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
                           return
                         }
                       } else if (
                         !compareSelectedModels ||
-                        compareSelectedModels.length === 0
+                        compareSelectedModels.length < 2
                       ) {
                         form.setFieldError(
                           "message",
                           t(
-                            "playground:composer.validationCompareSelectModelsInline",
-                            "Select at least one model for Compare mode."
+                            "playground:composer.validationCompareMinModelsInline",
+                            "Select at least two models for Compare mode."
+                          )
+                        )
+                        return
+                      } else if (
+                        !validateSelectedChatModelsAvailability(compareSelectedModels)
+                      ) {
+                        return
+                      }
+                      if (
+                        value.image.length > 0 &&
+                        !compareModelsSupportCapability(compareSelectedModels, "vision")
+                      ) {
+                        form.setFieldError(
+                          "message",
+                          t(
+                            "playground:composer.validationCompareVisionInline",
+                            "One or more selected compare models do not support image input."
                           )
                         )
                         return
@@ -4407,6 +6164,26 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                     clearSelectedDocuments()
                     clearUploadedFiles()
                     textAreaFocus()
+                    const projectedForSubmission = projectTokenBudget({
+                      conversationTokens: conversationTokenCount,
+                      draftTokens: estimateTokensForText(intent.message.trim()),
+                      maxTokens: resolvedMaxContext
+                    })
+                    if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
+                      notificationApi.warning({
+                        message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
+                        description: projectedForSubmission.isOverLimit
+                          ? t(
+                              "playground:tokens.preSendOverLimit",
+                              "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
+                            )
+                          : t(
+                              "playground:tokens.preSendNearLimit",
+                              "Projected send is near the context window limit."
+                            )
+                      })
+                    }
+                    setLastSubmittedContext(currentContextSnapshot)
                     await sendMessage({
                       image: intent.isImageCommand ? "" : value.image,
                       message: intent.message.trim(),
@@ -4554,7 +6331,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         onMouseUp={handleTextareaMouseUp}
                         placeholder={
                           isConnectionReady
-                            ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
+                            ? t(
+                                "playground:composer.placeholderWithMentions",
+                                "Type a message... (/ commands, @ mentions)"
+                              )
                             : t(
                                 "playground:composer.connectionPlaceholder",
                                 "Connect to tldw to start chatting."
@@ -4629,6 +6409,346 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ) : null}
                       </div>
                     )}
+                    {modeAnnouncement && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="mt-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-primaryStrong"
+                      >
+                        {modeAnnouncement}
+                      </div>
+                    )}
+                    {characterPendingApply && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primaryStrong"
+                      >
+                        <span>
+                          {t(
+                            "playground:composer.characterPendingNotice",
+                            "Character updates will apply on your next turn."
+                          )}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          {selectedCharacterGreeting && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMessageValue(selectedCharacterGreeting, {
+                                  collapseLarge: true
+                                })
+                                textAreaFocus()
+                              }}
+                              className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+                            >
+                              {t(
+                                "playground:composer.characterUseGreeting",
+                                "Use greeting"
+                              )}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setOpenActorSettings(true)}
+                            className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+                          >
+                            {t(
+                              "playground:composer.characterReview",
+                              "Review character"
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {compareModeActive && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        data-testid="compare-activation-contract"
+                        className="mt-1 space-y-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primaryStrong"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide">
+                            {t(
+                              "playground:composer.compareActivationTitle",
+                              "Compare contract"
+                            )}
+                          </span>
+                          <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] font-medium text-primaryStrong">
+                            {t(
+                              "playground:composer.compareActivationCount",
+                              "{{count}} models",
+                              {
+                                count: compareSelectedModels.length
+                              } as any
+                            )}
+                          </span>
+                        </div>
+                        <p>
+                          {t(
+                            "playground:composer.compareActivationBody",
+                            "Next send fans out the same prompt and shared context to each selected model. Compare mode stays active until you turn it off."
+                          )}
+                        </p>
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-medium text-primaryStrong">
+                            {t(
+                              "playground:composer.compareActivationModels",
+                              "Selected models"
+                            )}
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {compareSelectedModelLabels.length > 0 ? (
+                              compareSelectedModelLabels.map((label, index) => (
+                                <span
+                                  key={`${label}-${index}`}
+                                  className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong"
+                                >
+                                  {label}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong">
+                                {t(
+                                  "playground:compare.noModelsSelected",
+                                  "No models selected"
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-medium text-primaryStrong">
+                            {t(
+                              "playground:composer.compareActivationSharedContext",
+                              "Shared context"
+                            )}
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {compareSharedContextLabels.length > 0 ? (
+                              compareSharedContextLabels.map((label, index) => (
+                                <span
+                                  key={`${label}-${index}`}
+                                  className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong"
+                                >
+                                  {label}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong">
+                                {t(
+                                  "playground:composer.compareActivationNoSharedContext",
+                                  "No additional shared context modifiers are active."
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span
+                            className={
+                              compareNeedsMoreModels
+                                ? "text-warn"
+                                : "text-primaryStrong"
+                            }
+                          >
+                            {compareNeedsMoreModels
+                              ? t(
+                                  "playground:composer.compareActivationNeedsMoreModels",
+                                  "Add at least one more model before sending in Compare mode."
+                                )
+                              : t(
+                                  "playground:composer.compareActivationPersistence",
+                                  "These selections persist for next turns until Compare mode is disabled."
+                                )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setOpenModelSettings(true)}
+                            className={`rounded border px-2 py-0.5 text-[11px] font-medium ${
+                              compareNeedsMoreModels
+                                ? "border-warn/40 bg-surface text-warn hover:bg-warn/10"
+                                : "border-primary/30 bg-surface text-primaryStrong hover:bg-primary/10"
+                            }`}
+                          >
+                            {compareNeedsMoreModels
+                              ? t("playground:compare.addModels", "Add models")
+                              : t(
+                                  "playground:composer.compareActivationReviewModels",
+                                  "Review models"
+                                )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {contextDeltaLabels.length > 0 && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="mt-1 flex flex-wrap items-center gap-1 rounded-md border border-border bg-surface2 px-2 py-1"
+                      >
+                        <span className="text-[11px] font-medium text-text-muted">
+                          {t(
+                            "playground:composer.delta.title",
+                            "Changed since last send:"
+                          )}
+                        </span>
+                        {contextDeltaLabels.map((delta) => (
+                          <span
+                            key={delta}
+                            className="rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] text-text-muted"
+                          >
+                            {delta}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {contextConflictWarnings.length > 0 && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="mt-1 space-y-1 rounded-md border border-warn/40 bg-warn/10 px-2 py-2"
+                      >
+                        {contextConflictWarnings.map((warning) => (
+                          <div
+                            key={warning.id}
+                            className="flex items-start justify-between gap-2 text-xs text-warn"
+                          >
+                            <span>{warning.text}</span>
+                            {warning.onAction ? (
+                              <button
+                                type="button"
+                                onClick={warning.onAction}
+                                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-warn underline hover:bg-warn/10"
+                              >
+                                {warning.actionLabel || t("common:review", "Review")}
+                              </button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {currentChatModelSettings.jsonMode && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primaryStrong"
+                      >
+                        <span>
+                          {t(
+                            "playground:composer.jsonModeHint",
+                            "JSON mode is active. Responses should be valid JSON objects."
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setOpenModelSettings(true)}
+                          className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+                        >
+                          {t(
+                            "playground:composer.jsonModeConfigure",
+                            "Configure"
+                          )}
+                        </button>
+                      </div>
+                    )}
+                    {isConnectionReady &&
+                      connectionUxState === "connected_degraded" && (
+                        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn/40 bg-warn/10 px-2 py-2 text-xs text-warn">
+                          <span>
+                            {t(
+                              "playground:composer.providerDegraded",
+                              "Provider connectivity is degraded. Responses may be slower or fail intermittently."
+                            )}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setModelDropdownOpen(true)}
+                              className="rounded border border-warn/40 bg-surface px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/10"
+                            >
+                              {t(
+                                "playground:composer.providerDegradedSwitchModel",
+                                "Switch model"
+                              )}
+                            </button>
+                            <Link
+                              to="/settings/health"
+                              className="text-[11px] font-medium text-warn underline hover:text-warn"
+                            >
+                              {t(
+                                "settings:healthSummary.diagnostics",
+                                "Health & diagnostics"
+                              )}
+                            </Link>
+                          </div>
+                        </div>
+                      )}
+                    {isProMode && (
+                      <div
+                        data-testid="startup-template-controls"
+                        className="mt-2 rounded-md border border-border/60 bg-surface2/70 px-2 py-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                            {t(
+                              "playground:composer.startupTemplatesLabel",
+                              "Startup templates"
+                            )}
+                          </span>
+                          <Input
+                            size="small"
+                            value={startupTemplateDraftName}
+                            onChange={(event) =>
+                              setStartupTemplateDraftName(event.target.value)
+                            }
+                            placeholder={t(
+                              "playground:composer.startupTemplatesNamePlaceholder",
+                              "Template name"
+                            )}
+                            className="min-w-[180px] max-w-[260px]"
+                          />
+                          <Button
+                            size="small"
+                            onClick={handleSaveStartupTemplate}
+                            disabled={
+                              !selectedModel &&
+                              String(systemPrompt || "").trim().length === 0 &&
+                              !selectedCharacter &&
+                              ragPinnedResults.length === 0
+                            }
+                          >
+                            {t(
+                              "playground:composer.startupTemplatesSave",
+                              "Save current"
+                            )}
+                          </Button>
+                          <Select
+                            size="small"
+                            placeholder={t(
+                              "playground:composer.startupTemplatesLaunch",
+                              "Launch saved template"
+                            )}
+                            options={startupTemplates.map((template) => ({
+                              value: template.id,
+                              label: template.name
+                            }))}
+                            onChange={handleOpenStartupTemplatePreview}
+                            className="min-w-[220px]"
+                            data-testid="startup-template-launch-select"
+                          />
+                        </div>
+                        {startupTemplates.length === 0 && (
+                          <p className="mt-1 text-xs text-text-muted">
+                            {t(
+                              "playground:composer.startupTemplatesHint",
+                              "Save your current model, prompt, character, and pinned-source setup to reuse it before first send."
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <div
                       aria-hidden={!actionBarVisible}
                       className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
@@ -4638,6 +6758,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         isMobile={isMobileViewport}
                         isConnectionReady={isConnectionReady}
                         isSending={isSending}
+                        modeLauncherButton={modeLauncherButton}
+                        compareControl={compareControl}
                         modelSelectButton={modelSelectButton}
                         mcpControl={mcpControl}
                         sendControl={sendControl}
@@ -4679,6 +6801,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         showServerPersistenceHint={showServerPersistenceHint}
                         onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
                         onFocusConnectionCard={focusConnectionCard}
+                        contextItems={contextItems}
                       />
                     </div>
                     {showConnectBanner && !isConnectionReady && (
@@ -4861,6 +6984,117 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         </div>
       </Modal>
       <Modal
+        open={Boolean(startupTemplatePreview)}
+        onCancel={() => setStartupTemplatePreview(null)}
+        title={t(
+          "playground:composer.startupTemplatePreviewTitle",
+          "Launch startup template"
+        )}
+        destroyOnHidden
+        data-testid="startup-template-preview-modal"
+        footer={
+          <div className="flex flex-wrap justify-between gap-2">
+            <Button
+              danger
+              onClick={() => {
+                if (!startupTemplatePreview) return
+                handleDeleteStartupTemplate(startupTemplatePreview.id)
+              }}
+              disabled={!startupTemplatePreview}
+            >
+              {t(
+                "playground:composer.startupTemplateDelete",
+                "Delete template"
+              )}
+            </Button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button onClick={() => setStartupTemplatePreview(null)}>
+                {t("common:cancel", "Cancel")}
+              </Button>
+              <Button
+                type="primary"
+                onClick={handleApplyStartupTemplate}
+                disabled={!startupTemplatePreview}
+              >
+                {t(
+                  "playground:composer.startupTemplateApply",
+                  "Apply template"
+                )}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        {startupTemplatePreview ? (
+          <div className="space-y-3">
+            <p className="text-sm text-text-muted">
+              {t(
+                "playground:composer.startupTemplatePreviewBody",
+                "Review active context that will be applied before your next send."
+              )}
+            </p>
+            <div className="grid gap-2 text-xs text-text sm:grid-cols-2">
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.model", "Model")}
+                </div>
+                <div className="mt-1">
+                  {startupTemplatePreview.selectedModel ||
+                    t("common:none", "None")}
+                </div>
+              </div>
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.prompt", "Prompt")}
+                </div>
+                <div className="mt-1">{startupTemplatePromptDescription}</div>
+              </div>
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.preset", "Preset")}
+                </div>
+                <div className="mt-1">
+                  {startupTemplatePreset
+                    ? t(
+                        `playground:presets.${startupTemplatePreset.key}.label`,
+                        startupTemplatePreset.label
+                      )
+                    : t("common:none", "None")}
+                </div>
+              </div>
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.character", "Character")}
+                </div>
+                <div className="mt-1">
+                  {startupTemplatePreview.character?.name ||
+                    t("common:none", "None")}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-md border border-border bg-surface px-2 py-2 text-xs text-text">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                {t("playground:composer.context.pinnedSources", "Pinned")}
+              </div>
+              <div className="mt-1">
+                {t("playground:composer.context.pinnedCount", {
+                  defaultValue: "{{count}} sources",
+                  count: startupTemplatePreview.ragPinnedResults.length
+                } as any)}
+              </div>
+              {startupTemplatePromptResolution?.source === "prompt-studio" && (
+                <div className="mt-1 text-[11px] text-text-muted">
+                  {t(
+                    "playground:composer.startupTemplatePromptStudioApplied",
+                    "Prompt Studio mapping will be reapplied if available."
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+      <Modal
         title={t(
           "common:modelSettings.form.numCtx.label",
           "Context Window Size (num_ctx)"
@@ -4933,6 +7167,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                 ? t("common:enabled", "Enabled")
                 : t("common:disabled", "Disabled")}
             </p>
+            {nonMessageContextPercent != null && (
+              <p>
+                {t("playground:tokens.nonMessageShare", "Non-message context share")}:{" "}
+                {Math.round(nonMessageContextPercent)}%
+              </p>
+            )}
             {isContextWindowOverrideClamped && (
               <p className="text-warn">
                 {t(
@@ -4942,6 +7182,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               </p>
             )}
           </div>
+          <ContextFootprintPanel
+            t={t}
+            rows={contextFootprintRows}
+            nonMessageContextPercent={nonMessageContextPercent}
+            showNonMessageContextWarning={showNonMessageContextWarning}
+            thresholdPercent={CONTEXT_FOOTPRINT_THRESHOLD_PERCENT}
+            onClearPromptContext={clearPromptContext}
+            onClearPinnedSourceContext={clearPinnedSourceContext}
+            onClearHistoryContext={clearHistoryContext}
+            onReviewCharacterContext={() => setOpenActorSettings(true)}
+            onTrimLargestContextContributor={trimLargestContextContributor}
+          />
         </div>
       </Modal>
       <Modal

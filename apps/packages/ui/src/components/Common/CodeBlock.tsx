@@ -74,6 +74,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     normalizedLanguage
   )
   const artifactKind = isDiagramLanguage ? "diagram" : "code"
+  const artifactOriginId = `artifact-origin-${artifactId}`
   const viewLabel = isDiagramLanguage
     ? t("view", "View")
     : t("artifactsView", "View code")
@@ -377,7 +378,11 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
 
   return (
     <>
-      <div className="not-prose">
+      <div
+        id={artifactOriginId}
+        data-artifact-origin={artifactId}
+        className="not-prose"
+      >
         <div className=" [&_div+div]:!mt-0 my-4 bg-surface rounded-xl">
           <div className="flex flex-row px-4 py-2 rounded-t-xl gap-3 bg-surface2 items-center justify-between">
             <div className="flex items-center gap-3">

@@ -19,6 +19,11 @@ export type ScopeSnapshot = {
   webFallback: boolean
 }
 
+export type PinnedSourceFilters = {
+  mediaIds: number[]
+  noteIds: string[]
+}
+
 // Retrieved document with citation info
 export type RagResult = {
   id?: string
@@ -97,6 +102,28 @@ export type SearchRuntimeDetails = {
     diversity: number | null
     freshness: number | null
   } | null
+  faithfulnessScore: number | null
+  faithfulnessTotalClaims: number | null
+  faithfulnessSupportedClaims: number | null
+  faithfulnessUnsupportedClaims: number | null
+  verificationRate: number | null
+  verificationCoverage: number | null
+  verificationTotalClaims: number | null
+  verificationVerifiedClaims: number | null
+  verificationReportAvailable: boolean
+  retrievalLatencyMs: number | null
+  documentsConsidered: number | null
+  chunksConsidered: number | null
+  documentsReturned: number
+  candidatesConsidered: number | null
+  candidatesReturned: number
+  candidatesRejected: number | null
+  alsoConsidered: Array<{
+    id: string
+    title: string
+    score: number | null
+    reason: string | null
+  }>
 }
 
 // Search history item
@@ -147,6 +174,7 @@ export type KnowledgeQAState = {
   citations: CitationRef[]
   searchDetails: SearchRuntimeDetails | null
   error: string | null
+  queryWarning: string | null
 
   // Thread state
   currentThreadId: string | null
@@ -170,6 +198,7 @@ export type KnowledgeQAState = {
   evidenceRailTab: "sources" | "details"
   queryStage: QueryStage
   lastSearchScope: ScopeSnapshot | null
+  pinnedSourceFilters: PinnedSourceFilters
 }
 
 // Actions for KnowledgeQA
@@ -207,10 +236,12 @@ export type KnowledgeQAActions = {
   setEvidenceRailOpen: (open: boolean) => void
   setEvidenceRailTab: (tab: "sources" | "details") => void
   setQueryStage: (stage: QueryStage) => void
+  setPinnedSourceFilters: (filters: PinnedSourceFilters) => void
 
   // Citation actions
   persistRagContext: (messageId: string, context: RagContextData) => Promise<boolean>
   scrollToSource: (index: number) => void
+  scrollToCitation: (citationIndex: number, occurrence?: number) => void
 }
 
 // Context value combining state and actions

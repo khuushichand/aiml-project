@@ -70,6 +70,8 @@ const MINIMAP_COLLAPSE_THRESHOLD = 8
 const SELECTION_WARNING_THRESHOLD = 25
 const UNDO_DURATION_SECONDS = 15
 const MOBILE_REVIEW_MEDIA_QUERY = '(max-width: 1023px)'
+const MEDIA_CONTENT_DEFAULT_ROWS = 10
+const MEDIA_CONTENT_DEFAULT_MIN_HEIGHT_EM = MEDIA_CONTENT_DEFAULT_ROWS * 1.625
 
 const getIsMobileReviewViewport = (): boolean => {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -899,8 +901,17 @@ export const MediaReviewPage: React.FC = () => {
     const analysisIsLong = analysisText.length > 1600
     const contentExpanded = contentExpandedIds.has(key)
     const analysisExpanded = analysisExpandedIds.has(key)
-    const contentShown = !contentIsLong || contentExpanded ? content : `${content.slice(0, 2000)}…`
+    const contentShown = content
     const analysisShown = !analysisIsLong || analysisExpanded ? analysisText : `${analysisText.slice(0, 1600)}…`
+    const contentDefaultHeight = `${MEDIA_CONTENT_DEFAULT_MIN_HEIGHT_EM}em`
+    const contentContainerStyle =
+      contentExpanded || !contentIsLong
+        ? { minHeight: contentDefaultHeight }
+        : {
+            minHeight: contentDefaultHeight,
+            maxHeight: contentDefaultHeight,
+            overflowY: "auto" as const
+          }
     const isLoadingDetail = detailLoading[d.id]
     const hasFailed = failedIds.has(d.id)
     const rawSource = (d as any)?.source || (d as any)?.url || (d as any)?.original_url
@@ -1044,7 +1055,10 @@ export const MediaReviewPage: React.FC = () => {
               {contentExpanded ? t('mediaPage.collapse', 'Collapse') : t('mediaPage.expand', 'Expand')}
             </Button>
           </div>
-          <div className="mt-2 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap break-words text-sm text-text min-h-[8rem] leading-relaxed">
+          <div
+            className="mt-2 prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap break-words text-sm text-text leading-relaxed"
+            style={contentContainerStyle}
+          >
             {isLoadingDetail ? (
               <Skeleton active paragraph={{ rows: 3 }} title={false} />
             ) : content ? (
@@ -1089,7 +1103,7 @@ export const MediaReviewPage: React.FC = () => {
   }
 
   return (
-    <div className="w-full h-[calc(100dvh-4rem)] mt-16 flex flex-col">
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col">
       <div className="shrink-0 mb-3">
         <div className="w-full">
           {/* Search row - always visible */}

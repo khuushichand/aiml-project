@@ -5,6 +5,7 @@ import { KnowledgeQAProvider, useKnowledgeQA } from "../KnowledgeQAProvider"
 import type { SearchHistoryItem } from "../types"
 
 const fetchWithAuthMock = vi.fn()
+const ragSearchMock = vi.fn()
 const messageOpenMock = vi.fn()
 const trackMetricMock = vi.fn()
 
@@ -26,7 +27,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: vi.fn().mockResolvedValue(undefined),
     fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args),
-    ragSearch: vi.fn(),
+    ragSearch: (...args: unknown[]) => ragSearchMock(...args),
     addChatMessage: vi.fn(),
     searchCharacters: vi.fn().mockResolvedValue([]),
     listCharacters: vi.fn().mockResolvedValue([]),
@@ -58,6 +59,11 @@ describe("KnowledgeQAProvider history hydration", () => {
     vi.clearAllMocks()
     latestContext = null
     trackMetricMock.mockResolvedValue(undefined)
+    ragSearchMock.mockResolvedValue({
+      results: [],
+      generated_answer: null,
+      metadata: {},
+    })
     localStorage.clear()
 
     fetchWithAuthMock.mockImplementation(async (path: string) => {
@@ -222,6 +228,87 @@ describe("KnowledgeQAProvider history hydration", () => {
       expect(latestContext!.searchHistory[0]?.pinned).toBe(true)
       const persisted = JSON.parse(localStorage.getItem("knowledge_qa_history") || "[]")
       expect(persisted[0]?.pinned).toBe(true)
+    })
+  })
+
+  it("re-runs the saved query when restoring a legacy entry without conversation id", async () => {
+    const legacyHistoryItem: SearchHistoryItem = {
+      ...baseHistoryItem,
+      id: "legacy-history",
+      query: "Re-run this saved query",
+      conversationId: undefined,
+    }
+    ragSearchMock.mockResolvedValue({
+      results: [
+        {
+          id: "doc-legacy-1",
+          content: "Legacy source snippet",
+          metadata: { title: "Legacy Source" },
+          score: 0.87,
+        },
+      ],
+      generated_answer: "Recovered answer [1]",
+      metadata: {},
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await act(async () => {
+      await latestContext!.restoreFromHistory(legacyHistoryItem)
+    })
+
+    await waitFor(() => {
+      expect(ragSearchMock).toHaveBeenCalledTimes(1)
+      expect(latestContext!.answer).toBe("Recovered answer [1]")
+      expect(latestContext!.results).toHaveLength(1)
+      expect(latestContext!.citations).toEqual(
+        expect.arrayContaining([expect.objectContaining({ index: 1 })])
+      )
+    })
+  })
+
+  it("re-runs the saved query when restoring a local-only conversation id", async () => {
+    const localHistoryItem: SearchHistoryItem = {
+      ...baseHistoryItem,
+      id: "local-history",
+      query: "Recover from local-only session",
+      conversationId: "local-1234",
+    }
+    ragSearchMock.mockResolvedValue({
+      results: [
+        {
+          id: "doc-local-1",
+          content: "Local source snippet",
+          metadata: { title: "Local Source" },
+          score: 0.73,
+        },
+      ],
+      generated_answer: "Recovered local answer [1]",
+      metadata: {},
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await act(async () => {
+      await latestContext!.restoreFromHistory(localHistoryItem)
+    })
+
+    await waitFor(() => {
+      expect(ragSearchMock).toHaveBeenCalledTimes(1)
+      expect(latestContext!.answer).toBe("Recovered local answer [1]")
+      expect(latestContext!.results).toHaveLength(1)
     })
   })
 })

@@ -1,13 +1,16 @@
 import React, { useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { Drawer, Tabs, Modal, Input, Empty, Skeleton } from "antd"
+import { Drawer, Tabs, Modal, Input, Empty, Skeleton, Button, message } from "antd"
 import type { InputRef } from "antd"
 import {
   FileText,
   MessageSquare,
   Sparkles,
   Search,
-  Command
+  Command,
+  Loader2,
+  ArrowDown,
+  ArrowRight
 } from "lucide-react"
 import { useWorkspaceStore } from "@/store/workspace"
 import {
@@ -28,10 +31,17 @@ import {
   buildKnowledgeQaSeedNote,
   consumeWorkspacePlaygroundPrefill
 } from "@/utils/workspace-playground-prefill"
+import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
+import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { WorkspaceHeader } from "./WorkspaceHeader"
 import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
+import {
+  WORKSPACE_UNDO_WINDOW_MS,
+  scheduleWorkspaceUndoAction,
+  undoWorkspaceAction
+} from "./undo-manager"
 import {
   buildWorkspaceGlobalSearchResults,
   type WorkspaceGlobalSearchNoteDocument,
@@ -41,6 +51,34 @@ import {
 const WORKSPACE_SWITCH_TRANSITION_MS = 420
 const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
 const WORKSPACE_NOTE_SEARCH_LIMIT = 75
+const WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES = 5 * 1024 * 1024
+const WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS = 120
+const WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY =
+  "tldw:workspace-playground:onboarding-dismissed:v1"
+const WORKSPACE_REFRESH_LOOP_TRACE_SESSION_KEY =
+  "tldw:workspace-playground:refresh-loop-trace:v1"
+const WORKSPACE_REFRESH_LOOP_PENDING_SIGNAL_SESSION_KEY =
+  "tldw:workspace-playground:refresh-loop-pending:v1"
+const WORKSPACE_REFRESH_LOOP_WINDOW_MS = 45_000
+const WORKSPACE_REFRESH_LOOP_THRESHOLD = 3
+const WORKSPACE_CONFLICT_TRACKED_FIELDS = [
+  "workspaceName",
+  "sources",
+  "selectedSourceIds",
+  "generatedArtifacts",
+  "currentNote",
+  "workspaceChatSessions",
+  "audioSettings"
+] as const
+const WORKSPACE_CONFLICT_FIELD_LABELS: Record<string, string> = {
+  workspaceName: "workspace name",
+  sources: "sources",
+  selectedSourceIds: "source selection",
+  generatedArtifacts: "generated outputs",
+  currentNote: "quick note",
+  workspaceChatSessions: "chat history",
+  audioSettings: "audio settings"
+}
 
 type WorkspaceTabKey = "sources" | "chat" | "studio"
 
@@ -152,6 +190,154 @@ const isDesktopLayout = (): boolean => {
     return true
   }
   return window.matchMedia("(min-width: 1024px)").matches
+}
+
+const estimateUtf8ByteLength = (value: string): number => {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(value).length
+  }
+  return unescape(encodeURIComponent(value)).length
+}
+
+const sanitizeRefreshLoopTimestamps = (
+  candidate: unknown
+): number[] => {
+  if (!Array.isArray(candidate)) return []
+  return candidate
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .sort((a, b) => a - b)
+    .slice(-20)
+}
+
+const recordWorkspaceRefreshLoopAttempt = (): {
+  count: number
+  windowMs: number
+} | null => {
+  if (typeof window === "undefined") return null
+  const now = Date.now()
+  try {
+    const raw = window.sessionStorage.getItem(WORKSPACE_REFRESH_LOOP_TRACE_SESSION_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    const previousTimestamps = sanitizeRefreshLoopTimestamps(parsed?.timestamps)
+    const windowedTimestamps = previousTimestamps.filter(
+      (timestamp) => now - timestamp <= WORKSPACE_REFRESH_LOOP_WINDOW_MS
+    )
+    windowedTimestamps.push(now)
+    window.sessionStorage.setItem(
+      WORKSPACE_REFRESH_LOOP_TRACE_SESSION_KEY,
+      JSON.stringify({ timestamps: windowedTimestamps })
+    )
+    return {
+      count: windowedTimestamps.length,
+      windowMs: WORKSPACE_REFRESH_LOOP_WINDOW_MS
+    }
+  } catch {
+    return null
+  }
+}
+
+const persistWorkspaceRefreshLoopSignal = (signal: {
+  count: number
+  windowMs: number
+}) => {
+  if (typeof window === "undefined") return
+  try {
+    window.sessionStorage.setItem(
+      WORKSPACE_REFRESH_LOOP_PENDING_SIGNAL_SESSION_KEY,
+      JSON.stringify({
+        count: signal.count,
+        windowMs: signal.windowMs,
+        detectedAt: Date.now()
+      })
+    )
+  } catch {
+    // Ignore session storage errors.
+  }
+}
+
+const consumeWorkspaceRefreshLoopSignal = (): {
+  count: number
+  windowMs: number
+} | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = window.sessionStorage.getItem(
+      WORKSPACE_REFRESH_LOOP_PENDING_SIGNAL_SESSION_KEY
+    )
+    if (!raw) return null
+    window.sessionStorage.removeItem(WORKSPACE_REFRESH_LOOP_PENDING_SIGNAL_SESSION_KEY)
+    const parsed = JSON.parse(raw) as { count?: unknown; windowMs?: unknown }
+    if (
+      typeof parsed?.count !== "number" ||
+      !Number.isFinite(parsed.count) ||
+      parsed.count < 1
+    ) {
+      return null
+    }
+    const windowMs =
+      typeof parsed.windowMs === "number" && Number.isFinite(parsed.windowMs)
+        ? parsed.windowMs
+        : WORKSPACE_REFRESH_LOOP_WINDOW_MS
+    return {
+      count: parsed.count,
+      windowMs
+    }
+  } catch {
+    return null
+  }
+}
+
+const parsePersistedWorkspaceState = (
+  serializedValue: string | null | undefined
+): Record<string, unknown> | null => {
+  if (typeof serializedValue !== "string" || serializedValue.length === 0) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(serializedValue)
+    if (!parsed || typeof parsed !== "object") {
+      return null
+    }
+
+    const candidateState =
+      "state" in parsed &&
+      parsed.state &&
+      typeof parsed.state === "object"
+        ? parsed.state
+        : parsed
+
+    if (!candidateState || typeof candidateState !== "object") {
+      return null
+    }
+
+    return candidateState as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+const deriveWorkspaceConflictFieldDiff = (
+  oldValue: string | null | undefined,
+  newValue: string | null | undefined
+): string[] => {
+  const previousState = parsePersistedWorkspaceState(oldValue)
+  const nextState = parsePersistedWorkspaceState(newValue)
+  if (!previousState || !nextState) {
+    return []
+  }
+
+  return WORKSPACE_CONFLICT_TRACKED_FIELDS.filter((field) => {
+    try {
+      return (
+        JSON.stringify(previousState[field]) !== JSON.stringify(nextState[field])
+      )
+    } catch {
+      return previousState[field] !== nextState[field]
+    }
+  })
+    .map((field) => WORKSPACE_CONFLICT_FIELD_LABELS[field] || field)
+    .slice(0, 3)
 }
 
 const isMediaLikelyReadyForRag = (detail: unknown): boolean => {
@@ -304,6 +490,15 @@ class WorkspacePlaygroundErrorBoundary extends React.Component<
 const WorkspacePlaygroundBody: React.FC = () => {
   const { t } = useTranslation(["playground", "option", "common"])
   const isMobile = useMobile()
+  const [messageApi, messageContextHolder] = message.useMessage()
+  const [provenanceFlagEnabled] = useFeatureFlag(
+    FEATURE_FLAGS.RESEARCH_STUDIO_PROVENANCE_V1
+  )
+  const [statusGuardrailsFlagEnabled] = useFeatureFlag(
+    FEATURE_FLAGS.RESEARCH_STUDIO_STATUS_GUARDRAILS_V1
+  )
+  const provenanceEnabled = provenanceFlagEnabled !== false
+  const statusGuardrailsEnabled = statusGuardrailsFlagEnabled !== false
 
   // Mobile drawer state
   const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
@@ -330,7 +525,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
     React.useState(false)
   const [showCrossTabSyncWarning, setShowCrossTabSyncWarning] =
     React.useState(false)
+  const [crossTabChangedFields, setCrossTabChangedFields] = React.useState<
+    string[]
+  >([])
+  const [workspaceStorageUsage, setWorkspaceStorageUsage] = React.useState({
+    usedBytes: 0,
+    quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES
+  })
   const lastCrossTabSyncWarningRef = React.useRef(0)
+  const [showOnboardingOverlay, setShowOnboardingOverlay] =
+    React.useState(false)
+  const onboardingInitializedRef = React.useRef(false)
 
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
@@ -341,7 +546,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const setSelectedSourceIds = useWorkspaceStore((s) => s.setSelectedSourceIds)
   const captureToCurrentNote = useWorkspaceStore((s) => s.captureToCurrentNote)
   const clearCurrentNote = useWorkspaceStore((s) => s.clearCurrentNote)
+  const setCurrentNote = useWorkspaceStore((s) => s.setCurrentNote)
   const loadNote = useWorkspaceStore((s) => s.loadNote)
+  const duplicateWorkspace = useWorkspaceStore((s) => s.duplicateWorkspace)
   const selectedSourceIds = useWorkspaceStore((s) => s.selectedSourceIds)
   const generatedArtifacts = useWorkspaceStore((s) => s.generatedArtifacts)
   const leftPaneCollapsed = useWorkspaceStore((s) => s.leftPaneCollapsed)
@@ -349,6 +556,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const setLeftPaneCollapsed = useWorkspaceStore((s) => s.setLeftPaneCollapsed)
   const setRightPaneCollapsed = useWorkspaceStore((s) => s.setRightPaneCollapsed)
   const sources = useWorkspaceStore((s) => s.sources)
+  const isGeneratingOutput = useWorkspaceStore((s) => s.isGeneratingOutput)
+  const generatingOutputType = useWorkspaceStore((s) => s.generatingOutputType)
   const currentNote = useWorkspaceStore((s) => s.currentNote)
   const workspaceChatSessions = useWorkspaceStore((s) => s.workspaceChatSessions)
   const focusSourceById = useWorkspaceStore((s) => s.focusSourceById)
@@ -360,6 +569,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const storeHydrated = useWorkspaceStore((s) => s.storeHydrated)
   const isStoreHydrated = storeHydrated !== false
   const sourceStatusFailureRef = React.useRef<Record<number, number>>({})
+  const lastStatusViewSignatureRef = React.useRef<string | null>(null)
 
   const leftPaneOpen = !leftPaneCollapsed
   const rightPaneOpen = !rightPaneCollapsed
@@ -394,11 +604,92 @@ const WorkspacePlaygroundBody: React.FC = () => {
         .map((source) => source.mediaId),
     [sources]
   )
+  const activeWorkspaceOperations = React.useMemo(() => {
+    const operations: string[] = []
+
+    if (processingMediaIds.length > 0) {
+      operations.push(
+        `${t("playground:workspace.activityProcessing", "Processing")} ${
+          processingMediaIds.length
+        } ${t("playground:workspace.activitySource", "source")}${
+          processingMediaIds.length === 1 ? "" : "s"
+        }`
+      )
+    }
+
+    if (isGeneratingOutput) {
+      const rawType =
+        typeof generatingOutputType === "string" ? generatingOutputType.trim() : ""
+      const readableType =
+        rawType.length > 0
+          ? rawType.replace(/_/g, " ")
+          : t("playground:workspace.activityOutput", "output")
+      operations.push(
+        `${t("playground:workspace.activityGenerating", "Generating")} ${readableType}`
+      )
+    }
+
+    return operations
+  }, [generatingOutputType, isGeneratingOutput, processingMediaIds.length, t])
+
+  useEffect(() => {
+    if (!statusGuardrailsEnabled) {
+      lastStatusViewSignatureRef.current = null
+      return
+    }
+    if (activeWorkspaceOperations.length === 0) {
+      lastStatusViewSignatureRef.current = null
+      return
+    }
+
+    const signature = activeWorkspaceOperations.join("|")
+    if (lastStatusViewSignatureRef.current === signature) {
+      return
+    }
+    lastStatusViewSignatureRef.current = signature
+
+    void trackWorkspacePlaygroundTelemetry({
+      type: "status_viewed",
+      workspace_id: workspaceId || null,
+      operations_count: activeWorkspaceOperations.length,
+      status: signature
+    })
+  }, [activeWorkspaceOperations, statusGuardrailsEnabled, workspaceId])
+
+  const refreshWorkspaceStorageUsage = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    try {
+      const serializedWorkspace = window.localStorage.getItem(WORKSPACE_STORAGE_KEY)
+      const usedBytes = serializedWorkspace
+        ? estimateUtf8ByteLength(serializedWorkspace)
+        : 0
+      setWorkspaceStorageUsage({
+        usedBytes,
+        quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES
+      })
+    } catch {
+      // Ignore storage read errors.
+    }
+  }, [])
 
   const closeGlobalSearch = React.useCallback(() => {
     setGlobalSearchOpen(false)
     setGlobalSearchQuery("")
     setActiveSearchResultIndex(0)
+  }, [])
+
+  const dismissOnboardingOverlay = React.useCallback(() => {
+    setShowOnboardingOverlay(false)
+    if (typeof window === "undefined") return
+
+    try {
+      window.localStorage.setItem(
+        WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY,
+        "1"
+      )
+    } catch {
+      // Ignore storage errors and still dismiss for this session.
+    }
   }, [])
 
   useEffect(() => {
@@ -542,6 +833,66 @@ const WorkspacePlaygroundBody: React.FC = () => {
     [isMobile, setLeftPaneCollapsed, setRightPaneCollapsed]
   )
 
+  const focusNewNoteTitle = React.useCallback(() => {
+    focusWorkspacePane("studio")
+    window.setTimeout(() => {
+      focusWorkspaceNote("title")
+    }, 0)
+  }, [focusWorkspaceNote, focusWorkspacePane])
+
+  const startNewNoteWithUndo = React.useCallback(() => {
+    const previousNote = {
+      ...currentNote,
+      keywords: [...currentNote.keywords]
+    }
+    const undoHandle = scheduleWorkspaceUndoAction({
+      apply: () => {
+        clearCurrentNote()
+        focusNewNoteTitle()
+      },
+      undo: () => {
+        setCurrentNote(previousNote)
+        focusNewNoteTitle()
+      }
+    })
+
+    const undoMessageKey = `workspace-note-shortcut-undo-${undoHandle.id}`
+    const maybeOpen = (messageApi as { open?: (config: unknown) => void }).open
+    const messageConfig = {
+      key: undoMessageKey,
+      type: "warning",
+      duration: WORKSPACE_UNDO_WINDOW_MS / 1000,
+      content: t("playground:studio.noteCleared", "Note cleared."),
+      btn: (
+        <Button
+          size="small"
+          type="link"
+          onClick={() => {
+            if (undoWorkspaceAction(undoHandle.id)) {
+              messageApi.success(
+                t("playground:studio.noteRestored", "Note restored")
+              )
+            }
+            messageApi.destroy(undoMessageKey)
+          }}
+        >
+          {t("common:undo", "Undo")}
+        </Button>
+      )
+    }
+
+    if (typeof maybeOpen === "function") {
+      maybeOpen(messageConfig)
+    } else {
+      const maybeWarning = (
+        messageApi as { warning?: (content: string) => void }
+      ).warning
+      if (typeof maybeWarning === "function") {
+        maybeWarning(t("playground:studio.noteCleared", "Note cleared."))
+      }
+    }
+  }, [clearCurrentNote, currentNote, focusNewNoteTitle, messageApi, setCurrentNote, t])
+
   const focusSearchResult = React.useCallback(
     (result: WorkspaceGlobalSearchResult) => {
       closeGlobalSearch()
@@ -637,6 +988,43 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }, [isStoreHydrated, workspaceId])
 
   useEffect(() => {
+    if (!statusGuardrailsEnabled) return
+    if (!isStoreHydrated) return
+    const pendingRefreshLoop = consumeWorkspaceRefreshLoopSignal()
+    if (!pendingRefreshLoop) return
+    void trackWorkspacePlaygroundTelemetry({
+      type: "confusion_refresh_loop",
+      workspace_id: workspaceId || null,
+      refresh_count: pendingRefreshLoop.count,
+      window_ms: pendingRefreshLoop.windowMs
+    })
+  }, [isStoreHydrated, statusGuardrailsEnabled, workspaceId])
+
+  useEffect(() => {
+    refreshWorkspaceStorageUsage()
+  }, [refreshWorkspaceStorageUsage])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const timer = window.setTimeout(() => {
+      refreshWorkspaceStorageUsage()
+    }, WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [
+    currentNote.content,
+    currentNote.keywords.length,
+    currentNote.title,
+    generatedArtifacts.length,
+    refreshWorkspaceStorageUsage,
+    selectedSourceIds.length,
+    sources.length,
+    workspaceChatMessages.length,
+    workspaceId
+  ])
+
+  useEffect(() => {
     if (!workspaceId) return
 
     let isActive = true
@@ -692,6 +1080,40 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }, [addSources, captureToCurrentNote, setSelectedSourceIds, workspaceId])
 
   useEffect(() => {
+    if (!isStoreHydrated) return
+    if (!workspaceId) return
+    if (onboardingInitializedRef.current) return
+
+    onboardingInitializedRef.current = true
+
+    if (typeof window === "undefined") return
+    try {
+      const dismissed = window.localStorage.getItem(
+        WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY
+      )
+      setShowOnboardingOverlay(dismissed !== "1")
+    } catch {
+      setShowOnboardingOverlay(true)
+    }
+  }, [isStoreHydrated, workspaceId])
+
+  useEffect(() => {
+    if (!showOnboardingOverlay) return
+    if (typeof window === "undefined") return
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      dismissOnboardingOverlay()
+    }
+
+    window.addEventListener("keydown", handleEscape)
+    return () => {
+      window.removeEventListener("keydown", handleEscape)
+    }
+  }, [dismissOnboardingOverlay, showOnboardingOverlay])
+
+  useEffect(() => {
     if (typeof window === "undefined") return
 
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
@@ -735,12 +1157,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
           currentNote.content.trim().length > 0 ||
           currentNote.keywords.length > 0
 
-        const startNewNote = () => {
+        const startNewNote = (withUndo: boolean) => {
+          if (withUndo) {
+            startNewNoteWithUndo()
+            return
+          }
           clearCurrentNote()
-          focusWorkspacePane("studio")
-          window.setTimeout(() => {
-            focusWorkspaceNote("title")
-          }, 0)
+          focusNewNoteTitle()
         }
 
         if (currentNote.isDirty || hasNoteContent) {
@@ -752,12 +1175,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
             ),
             okText: t("playground:studio.newNote", "New note"),
             cancelText: t("common:cancel", "Cancel"),
-            onOk: startNewNote
+            onOk: () => startNewNote(true)
           })
           return
         }
 
-        startNewNote()
+        startNewNote(false)
         return
       }
 
@@ -779,18 +1202,30 @@ const WorkspacePlaygroundBody: React.FC = () => {
     currentNote.isDirty,
     currentNote.keywords.length,
     currentNote.title,
+    focusNewNoteTitle,
     focusWorkspaceNote,
     focusWorkspacePane,
+    startNewNoteWithUndo,
     t
   ])
 
   useEffect(() => {
+    if (!statusGuardrailsEnabled) return
     if (typeof window === "undefined") return
 
     const handleQuotaExceeded = (event: Event) => {
       const customEvent = event as CustomEvent<WorkspaceStorageQuotaEventDetail>
       if (customEvent.detail?.key !== WORKSPACE_STORAGE_KEY) return
       setShowStorageQuotaWarning(true)
+      refreshWorkspaceStorageUsage()
+      void trackWorkspacePlaygroundTelemetry({
+        type: "quota_warning_seen",
+        workspace_id: workspaceId || null,
+        reason:
+          typeof customEvent.detail?.reason === "string"
+            ? customEvent.detail.reason
+            : null
+      })
     }
 
     window.addEventListener(
@@ -803,38 +1238,56 @@ const WorkspacePlaygroundBody: React.FC = () => {
         handleQuotaExceeded as EventListener
       )
     }
-  }, [])
+  }, [refreshWorkspaceStorageUsage, statusGuardrailsEnabled, workspaceId])
 
-  const surfaceCrossTabSyncWarning = React.useCallback(() => {
-    const now = Date.now()
-    const shouldShow = shouldSurfaceWorkspaceConflictNotice(
-      lastCrossTabSyncWarningRef.current,
-      now,
-      WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS
-    )
-    if (!shouldShow) return
+  const surfaceCrossTabSyncWarning = React.useCallback(
+    (oldValue?: string | null, newValue?: string | null) => {
+      if (!statusGuardrailsEnabled) return
+      const now = Date.now()
+      const shouldShow = shouldSurfaceWorkspaceConflictNotice(
+        lastCrossTabSyncWarningRef.current,
+        now,
+        WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS
+      )
+      if (!shouldShow) return
 
-    lastCrossTabSyncWarningRef.current = now
-    setShowCrossTabSyncWarning(true)
-  }, [])
+      lastCrossTabSyncWarningRef.current = now
+      const changedFields = deriveWorkspaceConflictFieldDiff(oldValue, newValue)
+      setCrossTabChangedFields(changedFields)
+      void trackWorkspacePlaygroundTelemetry({
+        type: "conflict_modal_opened",
+        workspace_id: workspaceId || null,
+        changed_fields_count: changedFields.length
+      })
+      setShowCrossTabSyncWarning(true)
+    },
+    [statusGuardrailsEnabled, workspaceId]
+  )
 
   useEffect(() => {
+    if (!statusGuardrailsEnabled) return
     if (typeof window === "undefined") return
 
     const handleStorageEvent = (event: StorageEvent) => {
       if (event.key !== WORKSPACE_STORAGE_KEY) return
       if (event.newValue === event.oldValue) return
       if (event.storageArea && event.storageArea !== window.localStorage) return
-      surfaceCrossTabSyncWarning()
+      refreshWorkspaceStorageUsage()
+      surfaceCrossTabSyncWarning(event.oldValue, event.newValue)
     }
 
     window.addEventListener("storage", handleStorageEvent)
     return () => {
       window.removeEventListener("storage", handleStorageEvent)
     }
-  }, [surfaceCrossTabSyncWarning])
+  }, [
+    refreshWorkspaceStorageUsage,
+    statusGuardrailsEnabled,
+    surfaceCrossTabSyncWarning
+  ])
 
   useEffect(() => {
+    if (!statusGuardrailsEnabled) return
     if (typeof window === "undefined") return
     if (!isWorkspaceBroadcastSyncEnabled()) return
     if (typeof BroadcastChannel === "undefined") return
@@ -843,6 +1296,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
     const handleBroadcastUpdate = (event: MessageEvent<unknown>) => {
       if (!isWorkspaceBroadcastUpdateMessage(event.data)) return
       if (event.data.key !== WORKSPACE_STORAGE_KEY) return
+      refreshWorkspaceStorageUsage()
       surfaceCrossTabSyncWarning()
     }
 
@@ -851,7 +1305,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
       channel.removeEventListener("message", handleBroadcastUpdate)
       channel.close()
     }
-  }, [surfaceCrossTabSyncWarning])
+  }, [
+    refreshWorkspaceStorageUsage,
+    statusGuardrailsEnabled,
+    surfaceCrossTabSyncWarning
+  ])
 
   useEffect(() => {
     setActiveSearchResultIndex(0)
@@ -878,12 +1336,18 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }, [workspaceId])
 
   useEffect(() => {
+    if (!statusGuardrailsEnabled) return
     if (!isStoreHydrated) return
     if (processingMediaIds.length === 0) return
 
     let cancelled = false
 
     const pollStatuses = async () => {
+      void trackWorkspacePlaygroundTelemetry({
+        type: "source_status_polled",
+        workspace_id: workspaceId || null,
+        processing_count: processingMediaIds.length
+      })
       await Promise.all(
         processingMediaIds.map(async (mediaId) => {
           try {
@@ -897,6 +1361,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
             if (isMediaLikelyReadyForRag(detail)) {
               setSourceStatusByMediaId(mediaId, "ready")
               delete sourceStatusFailureRef.current[mediaId]
+              void trackWorkspacePlaygroundTelemetry({
+                type: "source_status_ready",
+                workspace_id: workspaceId || null,
+                media_id: mediaId
+              })
             }
           } catch (error) {
             if (cancelled) return
@@ -924,7 +1393,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [isStoreHydrated, processingMediaIds, setSourceStatusByMediaId])
+  }, [
+    isStoreHydrated,
+    processingMediaIds,
+    setSourceStatusByMediaId,
+    statusGuardrailsEnabled,
+    workspaceId
+  ])
 
   useEffect(() => {
     return () => {
@@ -951,13 +1426,39 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }
 
   const handleReloadWorkspaceFromSyncWarning = () => {
+    if (statusGuardrailsEnabled) {
+      const refreshAttempt = recordWorkspaceRefreshLoopAttempt()
+      if (
+        refreshAttempt &&
+        refreshAttempt.count >= WORKSPACE_REFRESH_LOOP_THRESHOLD
+      ) {
+        persistWorkspaceRefreshLoopSignal(refreshAttempt)
+      }
+    }
     if (typeof window !== "undefined") {
       try {
         window.location.reload()
       } catch (error) {
+        try {
+          window.sessionStorage.removeItem(
+            WORKSPACE_REFRESH_LOOP_PENDING_SIGNAL_SESSION_KEY
+          )
+        } catch {
+          // Ignore session storage cleanup errors.
+        }
         console.warn("Workspace reload unavailable", error)
       }
     }
+  }
+
+  const handleDismissCrossTabSyncWarning = () => {
+    setShowCrossTabSyncWarning(false)
+    setCrossTabChangedFields([])
+  }
+
+  const handleForkWorkspaceFromSyncWarning = () => {
+    duplicateWorkspace(workspaceId)
+    handleDismissCrossTabSyncWarning()
   }
 
   const getSearchDomainLabel = (domain: WorkspaceGlobalSearchResult["domain"]) => {
@@ -988,7 +1489,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </span>
       ),
-      children: <SourcesPane />
+      children: <SourcesPane statusGuardrailsEnabled={statusGuardrailsEnabled} />
     },
     {
       key: "chat",
@@ -998,7 +1499,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
           <span>{t("playground:chat.title", "Chat")}</span>
         </span>
       ),
-      children: <ChatPane />
+      children: (
+        <ChatPane
+          provenanceEnabled={provenanceEnabled}
+          statusGuardrailsEnabled={statusGuardrailsEnabled}
+        />
+      )
     },
     {
       key: "studio",
@@ -1023,6 +1529,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   return (
     <div className="relative flex h-full flex-col bg-bg text-text">
+      {messageContextHolder}
       <a
         href="#workspace-main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:z-[60] focus:rounded focus:bg-surface focus:px-3 focus:py-1.5 focus:text-sm focus:shadow-card"
@@ -1042,7 +1549,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
         {t("playground:workspace.skipToStudio", "Skip to studio panel")}
       </a>
 
-      {(showStorageQuotaWarning || showCrossTabSyncWarning) && (
+      {statusGuardrailsEnabled &&
+        (showStorageQuotaWarning || showCrossTabSyncWarning) && (
         <div className="space-y-2 border-b border-border bg-surface px-3 py-2">
           {showStorageQuotaWarning && (
             <div
@@ -1072,31 +1580,191 @@ const WorkspacePlaygroundBody: React.FC = () => {
               data-testid="workspace-storage-sync-banner"
               className="flex flex-wrap items-center justify-between gap-2 rounded border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-text"
               role="alert"
+              aria-live="assertive"
             >
-              <span>
-                {t(
-                  "playground:workspace.externalUpdate",
-                  "This workspace changed in another tab. Reload to view the latest state."
+              <div className="space-y-1">
+                <span>
+                  {t(
+                    "playground:workspace.externalUpdate",
+                    "This workspace changed in another tab."
+                  )}
+                </span>
+                {crossTabChangedFields.length > 0 && (
+                  <p className="text-xs text-text-muted">
+                    {t(
+                      "playground:workspace.externalUpdateChangedFields",
+                      "Changed fields: {{fields}}",
+                      {
+                        fields: crossTabChangedFields.join(", ")
+                      }
+                    )}
+                  </p>
                 )}
-              </span>
+                <p className="text-xs text-text-muted">
+                  {t(
+                    "playground:workspace.externalUpdateActionHint",
+                    "Use latest reloads this tab. Keep mine keeps your current tab state. Fork copy duplicates your current state into a new workspace."
+                  )}
+                </p>
+              </div>
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   className="rounded border border-primary/40 bg-primary px-2 py-1 text-xs font-medium text-white hover:opacity-90"
                   onClick={handleReloadWorkspaceFromSyncWarning}
                 >
-                  {t("common:reload", "Reload")}
+                  {t("playground:workspace.useLatest", "Use latest")}
                 </button>
                 <button
                   type="button"
                   className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
-                  onClick={() => setShowCrossTabSyncWarning(false)}
+                  onClick={handleForkWorkspaceFromSyncWarning}
                 >
-                  {t("common:later", "Later")}
+                  {t("playground:workspace.forkCopy", "Fork copy")}
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
+                  onClick={handleDismissCrossTabSyncWarning}
+                >
+                  {t("playground:workspace.keepMine", "Keep mine")}
                 </button>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {statusGuardrailsEnabled && activeWorkspaceOperations.length > 0 && (
+        <div
+          data-testid="workspace-activity-rail"
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 border-b border-border bg-surface2/60 px-3 py-2 text-xs text-text-muted"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          <span>{activeWorkspaceOperations.join(" • ")}</span>
+        </div>
+      )}
+
+      {showOnboardingOverlay && (
+        <div
+          data-testid="workspace-onboarding-overlay"
+          className="absolute inset-0 z-[55] flex items-center justify-center bg-bg/80 px-4 py-6 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-onboarding-title"
+        >
+          <div className="w-full max-w-5xl rounded-xl border border-border bg-surface p-5 shadow-card md:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1.5">
+                <h2
+                  id="workspace-onboarding-title"
+                  className="text-lg font-semibold text-text"
+                >
+                  {t(
+                    "playground:workspace.onboardingTitle",
+                    "How Research Studio works"
+                  )}
+                </h2>
+                <p className="text-sm text-text-muted">
+                  {t(
+                    "playground:workspace.onboardingSubtitle",
+                    "Move from sources to answers to outputs in three steps."
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded border border-border px-2.5 py-1.5 text-xs font-medium text-text-muted transition hover:bg-surface2"
+                onClick={dismissOnboardingOverlay}
+              >
+                {t("common:dismiss", "Dismiss")}
+              </button>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 md:flex-row md:items-stretch">
+              {[
+                {
+                  key: "sources",
+                  title: t("playground:workspace.onboardingAddSources", "Add sources"),
+                  description: t(
+                    "playground:workspace.onboardingAddSourcesDescription",
+                    "Bring in files, links, pasted text, or existing library content."
+                  ),
+                  pane: t("playground:sources.title", "Sources"),
+                  Icon: FileText
+                },
+                {
+                  key: "chat",
+                  title: t("playground:workspace.onboardingAskQuestions", "Ask questions"),
+                  description: t(
+                    "playground:workspace.onboardingAskQuestionsDescription",
+                    "Use chat to query selected sources and inspect cited answers."
+                  ),
+                  pane: t("playground:chat.title", "Chat"),
+                  Icon: MessageSquare
+                },
+                {
+                  key: "studio",
+                  title: t(
+                    "playground:workspace.onboardingGenerateOutputs",
+                    "Generate outputs"
+                  ),
+                  description: t(
+                    "playground:workspace.onboardingGenerateOutputsDescription",
+                    "Create summaries, quizzes, reports, and more from the same source set."
+                  ),
+                  pane: t("playground:studio.title", "Studio"),
+                  Icon: Sparkles
+                }
+              ].map((step, index, steps) => (
+                <React.Fragment key={step.key}>
+                  <section className="flex-1 rounded-lg border border-border bg-surface2/40 p-3.5">
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-primary/10 text-xs font-semibold text-primary">
+                        {index + 1}
+                      </span>
+                      <step.Icon className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-semibold text-text">{step.title}</span>
+                    </div>
+                    <p className="text-xs leading-5 text-text-muted">
+                      {step.description}
+                    </p>
+                    <span className="mt-2 inline-flex rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-text-subtle">
+                      {step.pane}
+                    </span>
+                  </section>
+                  {index < steps.length - 1 && (
+                    <>
+                      <div className="hidden items-center justify-center md:flex">
+                        <ArrowRight
+                          className="h-5 w-5 animate-pulse text-primary/70"
+                          aria-hidden="true"
+                        />
+                      </div>
+                      <div className="flex items-center justify-center md:hidden">
+                        <ArrowDown
+                          className="h-5 w-5 animate-pulse text-primary/70"
+                          aria-hidden="true"
+                        />
+                      </div>
+                    </>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                className="rounded bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90"
+                onClick={dismissOnboardingOverlay}
+              >
+                {t("playground:workspace.onboardingStart", "Start researching")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1108,6 +1776,10 @@ const WorkspacePlaygroundBody: React.FC = () => {
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
             hideToggles
+            storageUsedBytes={workspaceStorageUsage.usedBytes}
+            storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            provenanceEnabled={provenanceEnabled}
+            statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
 
           <Tabs
@@ -1126,6 +1798,10 @@ const WorkspacePlaygroundBody: React.FC = () => {
             rightPaneOpen={!!rightPaneOpen}
             onToggleLeftPane={handleToggleLeftPane}
             onToggleRightPane={handleToggleRightPane}
+            storageUsedBytes={workspaceStorageUsage.usedBytes}
+            storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            provenanceEnabled={provenanceEnabled}
+            statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
 
           <div className="flex min-h-0 flex-1">
@@ -1136,7 +1812,10 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 aria-label={t("playground:workspace.sourcesPanel", "Sources panel")}
                 className="hidden w-72 shrink-0 border-r border-border bg-surface lg:flex lg:flex-col"
               >
-                <SourcesPane onHide={() => setLeftPaneCollapsed(true)} />
+                <SourcesPane
+                  onHide={() => setLeftPaneCollapsed(true)}
+                  statusGuardrailsEnabled={statusGuardrailsEnabled}
+                />
               </aside>
             )}
 
@@ -1154,14 +1833,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
               className="lg:hidden"
               styles={{ wrapper: { width: 320 }, body: { padding: 0 } }}
             >
-              <SourcesPane />
+              <SourcesPane statusGuardrailsEnabled={statusGuardrailsEnabled} />
             </Drawer>
 
             <main
               id="workspace-main-content"
               className="flex min-w-0 flex-1 flex-col"
             >
-              <ChatPane />
+              <ChatPane
+                provenanceEnabled={provenanceEnabled}
+                statusGuardrailsEnabled={statusGuardrailsEnabled}
+              />
             </main>
 
             {rightPaneOpen && (

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS,
@@ -19,6 +19,7 @@ const testState = {
   rightPaneCollapsed: false,
   workspaceId: "workspace-1",
   initializeWorkspace: vi.fn(),
+  duplicateWorkspace: vi.fn(),
   addSources: vi.fn(),
   setSelectedSourceIds: vi.fn(),
   captureToCurrentNote: vi.fn(),
@@ -57,9 +58,16 @@ vi.mock("react-i18next", () => ({
         | string
         | {
             defaultValue?: string
-          }
+          },
+      interpolationOptions?: Record<string, unknown>
     ) => {
-      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
+      if (typeof defaultValueOrOptions === "string") {
+        if (!interpolationOptions) return defaultValueOrOptions
+        return defaultValueOrOptions.replace(
+          /\{\{(\w+)\}\}/g,
+          (_match, token) => String(interpolationOptions[token] ?? "")
+        )
+      }
       if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
       return key
     }
@@ -169,7 +177,7 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
     window.dispatchEvent(event)
   }
 
-  it("shows a cross-tab sync banner and reload action on storage updates", async () => {
+  it("shows a cross-tab sync banner and conflict actions on storage updates", async () => {
     render(<WorkspacePlayground />)
 
     dispatchWorkspaceStorageUpdate()
@@ -177,7 +185,14 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
     expect(
       await screen.findByTestId("workspace-storage-sync-banner")
     ).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Use latest" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Fork copy" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Keep mine" })).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Use latest reloads this tab. Keep mine keeps your current tab state. Fork copy duplicates your current state into a new workspace."
+      )
+    ).toBeInTheDocument()
   })
 
   it("throttles repeated storage conflict prompts", async () => {
@@ -190,7 +205,7 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
       await screen.findByTestId("workspace-storage-sync-banner")
     ).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "Later" }))
+    fireEvent.click(screen.getByRole("button", { name: "Keep mine" }))
     expect(
       screen.queryByTestId("workspace-storage-sync-banner")
     ).not.toBeInTheDocument()
@@ -209,6 +224,39 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
     nowSpy.mockRestore()
   })
 
+  it("shows changed field hints and can fork workspace from conflict banner", async () => {
+    render(<WorkspacePlayground />)
+
+    dispatchWorkspaceStorageUpdate(
+      JSON.stringify({
+        state: {
+          sources: [{ id: "source-1" }],
+          workspaceChatSessions: {}
+        }
+      }),
+      JSON.stringify({
+        state: {
+          sources: [{ id: "source-1" }, { id: "source-2" }],
+          workspaceChatSessions: {
+            "workspace-1": { messages: [{ id: "message-1" }] }
+          }
+        }
+      })
+    )
+
+    expect(
+      await screen.findByText("Changed fields: sources, chat history")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork copy" }))
+    expect(testState.duplicateWorkspace).toHaveBeenCalledWith("workspace-1")
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("workspace-storage-sync-banner")
+      ).not.toBeInTheDocument()
+    })
+  })
+
   it("shows storage quota warning from persistence quota event", async () => {
     render(<WorkspacePlayground />)
 
@@ -221,11 +269,10 @@ describe("WorkspacePlayground stage 9 persistence resilience", () => {
       })
     )
 
-    expect(
-      await screen.findByTestId("workspace-storage-quota-banner")
-    ).toBeInTheDocument()
+    const quotaBanner = await screen.findByTestId("workspace-storage-quota-banner")
+    expect(quotaBanner).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+    fireEvent.click(within(quotaBanner).getByRole("button", { name: "Dismiss" }))
     await waitFor(() => {
       expect(
         screen.queryByTestId("workspace-storage-quota-banner")

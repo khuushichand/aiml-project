@@ -13,6 +13,7 @@ const state = {
   clearResults: vi.fn(),
   results: [] as Array<{ id: string }>,
   answer: null as string | null,
+  queryWarning: null as string | null,
   searchHistory: [] as Array<{ query: string }>,
   isLocalOnlyThread: false,
   settings: {
@@ -31,6 +32,7 @@ vi.mock("../KnowledgeQAProvider", () => ({
     clearResults: state.clearResults,
     results: state.results,
     answer: state.answer,
+    queryWarning: state.queryWarning,
     searchHistory: state.searchHistory,
     isLocalOnlyThread: state.isLocalOnlyThread,
     settings: state.settings,
@@ -50,6 +52,7 @@ describe("SearchBar behavior", () => {
     state.isSearching = false
     state.results = []
     state.answer = null
+    state.queryWarning = null
     state.searchHistory = []
     state.isLocalOnlyThread = false
     state.settings.enable_web_fallback = true
@@ -66,7 +69,7 @@ describe("SearchBar behavior", () => {
       name: "Search your knowledge base",
     })
     expect(input).toHaveAttribute("id", "knowledge-search-input")
-    expect(input).toHaveAttribute("maxlength", "2000")
+    expect(input).toHaveAttribute("maxlength", "20000")
     expect(input).toHaveAttribute("aria-describedby", "knowledge-qa-search-description")
     expect(screen.getByText(/Ask questions about your documents/i)).toHaveAttribute(
       "id",
@@ -85,11 +88,23 @@ describe("SearchBar behavior", () => {
   })
 
   it("shows character count near the max length", () => {
-    state.query = "a".repeat(1700)
+    state.query = "a".repeat(17000)
 
     render(<SearchBar autoFocus={false} />)
 
-    expect(screen.getByText("1700/2000")).toBeInTheDocument()
+    expect(screen.getByText("17000/20000")).toBeInTheDocument()
+  })
+
+  it("shows inline truncation warning when query payload is shortened", () => {
+    state.queryWarning = "Query exceeded 20,000 characters and was shortened before search."
+
+    render(<SearchBar autoFocus={false} />)
+
+    expect(
+      screen.getByText(
+        "Query exceeded 20,000 characters and was shortened before search."
+      )
+    ).toBeInTheDocument()
   })
 
   it("uses descriptive web fallback tooltip text", () => {
@@ -108,10 +123,10 @@ describe("SearchBar behavior", () => {
     const input = screen.getByRole("textbox", {
       name: "Search your knowledge base",
     })
-    const longQuery = "x".repeat(2500)
+    const longQuery = "x".repeat(25000)
     fireEvent.change(input, { target: { value: longQuery } })
 
-    expect(state.setQuery).toHaveBeenCalledWith(longQuery.slice(0, 2000))
+    expect(state.setQuery).toHaveBeenCalledWith(longQuery.slice(0, 20000))
   })
 
   it("clears only the query when clear icon is clicked", () => {

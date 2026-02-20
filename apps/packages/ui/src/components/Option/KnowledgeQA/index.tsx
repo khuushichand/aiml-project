@@ -159,7 +159,7 @@ function KnowledgeQAContent() {
             type="button"
             onClick={handleRetryConnection}
             disabled={isChecking}
-            className="px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isChecking ? "Checking connection..." : "Retry connection"}
           </button>
@@ -189,7 +189,7 @@ function KnowledgeQAContent() {
             <button
               type="button"
               onClick={handleRetryCapabilities}
-              className="px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors"
+              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             >
               Retry capability check
             </button>

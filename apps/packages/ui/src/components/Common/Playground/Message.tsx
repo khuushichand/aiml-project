@@ -1,7 +1,12 @@
 import React, { useEffect, useState, useRef } from "react"
 import { Tag, Image, Tooltip, Collapse, Avatar, Modal, message } from "antd"
 import { LoadingStatus } from "./ActionInfo"
-import { StopCircle as StopCircleIcon } from "lucide-react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Smile,
+  StopCircle as StopCircleIcon
+} from "lucide-react"
 import { EditMessageForm } from "./EditMessageForm"
 import { useTranslation } from "react-i18next"
 import { useTTS, type TtsClipMeta } from "@/hooks/useTTS"
@@ -33,6 +38,7 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreMessageOption } from "@/store/option"
 import type { MessageVariant } from "@/store/option"
+import { useStoreChatModelSettings } from "@/store/model"
 import { EDIT_MESSAGE_EVENT } from "@/utils/timeline-actions"
 import type { Character } from "@/types/character"
 import { useDiscoSkills } from "@/hooks/useDiscoSkills"
@@ -56,13 +62,28 @@ import {
   resolveAvatarColumnAlignment,
   resolveMessageRenderSide
 } from "./message-layout"
+import { formatCost } from "@/utils/model-pricing"
+import {
+  resolveMessageCostUsd,
+  resolveMessageUsage
+} from "./message-usage"
+import { resolvePlaygroundMessageShortcutAction } from "./playground-message-shortcuts"
+import {
+  buildQuickMessageActionPrompt,
+  type QuickMessageAction
+} from "./quick-message-actions"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
 const ErrorBubble: React.FC<{
   payload: ChatErrorPayload
   toggleLabels: { show: string; hide: string }
-}> = ({ payload, toggleLabels }) => {
+  recoveryActions?: Array<{
+    id: string
+    label: string
+    onClick: () => void
+  }>
+}> = ({ payload, toggleLabels, recoveryActions = [] }) => {
   const [showDetails, setShowDetails] = React.useState(false)
 
   return (
@@ -89,6 +110,24 @@ const ErrorBubble: React.FC<{
         <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-danger/10 p-2 text-xs text-danger">
           {payload.detail}
         </pre>
+      )}
+      {recoveryActions.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="sr-only">
+            Recommended next actions:{" "}
+            {recoveryActions.map((action) => action.label).join(", ")}
+          </span>
+          {recoveryActions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              onClick={action.onClick}
+              className="rounded border border-danger/40 bg-surface px-2 py-1 text-[11px] font-medium text-danger transition hover:bg-danger/10"
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -136,6 +175,7 @@ type Props = {
   messageId?: string
   feedbackQuery?: string | null
   searchQuery?: string
+  searchMatch?: "active" | "match" | null
   isEmbedding?: boolean
   createdAt?: number | string
   variants?: MessageVariant[]
@@ -155,6 +195,7 @@ type Props = {
   historyId?: string
   conversationInstanceId: string
   onDeleteMessage?: () => void
+  suppressDeleteSuccessToast?: boolean
   onSaveToWorkspaceNotes?: (payload: {
     message: string
     isBot: boolean
@@ -179,6 +220,7 @@ type Props = {
 }
 
 export const PlaygroundMessage = (props: Props) => {
+  const articleRef = useRef<HTMLElement | null>(null)
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
   const [editMode, setEditMode] = React.useState(false)
   const [checkWideMode] = useStorage("checkWideMode", false)
@@ -204,6 +246,13 @@ export const PlaygroundMessage = (props: Props) => {
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
   const setReplyTarget = useStoreMessageOption((state) => state.setReplyTarget)
+  const ragPinnedResults = useStoreMessageOption((state) => state.ragPinnedResults)
+  const apiProviderOverride = useStoreChatModelSettings(
+    (state) => state.apiProvider
+  )
+  const updateChatModelSetting = useStoreChatModelSettings(
+    (state) => state.updateSetting
+  )
   const { cancel, isSpeaking, speak } = useTTS()
   const { healthState: audioHealthState, voicesAvailable } =
     useTldwAudioStatus({
@@ -264,6 +313,25 @@ export const PlaygroundMessage = (props: Props) => {
     .filter(Boolean)
     .join("\n")
   }, [errorPayload])
+  const messageUsage = React.useMemo(
+    () => resolveMessageUsage(props.generationInfo),
+    [props.generationInfo]
+  )
+  const messageCostUsd = React.useMemo(
+    () => resolveMessageCostUsd(props.generationInfo),
+    [props.generationInfo]
+  )
+  const showUsageMetadata =
+    isProMode && props.isBot && messageUsage.totalTokens > 0
+  const interruptedGeneration = Boolean(
+    (props.generationInfo as Record<string, unknown> | undefined)?.interrupted
+  )
+  const interruptionReason = React.useMemo(() => {
+    const raw = (props.generationInfo as Record<string, unknown> | undefined)
+      ?.interruptionReason
+    if (typeof raw !== "string" || raw.trim().length === 0) return null
+    return raw.trim()
+  }, [props.generationInfo])
   const messageTimestamp = React.useMemo(() => {
     const info = props.generationInfo as
       | { created_at?: string | number; createdAt?: string | number; timestamp?: string | number }
@@ -302,6 +370,53 @@ export const PlaygroundMessage = (props: Props) => {
     showVariantPager &&
     Boolean(props.onSwipeNext) &&
     resolvedVariantIndex < variantCount - 1
+  const hasMessageKeyboardShortcuts =
+    (canSwipePrev || canSwipeNext) ||
+    Boolean(props.onNewBranch) ||
+    Boolean(props.isBot && props.onRegenerate)
+  const handleMessageShortcut = React.useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      const action = resolvePlaygroundMessageShortcutAction(event.nativeEvent)
+      if (!action) return
+
+      if (action === "variant_prev") {
+        if (!canSwipePrev || !props.onSwipePrev) return
+        event.preventDefault()
+        props.onSwipePrev()
+        articleRef.current?.focus()
+        return
+      }
+      if (action === "variant_next") {
+        if (!canSwipeNext || !props.onSwipeNext) return
+        event.preventDefault()
+        props.onSwipeNext()
+        articleRef.current?.focus()
+        return
+      }
+      if (action === "new_branch") {
+        if (!props.onNewBranch) return
+        event.preventDefault()
+        props.onNewBranch()
+        articleRef.current?.focus()
+        return
+      }
+      if (action === "regenerate") {
+        if (!props.isBot || !props.onRegenerate) return
+        event.preventDefault()
+        props.onRegenerate()
+        articleRef.current?.focus()
+      }
+    },
+    [
+      canSwipeNext,
+      canSwipePrev,
+      props.isBot,
+      props.onNewBranch,
+      props.onRegenerate,
+      props.onSwipeNext,
+      props.onSwipePrev
+    ]
+  )
   const resolvedRole = props.role ?? (props.isBot ? "assistant" : "user")
   const isSystemMessage = resolvedRole === "system"
   const speakerMatchesCharacterIdentity =
@@ -319,6 +434,20 @@ export const PlaygroundMessage = (props: Props) => {
     return detectCharacterMood({ assistantText: props.message }).label
   }, [isSystemMessage, props.isBot, props.message])
   const resolvedMoodLabel = explicitMoodLabel || inferredMoodLabel
+  const moodBadgeLabel = React.useMemo(() => {
+    if (!resolvedMoodLabel) return null
+    const normalizedMood = resolvedMoodLabel.replace(/_/g, " ")
+    if (typeof props.moodConfidence === "number" && Number.isFinite(props.moodConfidence)) {
+      const percent = Math.max(0, Math.min(100, Math.round(props.moodConfidence * 100)))
+      return t("playground:message.moodLabelConfidence", "Mood: {{mood}} ({{confidence}}%)", {
+        mood: normalizedMood,
+        confidence: percent
+      })
+    }
+    return t("playground:message.moodLabel", "Mood: {{mood}}", {
+      mood: normalizedMood
+    })
+  }, [props.moodConfidence, resolvedMoodLabel, t])
   const baseCharacterAvatar = resolveCharacterBaseAvatarUrl(
     props.characterIdentity
   )
@@ -771,7 +900,9 @@ export const PlaygroundMessage = (props: Props) => {
       onOk: async () => {
         try {
           await props.onDeleteMessage?.()
-          message.success(t("common:deleted", "Deleted"))
+          if (!props.suppressDeleteSuccessToast) {
+            message.success(t("common:deleted", "Deleted"))
+          }
         } catch (err) {
           console.error("Failed to delete message:", err)
           const fallback = t("common:deleteFailed", "Delete failed")
@@ -780,7 +911,257 @@ export const PlaygroundMessage = (props: Props) => {
         }
       }
     })
-  }, [props.onDeleteMessage, t])
+  }, [props.onDeleteMessage, props.suppressDeleteSuccessToast, t])
+  const handleOpenModelSettings = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
+  }, [])
+  const handleOpenKnowledgePanel = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    window.dispatchEvent(
+      new CustomEvent("tldw:open-knowledge-panel", {
+        detail: { tab: "search" }
+      })
+    )
+  }, [])
+  const pinnedSourceKeySet = React.useMemo(() => {
+    const set = new Set<string>()
+    for (const entry of ragPinnedResults || []) {
+      const parts = [
+        entry?.url,
+        entry?.source,
+        entry?.title
+      ]
+        .map((value) =>
+          typeof value === "string" ? value.trim().toLowerCase() : ""
+        )
+        .filter((value) => value.length > 0)
+      for (const value of parts) {
+        set.add(value)
+      }
+    }
+    return set
+  }, [ragPinnedResults])
+  const resolveSourcePinnedState = React.useCallback(
+    (source: any): "active" | "inactive" | null => {
+      if (!pinnedSourceKeySet.size) return null
+      const sourceKeys = [
+        source?.url,
+        source?.name,
+        source?.metadata?.source,
+        source?.metadata?.title
+      ]
+        .map((value) =>
+          typeof value === "string" ? value.trim().toLowerCase() : ""
+        )
+        .filter((value) => value.length > 0)
+      if (sourceKeys.length === 0) return "inactive"
+      const matches = sourceKeys.some((value) => pinnedSourceKeySet.has(value))
+      return matches ? "active" : "inactive"
+    },
+    [pinnedSourceKeySet]
+  )
+  const buildSourceReference = React.useCallback(
+    (source: any, index: number): string => {
+      const sourceLabel =
+        source?.name ||
+        source?.metadata?.title ||
+        source?.metadata?.source ||
+        source?.url ||
+        t("common:sourceLabel", "Source")
+      return `[${index + 1}] ${String(sourceLabel).trim()}`
+    },
+    [t]
+  )
+  const buildFollowUpPrompt = React.useCallback(
+    (sources: any[]) => {
+      const references = sources
+        .map((source, index) => buildSourceReference(source, index))
+        .join("\n")
+      return [
+        t(
+          "playground:sources.askWithTemplateHeader",
+          "Use these sources in your next answer:"
+        ),
+        references,
+        "",
+        t(
+          "playground:sources.askWithTemplateQuestion",
+          "Question:"
+        )
+      ]
+        .filter(Boolean)
+        .join("\n")
+    },
+    [buildSourceReference, t]
+  )
+  const handleAskWithSources = React.useCallback(
+    (sources: any[]) => {
+      if (typeof window === "undefined" || !Array.isArray(sources) || sources.length === 0) {
+        return
+      }
+      const prompt = buildFollowUpPrompt(sources)
+      window.dispatchEvent(
+        new CustomEvent("tldw:set-composer-message", {
+          detail: { message: prompt }
+        })
+      )
+      window.dispatchEvent(new CustomEvent("tldw:open-knowledge-panel", {
+        detail: { tab: "search" }
+      }))
+      window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
+    },
+    [buildFollowUpPrompt]
+  )
+  const handleQuickMessageAction = React.useCallback(
+    (action: QuickMessageAction) => {
+      if (typeof window === "undefined") return
+      const content = (errorFriendlyText || props.message || "").trim()
+      if (!content) return
+
+      const lineage =
+        props.serverMessageId ||
+        props.messageId ||
+        `index:${props.currentMessageIndex + 1}`
+      const sourceReferences = (props.sources || []).map((source, index) =>
+        buildSourceReference(source, index)
+      )
+      const prompt = buildQuickMessageActionPrompt({
+        action,
+        message: content,
+        lineage,
+        sourceReferences
+      })
+
+      window.dispatchEvent(
+        new CustomEvent("tldw:set-composer-message", {
+          detail: { message: prompt }
+        })
+      )
+      window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
+    },
+    [
+      buildSourceReference,
+      errorFriendlyText,
+      props.currentMessageIndex,
+      props.message,
+      props.messageId,
+      props.serverMessageId,
+      props.sources
+    ]
+  )
+  const handleEnableProviderFallback = React.useCallback(() => {
+    updateChatModelSetting("apiProvider", undefined)
+    message.info(
+      apiProviderOverride
+        ? t(
+            "playground:errorRecovery.fallbackClearedProvider",
+            "Provider override cleared. Retrying with fallback routing."
+          )
+        : t(
+            "playground:errorRecovery.fallbackRetrying",
+            "Retrying with provider fallback policy."
+          )
+    )
+    props.onRegenerate()
+  }, [apiProviderOverride, props.onRegenerate, t, updateChatModelSetting])
+  const errorRecoveryActions = React.useMemo(() => {
+    if (!errorPayload) return []
+    const actions: Array<{ id: string; label: string; onClick: () => void }> = [
+      {
+        id: "retry",
+        label: t(
+          "playground:errorRecovery.retrySameModel",
+          "Retry same model"
+        ),
+        onClick: () => props.onRegenerate()
+      },
+      {
+        id: "switch",
+        label: t(
+          "playground:errorRecovery.switchModel",
+          "Switch model"
+        ),
+        onClick: handleOpenModelSettings
+      },
+      {
+        id: "fallback",
+        label: t(
+          "playground:errorRecovery.tryProviderFallback",
+          "Try provider fallback"
+        ),
+        onClick: handleEnableProviderFallback
+      }
+    ]
+    if (props.onContinue && !props.hideContinue) {
+      actions.push({
+        id: "continue",
+        label: t(
+          "playground:errorRecovery.continueFromPartial",
+          "Continue from partial"
+        ),
+        onClick: props.onContinue
+      })
+    }
+    return actions
+  }, [
+    errorPayload,
+    handleEnableProviderFallback,
+    handleOpenModelSettings,
+    props.hideContinue,
+    props.onContinue,
+    props.onRegenerate,
+    t
+  ])
+  const interruptionRecoveryActions = React.useMemo(() => {
+    if (!interruptedGeneration || errorPayload) return []
+    const actions: Array<{ id: string; label: string; onClick: () => void }> = [
+      {
+        id: "retry",
+        label: t(
+          "playground:errorRecovery.retrySameModel",
+          "Retry same model"
+        ),
+        onClick: () => props.onRegenerate()
+      },
+      {
+        id: "switch",
+        label: t(
+          "playground:errorRecovery.switchModel",
+          "Switch model"
+        ),
+        onClick: handleOpenModelSettings
+      },
+      {
+        id: "fallback",
+        label: t(
+          "playground:errorRecovery.tryProviderFallback",
+          "Try provider fallback"
+        ),
+        onClick: handleEnableProviderFallback
+      }
+    ]
+    if (props.onContinue && !props.hideContinue) {
+      actions.push({
+        id: "continue",
+        label: t(
+          "playground:errorRecovery.continueFromPartial",
+          "Continue from partial"
+        ),
+        onClick: props.onContinue
+      })
+    }
+    return actions
+  }, [
+    errorPayload,
+    handleEnableProviderFallback,
+    handleOpenModelSettings,
+    interruptedGeneration,
+    props.hideContinue,
+    props.onContinue,
+    props.onRegenerate,
+    t
+  ])
 
   const actionRowVisibility = isProMode
     ? "flex"
@@ -991,6 +1372,10 @@ export const PlaygroundMessage = (props: Props) => {
   ])
 
   const compareLabel = t("playground:composer.compareTag", "Compare")
+  const compareSelectedLabel = t(
+    "playground:composer.compareSelectedTag",
+    "Compared"
+  )
   const systemLabel = t("playground:systemPrompt", "System prompt")
   const messageRole = isSystemMessage
     ? "system"
@@ -1102,17 +1487,27 @@ export const PlaygroundMessage = (props: Props) => {
   ) : null
   return (
     <article
+      ref={articleRef}
       data-testid="chat-message"
       data-role={messageRole}
       data-message-type={props.message_type}
       data-index={props.currentMessageIndex}
       data-message-id={props.messageId}
       data-server-message-id={props.serverMessageId}
+      data-search-match={props.searchMatch || undefined}
       aria-label={messageAriaLabel}
       aria-busy={props.isStreaming && isLastMessage ? true : undefined}
+      tabIndex={hasMessageKeyboardShortcuts ? 0 : undefined}
+      onKeyDown={hasMessageKeyboardShortcuts ? handleMessageShortcut : undefined}
       className={`group relative flex w-full max-w-3xl flex-col items-end justify-center text-text ${
         isProMode ? "pb-3 md:px-5" : "pb-2 md:px-4"
-      } ${checkWideMode ? "max-w-none" : ""}`}>
+      } ${checkWideMode ? "max-w-none" : ""} ${
+        props.searchMatch === "active"
+          ? "rounded-lg ring-2 ring-primary/60 ring-offset-2 ring-offset-bg"
+          : props.searchMatch === "match"
+            ? "rounded-lg ring-1 ring-primary/35 ring-offset-1 ring-offset-bg"
+            : ""
+      }`}>
       {/* Inline stop button while streaming on the latest assistant message */}
       {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && props.onStopStreaming && (
         <div className="absolute right-2 top-0 z-10">
@@ -1161,6 +1556,15 @@ export const PlaygroundMessage = (props: Props) => {
                     • {messageTimestamp}
                   </span>
                 )}
+                {props.isBot && !isSystemMessage && moodBadgeLabel && (
+                  <span
+                    data-testid="message-mood-indicator"
+                    className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent"
+                  >
+                    <Smile className="h-3 w-3" aria-hidden="true" />
+                    <span>{moodBadgeLabel}</span>
+                  </span>
+                )}
                 {props?.message_type && (
                   <Tag
                     className="!m-0"
@@ -1174,29 +1578,45 @@ export const PlaygroundMessage = (props: Props) => {
                       <button
                         type="button"
                         onClick={props.onToggleCompareSelect}
-                        aria-label={compareLabel}
+                        aria-label={
+                          props.compareSelected
+                            ? compareSelectedLabel
+                            : compareLabel
+                        }
                         aria-pressed={props.compareSelected}
-                        title={compareLabel}
-                        className={`rounded-full px-2 py-1 text-xs font-medium border transition ${
+                        title={
+                          props.compareSelected
+                            ? compareSelectedLabel
+                            : compareLabel
+                        }
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium border transition ${
                           props.compareSelected
                             ? "bg-primary text-white border-primary"
                             : "bg-primary/10 text-primary border-primary/30"
                         }`}
                       >
-                        {compareLabel}
+                        {props.compareSelected && (
+                          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                        )}
+                        {props.compareSelected
+                          ? compareSelectedLabel
+                          : compareLabel}
                       </button>
                     ) : (
-                      <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                         {compareLabel}
                       </span>
                     )}
                     {props.compareError && (
-                      <span className="rounded-full bg-danger/10 px-2 py-1 text-xs font-medium text-danger">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-1 text-xs font-medium text-danger">
+                        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
                         {t("error.label", "Error")}
                       </span>
                     )}
                     {props.compareChosen && (
-                      <span className="rounded-full bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs font-medium text-success">
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                         {t(
                           "playground:composer.compareChosenLabel",
                           "Chosen"
@@ -1218,14 +1638,56 @@ export const PlaygroundMessage = (props: Props) => {
               actionInfo={props.actionInfo}
             />
           )}
-          {isProMode && props.isBot && props.generationInfo?.usage && (
+          {showUsageMetadata && (
             <div className="text-xs text-text-muted tabular-nums">
-              {props.generationInfo.usage.prompt_tokens ?? 0}{" "}
+              {messageUsage.promptTokens}{" "}
               {t("playground:tokens.prompt", "prompt")} +{" "}
-              {props.generationInfo.usage.completion_tokens ?? 0}{" "}
+              {messageUsage.completionTokens}{" "}
               {t("playground:tokens.completion", "completion")} ={" "}
-              {props.generationInfo.usage.total_tokens ?? 0}{" "}
+              {messageUsage.totalTokens}{" "}
               {t("playground:tokens.total", "tokens")}
+              {messageCostUsd != null && (
+                <>
+                  {" "}
+                  • {formatCost(messageCostUsd)}
+                </>
+              )}
+            </div>
+          )}
+          {interruptedGeneration && !errorPayload && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="rounded-md border border-warn/30 bg-warn/10 p-2 text-xs text-warn">
+              <p className="font-medium">
+                {t(
+                  "playground:errorRecovery.interruptedSummary",
+                  "Generation was interrupted. You can retry, switch model, or continue from the partial response."
+                )}
+              </p>
+              {interruptionReason && (
+                <p className="mt-1 opacity-90">{interruptionReason}</p>
+              )}
+              {interruptionRecoveryActions.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="sr-only">
+                    Recommended next actions:{" "}
+                    {interruptionRecoveryActions
+                      .map((action) => action.label)
+                      .join(", ")}
+                  </span>
+                  {interruptionRecoveryActions.map((action) => (
+                    <button
+                      key={action.id}
+                      type="button"
+                      onClick={action.onClick}
+                      className="rounded border border-warn/40 bg-surface px-2 py-1 text-[11px] font-medium text-warn transition hover:bg-warn/10"
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div className="flex flex-grow flex-col">
@@ -1244,6 +1706,7 @@ export const PlaygroundMessage = (props: Props) => {
                         "Hide technical details"
                       ) as string
                     }}
+                    recoveryActions={errorRecoveryActions}
                   />
                 ) : renderGreetingMarkdown ? (
                   <React.Suspense
@@ -1402,6 +1865,9 @@ export const PlaygroundMessage = (props: Props) => {
               canPin={Boolean(props.serverMessageId)}
               isPinned={Boolean(props.pinned)}
               onTogglePinned={props.onTogglePinned}
+              onQuickMessageAction={
+                props.isBot ? handleQuickMessageAction : undefined
+              }
             />
           )}
 
@@ -1471,16 +1937,48 @@ export const PlaygroundMessage = (props: Props) => {
                   ),
                   children: (
                     <div className="mb-3 flex flex-col gap-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted">
+                        <span>
+                          {t(
+                            "playground:sources.citationWorkflowHint",
+                            "Inspect source rationale, then seed a follow-up from selected citations."
+                          )}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleAskWithSources(props.sources || [])}
+                            className="rounded border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text-subtle hover:bg-surface2 hover:text-text"
+                          >
+                            {t(
+                              "playground:sources.askWithSources",
+                              "Ask with these sources"
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleOpenKnowledgePanel}
+                            className="rounded border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text-subtle hover:bg-surface2 hover:text-text"
+                          >
+                            {t(
+                              "playground:sources.openKnowledgePanel",
+                              "Open Search & Context"
+                            )}
+                          </button>
+                        </div>
+                      </div>
                       {props?.sources?.map((source, index) => {
                         const sourceKey = getSourceFeedbackKey(source, index)
                         const selected =
                           sourceFeedback?.[sourceKey]?.thumb ?? null
+                        const pinnedState = resolveSourcePinnedState(source)
                         return (
                           <SourceFeedback
                             key={sourceKey}
                             source={source}
                             sourceKey={sourceKey}
                             sourceIndex={index}
+                            pinnedState={pinnedState}
                             selected={selected}
                             disabled={feedbackDisabled || isFeedbackSubmitting}
                             onRate={(key, payload, thumb) =>
@@ -1490,6 +1988,10 @@ export const PlaygroundMessage = (props: Props) => {
                                 thumb
                               })
                             }
+                            onAskWithSource={(payload) =>
+                              handleAskWithSources([payload])
+                            }
+                            onOpenKnowledgePanel={handleOpenKnowledgePanel}
                             onSourceClick={props.onSourceClick}
                             onTrackClick={trackSourceClick}
                             onTrackCitation={trackCitationUsed}

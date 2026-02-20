@@ -78,6 +78,7 @@ export type CompareParentMeta = {
   parentHistoryId: string;
   clusterId?: string;
 };
+export type CompareContinuationMode = "winner" | "compare";
 
 export type CompareState = {
   history_id: string;
@@ -85,6 +86,7 @@ export type CompareState = {
   compareSelectedModels: string[];
   compareSelectionByCluster: Record<string, string[]>;
   compareCanonicalByCluster: Record<string, string | null>;
+  compareContinuationModeByCluster: Record<string, CompareContinuationMode>;
   compareSplitChats: Record<string, Record<string, string>>;
   compareActiveModelsByCluster: Record<string, string[]>;
   compareParent?: CompareParentMeta | null;
