@@ -3,6 +3,7 @@ import { tldwClient } from "@/services/tldw"
 import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { Annotation, AnnotationColor, AnnotationType } from "@/components/DocumentWorkspace/types"
+import { shouldRetryDocumentWorkspaceQuery } from "./request-retry"
 
 export interface AnnotationResponse {
   id: string
@@ -89,7 +90,8 @@ export function useAnnotations(mediaId: number | null) {
     },
     enabled: mediaId !== null && isServerAvailable,
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
-    retry: 2,
+    retry: (failureCount, error) =>
+      shouldRetryDocumentWorkspaceQuery(failureCount, error, 2),
     refetchOnWindowFocus: false
   })
 }

@@ -264,8 +264,30 @@ def is_model_known_for_provider(provider: str, model: str) -> bool | None:
     known_models = known_models_for_provider_cached(provider_key)
     if not known_models:
         return None
-    known_lower = {item.lower() for item in known_models}
-    return model_key in known_lower
+
+    # Most providers use flat model IDs; keep strict exact matching there.
+    # OpenRouter and Hugging Face commonly use namespaced IDs (vendor/model),
+    # so treat namespaced and non-namespaced forms as equivalent.
+    if provider_key not in {"openrouter", "huggingface"}:
+        known_lower = {str(item).strip().lower() for item in known_models}
+        return model_key in known_lower
+
+    def _aliases(raw_model: str) -> set[str]:
+        normalized = (raw_model or "").strip().lower()
+        if not normalized:
+            return set()
+        candidates = {normalized}
+        if "/" in normalized:
+            _, suffix = normalized.split("/", 1)
+            if suffix:
+                candidates.add(suffix)
+        return candidates
+
+    known_aliases: set[str] = set()
+    for known in known_models:
+        known_aliases.update(_aliases(str(known)))
+
+    return bool(_aliases(model_key) & known_aliases)
 
 
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))

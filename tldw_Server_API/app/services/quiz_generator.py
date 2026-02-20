@@ -44,12 +44,12 @@ Return a JSON object in this exact format:
       "hint": "Optional short hint shown on request",
       "hint_penalty_points": 0,
       "source_citations": [
-        {
+        {{
           "label": "Optional citation label",
           "quote": "Supporting excerpt",
           "chunk_id": "Optional source chunk id",
           "timestamp_seconds": 0
-        }
+        }}
       ],
       "points": 1
     }}

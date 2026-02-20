@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  HEADER_SHORTCUT_SELECTION_SETTING
+} from "@/services/settings/ui-settings"
 
 type GlobalWithExtensionRuntime = typeof globalThis & {
   browser?: Record<string, unknown>
@@ -76,5 +79,26 @@ describe("runtime-bootstrap chrome shim", () => {
     expect(typeof chromeGlobal?.runtime?.getURL).toBe("function")
     expect(typeof globalScope.browser?.storage?.local?.get).toBe("function")
   })
-})
 
+  it("backfills document workspace into persisted web header shortcuts", async () => {
+    localStorage.setItem(
+      HEADER_SHORTCUT_SELECTION_SETTING.key,
+      JSON.stringify(["chat", "media"])
+    )
+
+    await import("@web/extension/shims/runtime-bootstrap")
+
+    const nextRaw = localStorage.getItem(HEADER_SHORTCUT_SELECTION_SETTING.key)
+    expect(nextRaw).toBeTruthy()
+    const nextSelection = JSON.parse(String(nextRaw))
+    expect(Array.isArray(nextSelection)).toBe(true)
+    expect(nextSelection).toContain("chat")
+    expect(nextSelection).toContain("media")
+    expect(nextSelection).toContain("document-workspace")
+    expect(
+      localStorage.getItem(
+        "tldw:web-defaults:header-shortcuts-document-workspace:v1"
+      )
+    ).toBe("true")
+  })
+})

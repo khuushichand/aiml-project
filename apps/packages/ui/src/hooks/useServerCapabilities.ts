@@ -17,6 +17,9 @@ export const useServerCapabilities = (): UseServerCapabilitiesResult => {
   const mountedRef = React.useRef(true)
 
   React.useEffect(() => {
+    // React Strict Mode invokes effect cleanup+setup twice in development.
+    // Resetting to true on setup keeps lifecycle guards accurate.
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
     }

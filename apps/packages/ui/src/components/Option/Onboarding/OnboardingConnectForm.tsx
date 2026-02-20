@@ -425,6 +425,11 @@ export function OnboardingConnectForm({ onFinish }: Props) {
           "settings:onboarding.errors.timeout",
           "Connection timed out. The server may be slow or unreachable."
         )
+      case "cors_blocked":
+        return t(
+          "settings:onboarding.errors.cors",
+          "Browser blocked the request (CORS). Add this app origin to ALLOWED_ORIGINS on your server, or disable CORS for local development."
+        )
       case "ssl_error":
         return t(
           "settings:onboarding.errors.ssl",

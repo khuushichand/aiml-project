@@ -118,6 +118,7 @@ const MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY =
 const MEDIA_NAVIGATION_GENERATED_FALLBACK_STORAGE_KEY =
   'media:navigation:includeGeneratedFallback'
 const MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY = 'media:sidebar:collapsed'
+const MEDIA_LIBRARY_TOOLS_COLLAPSED_STORAGE_KEY = 'media:tools:collapsed'
 export const MEDIA_STALE_CHECK_INTERVAL_MS = 30_000
 const MEDIA_KEYWORD_ENDPOINT_RETRY_COOLDOWN_MS = 30_000
 const MEDIA_COLLECTIONS_STORAGE_KEY = 'media:collections:v1'
@@ -457,6 +458,10 @@ const MediaPageContent: React.FC = () => {
     MEDIA_SIDEBAR_COLLAPSED_STORAGE_KEY,
     false
   )
+  const [libraryToolsCollapsed, setLibraryToolsCollapsed] = useStorage<boolean>(
+    MEDIA_LIBRARY_TOOLS_COLLAPSED_STORAGE_KEY,
+    true
+  )
   const [navigationPanelVisible, setNavigationPanelVisible] = useStorage<boolean>(
     MEDIA_NAVIGATION_PANEL_VISIBLE_STORAGE_KEY,
     true
@@ -484,6 +489,7 @@ const MediaPageContent: React.FC = () => {
   )
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const sidebarCollapsedValue = sidebarCollapsed === true
+  const libraryToolsCollapsedValue = libraryToolsCollapsed !== false
   const contentDivRef = React.useRef<HTMLDivElement | null>(null)
   const hasRunInitialSearch = React.useRef(false)
   const keywordEndpointUnavailableRef = React.useRef(false)
@@ -1537,6 +1543,11 @@ const MediaPageContent: React.FC = () => {
     enabled: false
   })
 
+  const normalizedMetadataFilters = useMemo(
+    () => normalizeMetadataSearchFilters(metadataFilters),
+    [metadataFilters]
+  )
+
   // Compute active filters state
   const hasActiveFilters =
     mediaTypes.length > 0 ||
@@ -1548,9 +1559,59 @@ const MediaPageContent: React.FC = () => {
     !hasDefaultMediaSearchFields(searchFields) ||
     enableBoostFields ||
     searchMode === 'metadata' ||
-    normalizeMetadataSearchFilters(metadataFilters).length > 0 ||
+    normalizedMetadataFilters.length > 0 ||
     showFavoritesOnly ||
     Boolean(activeCollectionId)
+
+  const activeFilterCount = useMemo(() => {
+    return (
+      mediaTypes.length +
+      keywordTokens.length +
+      excludeKeywordTokens.length +
+      Number(Boolean(dateRange.startDate || dateRange.endDate)) +
+      Number(sortBy !== 'relevance') +
+      Number(Boolean(exactPhrase.trim())) +
+      Number(!hasDefaultMediaSearchFields(searchFields)) +
+      Number(enableBoostFields) +
+      Number(searchMode === 'metadata') +
+      Number(normalizedMetadataFilters.length > 0) +
+      Number(showFavoritesOnly) +
+      Number(Boolean(activeCollectionId))
+    )
+  }, [
+    activeCollectionId,
+    dateRange.endDate,
+    dateRange.startDate,
+    enableBoostFields,
+    exactPhrase,
+    excludeKeywordTokens.length,
+    keywordTokens.length,
+    mediaTypes.length,
+    normalizedMetadataFilters.length,
+    searchFields,
+    searchMode,
+    showFavoritesOnly,
+    sortBy
+  ])
+
+  const resetAllFilters = useCallback(() => {
+    setSearchMode('full_text')
+    setMediaTypes([])
+    setKeywordTokens([])
+    setExcludeKeywordTokens([])
+    setDateRange({ startDate: null, endDate: null })
+    setSortBy('relevance')
+    setExactPhrase('')
+    setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
+    setEnableBoostFields(false)
+    setBoostFields({ title: 2, content: 1 })
+    setMetadataFilters([createMetadataSearchFilter()])
+    setMetadataMatchMode('all')
+    setMetadataValidationError(null)
+    setShowFavoritesOnly(false)
+    setActiveCollectionId(null)
+    setPage(1)
+  }, [])
 
   useEffect(() => {
     if (searchMode !== 'metadata') {
@@ -3297,7 +3358,7 @@ const MediaPageContent: React.FC = () => {
             </div>
           </div>
 
-          {/* Search */}
+          {/* Find Media */}
           <div className="px-4 py-3 border-b border-border space-y-4">
             <div className="flex items-center justify-between">
               <button
@@ -3307,7 +3368,7 @@ const MediaPageContent: React.FC = () => {
                 aria-expanded={!searchCollapsed}
                 aria-controls="media-search-panel"
               >
-                <span>{t('review:mediaPage.search', { defaultValue: 'Search' })}</span>
+                <span>{t('review:mediaPage.findMedia', { defaultValue: 'Find media' })}</span>
                 <ChevronDown
                   className={`w-4 h-4 transition-transform ${searchCollapsed ? '' : 'rotate-180'}`}
                 />
@@ -3320,23 +3381,31 @@ const MediaPageContent: React.FC = () => {
                   onChange={setQuery}
                   inputRef={searchInputRef}
                   hasActiveFilters={hasActiveFilters}
-                  onClearAll={() => {
-                    // M4: Clear filters when clearing search
-                    setMediaTypes([])
-                    setKeywordTokens([])
-                    setExcludeKeywordTokens([])
-                    setDateRange({ startDate: null, endDate: null })
-                    setSortBy('relevance')
-                    setExactPhrase('')
-                    setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
-                    setEnableBoostFields(false)
-                    setBoostFields({ title: 2, content: 1 })
-                    setMetadataFilters([createMetadataSearchFilter()])
-                    setMetadataMatchMode('all')
-                    setMetadataValidationError(null)
-                    setShowFavoritesOnly(false)
-                    setActiveCollectionId(null)
+                  onClearAll={resetAllFilters}
+                />
+                <FilterChips
+                  mediaTypes={mediaTypes}
+                  keywords={keywordTokens}
+                  excludedKeywords={excludeKeywordTokens}
+                  showFavoritesOnly={showFavoritesOnly}
+                  activeFilterCount={activeFilterCount}
+                  onRemoveMediaType={(type) => {
+                    setMediaTypes((prev) => prev.filter((t) => t !== type))
+                    setPage(1)
                   }}
+                  onRemoveKeyword={(keyword) => {
+                    setKeywordTokens((prev) => prev.filter((k) => k !== keyword))
+                    setPage(1)
+                  }}
+                  onRemoveExcludedKeyword={(keyword) => {
+                    setExcludeKeywordTokens((prev) => prev.filter((k) => k !== keyword))
+                    setPage(1)
+                  }}
+                  onToggleFavorites={() => {
+                    setShowFavoritesOnly(false)
+                    setPage(1)
+                  }}
+                  onClearAll={resetAllFilters}
                 />
                 <button
                   onClick={handleSearch}
@@ -3414,8 +3483,13 @@ const MediaPageContent: React.FC = () => {
                     loadKeywordSuggestions(txt)
                   }}
                   showFavoritesOnly={showFavoritesOnly}
-                  onShowFavoritesOnlyChange={setShowFavoritesOnly}
+                  onShowFavoritesOnlyChange={(show) => {
+                    setShowFavoritesOnly(show)
+                    setPage(1)
+                  }}
                   favoritesCount={favoritesSet.size}
+                  activeFilterCount={activeFilterCount}
+                  onClearAll={resetAllFilters}
                 />
                 <div className="rounded-md border border-border bg-surface2 px-2 py-2 space-y-2">
                   <div className="flex items-center gap-2">
@@ -3482,6 +3556,14 @@ const MediaPageContent: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Results Section */}
+          <div className="px-4 py-3 border-b border-border space-y-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              {t('review:mediaPage.results', { defaultValue: 'Results' })}
+            </div>
+
             {/* Jump To Navigator */}
             {hasJumpTo && (
               <div className="pt-1">
@@ -3500,10 +3582,10 @@ const MediaPageContent: React.FC = () => {
                 {!jumpToCollapsed && (
                   <div id="media-jump-panel" className="mt-2">
                     <JumpToNavigator
-                      results={displayResults.map(r => ({ id: r.id, title: r.title }))}
+                      results={displayResults.map((r) => ({ id: r.id, title: r.title }))}
                       selectedId={selected?.id || null}
                       onSelect={(id) => {
-                        const item = displayResults.find(r => r.id === id)
+                        const item = displayResults.find((r) => r.id === id)
                         if (item) setSelected(item)
                       }}
                       maxButtons={12}
@@ -3514,36 +3596,6 @@ const MediaPageContent: React.FC = () => {
               </div>
             )}
           </div>
-
-          {/* Active Filter Chips */}
-          <FilterChips
-            mediaTypes={mediaTypes}
-            keywords={keywordTokens}
-            showFavoritesOnly={showFavoritesOnly}
-            onRemoveMediaType={(type) => {
-              setMediaTypes((prev) => prev.filter((t) => t !== type))
-            }}
-            onRemoveKeyword={(keyword) => {
-              setKeywordTokens((prev) => prev.filter((k) => k !== keyword))
-            }}
-            onToggleFavorites={() => setShowFavoritesOnly(false)}
-            onClearAll={() => {
-              setMediaTypes([])
-              setKeywordTokens([])
-              setExcludeKeywordTokens([])
-              setDateRange({ startDate: null, endDate: null })
-              setSortBy('relevance')
-              setExactPhrase('')
-              setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
-              setEnableBoostFields(false)
-              setBoostFields({ title: 2, content: 1 })
-              setMetadataFilters([createMetadataSearchFilter()])
-              setMetadataMatchMode('all')
-              setMetadataValidationError(null)
-              setShowFavoritesOnly(false)
-              setActiveCollectionId(null)
-            }}
-          />
 
           {bulkSelectionMode && (
             <div
@@ -3711,22 +3763,7 @@ const MediaPageContent: React.FC = () => {
               onClearSearch={() => {
                 setQuery('')
               }}
-              onClearFilters={() => {
-                setMediaTypes([])
-                setKeywordTokens([])
-                setExcludeKeywordTokens([])
-                setDateRange({ startDate: null, endDate: null })
-                setSortBy('relevance')
-                setExactPhrase('')
-                setSearchFields([...DEFAULT_MEDIA_SEARCH_FIELDS])
-                setEnableBoostFields(false)
-                setBoostFields({ title: 2, content: 1 })
-                setMetadataFilters([createMetadataSearchFilter()])
-                setMetadataMatchMode('all')
-                setMetadataValidationError(null)
-                setShowFavoritesOnly(false)
-                setActiveCollectionId(null)
-              }}
+              onClearFilters={resetAllFilters}
               onOpenQuickIngest={() => {
                 if (typeof window !== 'undefined') {
                   window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
@@ -3780,12 +3817,34 @@ const MediaPageContent: React.FC = () => {
             className="shrink-0 border-t border-border bg-surface"
             data-testid="media-sidebar-bottom-utilities"
           >
-            <MediaIngestJobsPanel />
-            <MediaLibraryStatsPanel
-              results={displayResults}
-              totalCount={activeTotalCount}
-              storageUsage={libraryStorageUsage}
-            />
+            <button
+              type="button"
+              onClick={() => setLibraryToolsCollapsed(!libraryToolsCollapsedValue)}
+              className="flex w-full items-center justify-between px-4 py-3 text-sm text-text hover:text-text"
+              aria-expanded={!libraryToolsCollapsedValue}
+              aria-controls="media-library-tools-panel"
+              data-testid="media-library-tools-toggle"
+            >
+              <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                {t('review:mediaPage.libraryTools', { defaultValue: 'Library tools' })}
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 text-text-muted transition-transform ${
+                  libraryToolsCollapsedValue ? '' : 'rotate-180'
+                }`}
+              />
+            </button>
+
+            {!libraryToolsCollapsedValue && (
+              <div id="media-library-tools-panel">
+                <MediaIngestJobsPanel />
+                <MediaLibraryStatsPanel
+                  results={displayResults}
+                  totalCount={activeTotalCount}
+                  storageUsage={libraryStorageUsage}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>

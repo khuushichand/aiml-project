@@ -4,6 +4,10 @@ import { tldwClient } from "@/services/tldw"
 import { useConnectionStore } from "@/store/connection"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { ViewMode } from "@/components/DocumentWorkspace/types"
+import {
+  isNotFoundError,
+  shouldRetryDocumentWorkspaceQuery,
+} from "./request-retry"
 
 /**
  * Sync reading progress using navigator.sendBeacon for guaranteed delivery on page unload.
@@ -153,7 +157,8 @@ export function useReadingProgress(mediaId: number | null) {
     },
     enabled: mediaId !== null && isServerAvailable,
     staleTime: 60 * 1000, // Cache for 1 minute
-    retry: 1,
+    retry: (failureCount, error) =>
+      shouldRetryDocumentWorkspaceQuery(failureCount, error, 1),
     refetchOnWindowFocus: false
   })
 }
@@ -213,6 +218,7 @@ export function useReadingProgressAutoSave(
 
   const updateMutation = useUpdateReadingProgress()
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const missingMediaIdsRef = useRef<Set<number>>(new Set())
   const lastSavedRef = useRef<{
     page: number
     zoom: number
@@ -233,7 +239,13 @@ export function useReadingProgressAutoSave(
 
   // Save function
   const saveProgress = useCallback(async () => {
-    if (!mediaId || !isServerAvailable || totalPages === 0 || !hasChanges()) {
+    if (
+      !mediaId ||
+      !isServerAvailable ||
+      totalPages === 0 ||
+      !hasChanges() ||
+      missingMediaIdsRef.current.has(mediaId)
+    ) {
       return
     }
 
@@ -250,6 +262,7 @@ export function useReadingProgressAutoSave(
         }
       })
 
+      missingMediaIdsRef.current.delete(mediaId)
       lastSavedRef.current = {
         page: currentPage,
         zoom: zoomLevel,
@@ -257,6 +270,10 @@ export function useReadingProgressAutoSave(
         cfi: currentCfi
       }
     } catch (error) {
+      if (mediaId && isNotFoundError(error)) {
+        missingMediaIdsRef.current.add(mediaId)
+        return
+      }
       console.error("Failed to save reading progress:", error)
     }
   }, [

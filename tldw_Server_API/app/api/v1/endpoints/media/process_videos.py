@@ -43,9 +43,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
-    run_video_batch,
-)
 
 router = APIRouter()
 
@@ -81,6 +78,11 @@ async def process_videos_endpoint(
     # --- Validation and Logging ---
     logger.info(
         "Request received for /process-videos. Form data validated via dependency."
+    )
+
+    # Lazy import to avoid import-time hard failures from optional transcriber backends.
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
+        run_video_batch,
     )
     try:
         usage_log.log_event(

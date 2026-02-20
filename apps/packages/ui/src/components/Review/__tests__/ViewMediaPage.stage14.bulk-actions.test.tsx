@@ -336,6 +336,7 @@ describe('ViewMediaPage stage 14 bulk actions baseline', () => {
 
     const resultsList = screen.getByTestId('results-list')
     const bottomUtilities = screen.getByTestId('media-sidebar-bottom-utilities')
+    fireEvent.click(screen.getByTestId('media-library-tools-toggle'))
     const ingestJobsPanel = screen.getByTestId('media-ingest-jobs-panel')
     const libraryStatsPanel = screen.getByTestId('media-library-stats-panel')
 

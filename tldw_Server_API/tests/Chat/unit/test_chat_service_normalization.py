@@ -61,3 +61,36 @@ def test_openrouter_alias_dummy_maps_and_preserves_namespace(monkeypatch):
     assert provider == "openrouter"
     # In tests, alias 'dummy' -> 'z-ai/glm-4.6' for OpenRouter and keep namespace
     assert req.model == "z-ai/glm-4.6"
+
+
+@pytest.mark.unit
+def test_model_availability_accepts_namespaced_request_for_plain_inventory(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("glm-4.6",),
+    )
+
+    assert (
+        chat_service.is_model_known_for_provider("openrouter", "z-ai/glm-4.6")
+        is True
+    )
+
+
+@pytest.mark.unit
+def test_model_availability_accepts_plain_request_for_namespaced_inventory(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Chat import chat_service
+
+    monkeypatch.setattr(
+        chat_service,
+        "known_models_for_provider_cached",
+        lambda _provider: ("z-ai/glm-4.6",),
+    )
+
+    assert chat_service.is_model_known_for_provider("openrouter", "glm-4.6") is True

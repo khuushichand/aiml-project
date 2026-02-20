@@ -3092,13 +3092,7 @@ async def lifespan(app: FastAPI):
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager as _get_pm
         from tldw_Server_API.app.core.config import (
-            ALLOWED_ORIGINS as _ALLOWED_ORIGINS,
-        )
-        from tldw_Server_API.app.core.config import (
-            should_allow_cors_credentials as _should_allow_cors_credentials,
-        )
-        from tldw_Server_API.app.core.config import (
-            should_disable_cors as _should_disable_cors,
+            get_cors_runtime_diagnostics as _get_cors_runtime_diagnostics,
         )
         from tldw_Server_API.app.core.Metrics import OTEL_AVAILABLE as _OTEL
 
@@ -3120,8 +3114,18 @@ async def lifespan(app: FastAPI):
             _os.getenv("REDIS_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
         )
         _csrf_enabled = (_auth_mode == "multi_user") or (_csrf_globals.get("CSRF_ENABLED", None) is True)
-        _cors_count = len(_ALLOWED_ORIGINS) if isinstance(_ALLOWED_ORIGINS, list) else 0
-        _cors_allow_credentials = _should_allow_cors_credentials()
+        _cors_diagnostics = _get_cors_runtime_diagnostics()
+        _cors_disable = bool(_cors_diagnostics.get("disable_cors", False))
+        _cors_disable_source = str(_cors_diagnostics.get("disable_cors_source", "unknown"))
+        _cors_allow_credentials = bool(_cors_diagnostics.get("allow_credentials", False))
+        _cors_allow_credentials_source = str(_cors_diagnostics.get("allow_credentials_source", "unknown"))
+        _cors_count = int(_cors_diagnostics.get("allowed_origins_count", 0))
+        _cors_allowed_origins_source = str(_cors_diagnostics.get("allowed_origins_source", "unknown"))
+        _cors_allowed_origins = _cors_diagnostics.get("allowed_origins", [])
+        if not isinstance(_cors_allowed_origins, list):
+            _cors_allowed_origins = []
+        _cors_config_path = _cors_diagnostics.get("config_path")
+        _cors_config_loaded = bool(_cors_diagnostics.get("config_loaded", False))
         _has_limiter = hasattr(app.state, "limiter")
         _pm = _get_pm()
         _providers = len(_pm.providers) if _pm and hasattr(_pm, "providers") else 0
@@ -3138,12 +3142,27 @@ async def lifespan(app: FastAPI):
             logger.info("• Database check: OK")
         logger.info(f"• Redis: enabled={_redis_enabled}")
         logger.info(f"• CSRF: enabled={_csrf_enabled}")
-        if _should_disable_cors():
+        if _cors_disable:
             logger.info("• CORS: disabled")
         else:
             logger.info(
                 f"• CORS: allowed_origins={_cors_count} | allow_credentials={_cors_allow_credentials}"
             )
+        logger.info(
+            "• CORS effective settings: "
+            f"disable={_cors_disable} (source={_cors_disable_source}) | "
+            f"allow_credentials={_cors_allow_credentials} (source={_cors_allow_credentials_source}) | "
+            f"origins={_cors_count} (source={_cors_allowed_origins_source})"
+        )
+        logger.info(
+            f"• CORS config file: path={_cors_config_path or '(unknown)'} | loaded={_cors_config_loaded}"
+        )
+        if _cors_allowed_origins:
+            _origin_preview_max = 6
+            _origin_preview = ", ".join(str(o) for o in _cors_allowed_origins[:_origin_preview_max])
+            if len(_cors_allowed_origins) > _origin_preview_max:
+                _origin_preview += f", ... (+{len(_cors_allowed_origins) - _origin_preview_max} more)"
+            logger.info(f"• CORS origins preview: {_origin_preview}")
         logger.info(f"• Global rate limiter: {_has_limiter}")
         logger.info(f"• Providers configured: {_providers}")
         logger.info(f"• OpenTelemetry available: {bool(_OTEL)}")

@@ -181,6 +181,83 @@ const deriveKnowledgeStatusFromHealth = (raw: any): KnowledgeStatus => {
   return "ready"
 }
 
+const getNormalizedOrigin = (value: string | null | undefined): string | null => {
+  if (!value) return null
+  try {
+    return new URL(String(value)).origin
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserOrigin = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return window.location?.origin ?? null
+  } catch {
+    return null
+  }
+}
+
+const CORS_ERROR_PATTERNS = [
+  /cors/i,
+  /cross-origin/i,
+  /disallowed origin/i
+]
+
+const NETWORK_BLOCK_PATTERNS = [
+  /networkerror when attempting to fetch resource/i,
+  /failed to fetch/i,
+  /network request failed/i,
+  /load failed/i
+]
+
+const maybeAnnotateCorsMismatchError = ({
+  error,
+  status,
+  serverUrl
+}: {
+  error: string | null
+  status: number
+  serverUrl: string | null
+}): string | null => {
+  if (!error) return error
+  const trimmed = String(error).trim()
+  if (!trimmed) return error
+  const normalized = trimmed.toLowerCase()
+  if (normalized.startsWith("likely cors mismatch:")) {
+    return trimmed
+  }
+
+  const mentionsCors = CORS_ERROR_PATTERNS.some((pattern) =>
+    pattern.test(trimmed)
+  )
+  const looksLikeNetworkBlock = NETWORK_BLOCK_PATTERNS.some((pattern) =>
+    pattern.test(trimmed)
+  )
+  if (!mentionsCors && !looksLikeNetworkBlock) {
+    return trimmed
+  }
+
+  const browserOrigin = getCurrentBrowserOrigin()
+  const backendOrigin = getNormalizedOrigin(serverUrl)
+  if (browserOrigin && backendOrigin && browserOrigin === backendOrigin && !mentionsCors) {
+    return trimmed
+  }
+
+  if (status > 0 && status < 400 && !mentionsCors) {
+    return trimmed
+  }
+
+  const browserLabel = browserOrigin || "current browser origin"
+  const backendLabel = backendOrigin || (serverUrl ? String(serverUrl) : "configured server")
+  return (
+    `Likely CORS mismatch: ${browserLabel} is not allowed by ${backendLabel}. ` +
+    `Set ALLOWED_ORIGINS to include ${browserLabel} (or disable CORS for local development). ` +
+    `Original error: ${trimmed}`
+  )
+}
+
 type ConnectionStore = {
   state: ConnectionState
   checkOnce: () => Promise<void>
@@ -439,6 +516,11 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       ])
       console.log('[CONN_DEBUG] health check result', { ok: raced.ok, status: raced.status, error: raced.error })
       const ok = raced.ok
+      const resolvedHealthError = maybeAnnotateCorsMismatchError({
+        error: raced.error,
+        status: raced.status,
+        serverUrl
+      })
 
       let knowledgeStatus: KnowledgeStatus = prev.knowledgeStatus
       let knowledgeLastCheckedAt = prev.knowledgeLastCheckedAt
@@ -515,7 +597,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             isChecking: false,
             offlineBypass: false,
             lastCheckedAt: Date.now(),
-            lastError: raced.error || "transient-health-check-failure",
+            lastError: resolvedHealthError || "transient-health-check-failure",
             lastStatusCode: raced.status || 0,
             errorKind: "partial",
             consecutiveFailures: nextConsecutiveFailures
@@ -546,7 +628,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
                 : 0,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
-          lastError: ok ? null : (raced.error || 'timeout-or-offline'),
+          lastError: ok ? null : (resolvedHealthError || 'timeout-or-offline'),
           lastStatusCode: ok ? null : raced.status,
           knowledgeStatus,
           knowledgeLastCheckedAt,
@@ -557,6 +639,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       })
       console.log('[CONN_DEBUG] state updated, new state:', get().state.phase, get().state.isConnected)
     } catch (error) {
+      const fallbackError =
+        maybeAnnotateCorsMismatchError({
+          error: (error as Error)?.message ?? "unknown-error",
+          status: 0,
+          serverUrl: prev.serverUrl
+        }) ?? "unknown-error"
       set({
         state: {
           ...prev,
@@ -566,11 +654,11 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           consecutiveFailures: prev.consecutiveFailures + 1,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
-          lastError: (error as Error)?.message ?? "unknown-error",
+          lastError: fallbackError,
           lastStatusCode: 0,
           knowledgeStatus: "offline",
           knowledgeLastCheckedAt: Date.now(),
-          knowledgeError: (error as Error)?.message ?? "unknown-error",
+          knowledgeError: fallbackError,
           errorKind: "unreachable",
           checksSinceConfigChange: nextChecksSinceConfigChange
         }

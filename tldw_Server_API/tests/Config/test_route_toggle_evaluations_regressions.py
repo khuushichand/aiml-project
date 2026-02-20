@@ -99,3 +99,31 @@ def test_route_toggle_env_override_disables_stable_only_when_api_routes_section_
     assert policy["stable_only"] is False
     # Without stable-only gating, default_stable=True keeps experimental route enabled.
     assert config_mod.route_enabled("benchmarks") is True
+
+
+def test_route_toggle_ignores_env_overrides_outside_explicit_pytest_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = configparser.ConfigParser()
+    cp.read_string(
+        "\n".join(
+            [
+                "[API-Routes]",
+                "stable_only = true",
+                "disable =",
+                "enable =",
+            ]
+        )
+    )
+    monkeypatch.setattr(config_mod, "load_comprehensive_config", lambda: cp)
+    monkeypatch.setattr(config_mod, "is_explicit_pytest_runtime", lambda: False)
+    monkeypatch.setenv("ROUTES_STABLE_ONLY", "false")
+    monkeypatch.setenv("ROUTES_ENABLE", "benchmarks")
+    monkeypatch.setenv("ROUTES_DISABLE", "persona")
+
+    policy = config_mod._route_toggle_policy()
+
+    assert policy["stable_only"] is True
+    assert "benchmarks" not in policy["enable"]
+    assert "persona" not in policy["disable"]
+    assert config_mod.route_enabled("benchmarks") is False

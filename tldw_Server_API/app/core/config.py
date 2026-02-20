@@ -279,13 +279,16 @@ _DEFAULT_ALLOWED_ORIGINS = [
 _ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")
 if _ENV_ALLOWED is None:
     ALLOWED_ORIGINS = list(_DEFAULT_ALLOWED_ORIGINS)
+    _ALLOWED_ORIGINS_SOURCE = "default"
 elif not str(_ENV_ALLOWED).strip():
     _log_warning(
         "ALLOWED_ORIGINS is set but empty; falling back to default local origins for compatibility."
     )
     ALLOWED_ORIGINS = list(_DEFAULT_ALLOWED_ORIGINS)
+    _ALLOWED_ORIGINS_SOURCE = "default(empty-env)"
 else:
     ALLOWED_ORIGINS = _parse_allowed_origins_env(_ENV_ALLOWED)
+    _ALLOWED_ORIGINS_SOURCE = "env"
 
 # --- API Configuration ---
 # API version prefix for all endpoints
@@ -2512,33 +2515,79 @@ def rg_policy_path() -> str:
 @lru_cache(maxsize=1)
 def should_disable_cors() -> bool:
     """Return True if CORS middleware should be skipped."""
-    env_value = os.getenv("DISABLE_CORS")
-    if env_value is not None:
-        return env_value.strip().lower() in {"true", "1", "yes", "on"}
-
-    try:
-        config_parser = load_comprehensive_config()
-        if config_parser.has_section('Server'):
-            return config_parser.getboolean('Server', 'disable_cors', fallback=False)
-    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
-        _log_debug(f"Unable to read disable_cors flag from config: {exc}")
-    return False
+    value, _ = _resolve_disable_cors_value_and_source()
+    return value
 
 
 @lru_cache(maxsize=1)
 def should_allow_cors_credentials() -> bool:
     """Return True when CORS should allow credentials (cookies/auth)."""
-    env_value = os.getenv("CORS_ALLOW_CREDENTIALS")
+    value, _ = _resolve_cors_allow_credentials_value_and_source()
+    return value
+
+
+def _resolve_disable_cors_value_and_source() -> tuple[bool, str]:
+    env_value = os.getenv("DISABLE_CORS")
     if env_value is not None:
-        return is_truthy(env_value)
+        return env_value.strip().lower() in {"true", "1", "yes", "on"}, "env"
 
     try:
-        config_parser = load_comprehensive_config()
+        config_parser = _load_config_parser()
         if config_parser.has_section("Server"):
-            return config_parser.getboolean("Server", "cors_allow_credentials", fallback=False)
+            has_option = config_parser.has_option("Server", "disable_cors")
+            value = config_parser.getboolean("Server", "disable_cors", fallback=False)
+            return value, ("config" if has_option else "default")
+    except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+        _log_debug(f"Unable to read disable_cors flag from config: {exc}")
+
+    return False, "default"
+
+
+def _resolve_cors_allow_credentials_value_and_source() -> tuple[bool, str]:
+    env_value = os.getenv("CORS_ALLOW_CREDENTIALS")
+    if env_value is not None:
+        return is_truthy(env_value), "env"
+
+    try:
+        config_parser = _load_config_parser()
+        if config_parser.has_section("Server"):
+            has_option = config_parser.has_option("Server", "cors_allow_credentials")
+            value = config_parser.getboolean("Server", "cors_allow_credentials", fallback=False)
+            return value, ("config" if has_option else "default")
     except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
         _log_debug(f"Unable to read cors_allow_credentials flag from config: {exc}")
-    return False
+
+    return False, "default"
+
+
+def _resolve_allowed_origins_source() -> str:
+    return _ALLOWED_ORIGINS_SOURCE
+
+
+def get_cors_runtime_diagnostics() -> dict[str, Any]:
+    """Return effective CORS values with source attribution for startup diagnostics."""
+    disable_cors, disable_cors_source = _resolve_disable_cors_value_and_source()
+    allow_credentials, allow_credentials_source = _resolve_cors_allow_credentials_value_and_source()
+    allowed_origins = [str(origin).strip() for origin in ALLOWED_ORIGINS if str(origin).strip()]
+    allowed_origins_source = _resolve_allowed_origins_source()
+
+    try:
+        _load_config_parser()
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
+        pass
+    config_meta = get_config_source_metadata()
+
+    return {
+        "disable_cors": disable_cors,
+        "disable_cors_source": disable_cors_source,
+        "allow_credentials": allow_credentials,
+        "allow_credentials_source": allow_credentials_source,
+        "allowed_origins": allowed_origins,
+        "allowed_origins_count": len(allowed_origins),
+        "allowed_origins_source": allowed_origins_source,
+        "config_path": config_meta.get("path"),
+        "config_loaded": bool(config_meta.get("loaded")),
+    }
 
 
 def load_comprehensive_config_with_tts():
@@ -2602,17 +2651,19 @@ def load_comprehensive_config_with_tts():
 
 @lru_cache(maxsize=1)
 def _route_toggle_policy() -> dict:
-    """Compute route toggle policy from env and config.txt.
+    """Compute route toggle policy from config.txt (authoritative in runtime).
 
-    Priority: ENV overrides > config.txt > defaults.
+    Priority:
+      - Normal runtime: config.txt > defaults
+      - Explicit pytest runtime: ENV overrides > config.txt > defaults
 
     Defaults:
       - Conservative baseline is `stable_only=True` when config cannot be read
         or the [API-Routes] section is missing.
       - If [API-Routes] exists but omits `stable_only`, parser fallback is false.
-      - ROUTES_STABLE_ONLY (when set) overrides the computed value.
+      - During explicit pytest runtime only, ROUTES_STABLE_ONLY can override.
 
-    ENV variables supported:
+    ENV variables supported (explicit pytest runtime only):
       - ROUTES_STABLE_ONLY: true|false
       - ROUTES_DISABLE: comma-separated list of route keys
       - ROUTES_ENABLE: comma-separated list of route keys
@@ -2669,14 +2720,23 @@ def _route_toggle_policy() -> dict:
     except _CONFIG_NONCRITICAL_EXCEPTIONS as _e:
         _log_debug(f"Route policy: unable to read config.txt [API-Routes]: {_e}")
 
-    # ENV overrides
-    env_stable_only = os.getenv('ROUTES_STABLE_ONLY')
-    if env_stable_only is not None:
-        cfg_stable_only = is_truthy(env_stable_only)
+    # Keep config.txt authoritative in normal runtime.
+    # Preserve env overrides only for explicit pytest execution where tests
+    # rely on route toggling without mutating shared config files.
+    allow_env_overrides = False
+    try:
+        allow_env_overrides = bool(is_explicit_pytest_runtime())
+    except _CONFIG_NONCRITICAL_EXCEPTIONS:
+        allow_env_overrides = False
 
-    cfg_disable |= _parse_list(os.getenv('ROUTES_DISABLE'))
-    cfg_enable |= _parse_list(os.getenv('ROUTES_ENABLE'))
-    default_experimental |= _parse_list(os.getenv('ROUTES_EXPERIMENTAL'))
+    if allow_env_overrides:
+        env_stable_only = os.getenv('ROUTES_STABLE_ONLY')
+        if env_stable_only is not None:
+            cfg_stable_only = is_truthy(env_stable_only)
+
+        cfg_disable |= _parse_list(os.getenv('ROUTES_DISABLE'))
+        cfg_enable |= _parse_list(os.getenv('ROUTES_ENABLE'))
+        default_experimental |= _parse_list(os.getenv('ROUTES_EXPERIMENTAL'))
     default_experimental |= cfg_experimental_extra
 
     return {
@@ -2697,10 +2757,10 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
     """
     key = (route_key or "").strip().lower()
 
-    # Hard-enable critical test routes when the minimal test app is active to
-    # avoid 404s in unit tests even if config.txt marks them experimental.
+    # Hard-enable critical test routes only in explicit pytest runtime.
     _minimal = env_flag_enabled("MINIMAL_TEST_APP")
-    if _minimal and key in {"workflows", "scheduler"}:
+    _pytest_runtime = is_explicit_pytest_runtime()
+    if _minimal and _pytest_runtime and key in {"workflows", "scheduler"}:
         return True
     policy = _route_toggle_policy()
 
@@ -2722,7 +2782,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
     # In test environments, force-enable certain routes commonly used by tests
     try:
         _test_mode = is_test_mode()
-        _pytest_active = is_explicit_pytest_runtime() or 'pytest' in sys.modules
+        _pytest_active = is_explicit_pytest_runtime()
         # Force-enable a small set of routes that tests rely on, regardless of
         # stable/experimental gating or import order. This avoids 404s when
         # the app module is imported before fixtures set ROUTES_ENABLE.
@@ -2745,7 +2805,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "guardian",
             "self-monitoring",
         }
-        if (_test_mode or _pytest_active) and key in _force_in_tests:
+        if _pytest_active and _test_mode and key in _force_in_tests:
             return True
     except _CONFIG_NONCRITICAL_EXCEPTIONS:
         pass

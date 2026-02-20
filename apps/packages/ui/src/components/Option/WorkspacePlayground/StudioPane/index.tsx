@@ -32,16 +32,31 @@ import {
   Settings2,
   PanelRightClose
 } from "lucide-react"
-import { Button, Empty, Tooltip, Input, Modal, message, Slider, Select, Dropdown, Table as AntTable } from "antd"
+import {
+  Button,
+  Empty,
+  Tooltip,
+  Input,
+  Modal,
+  message,
+  Slider,
+  Select,
+  Dropdown,
+  Switch,
+  Table as AntTable
+} from "antd"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useWorkspaceStore } from "@/store/workspace"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { tldwModels, type ModelInfo } from "@/services/tldw"
 import { generateQuiz } from "@/services/quizzes"
 import { createFlashcard, createDeck, listDecks } from "@/services/flashcards"
 import { fetchTldwVoiceCatalog, type TldwVoice } from "@/services/tldw/audio-voices"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { OUTPUT_TYPES } from "@/types/workspace"
 import type { ArtifactType, GeneratedArtifact, AudioTtsProvider } from "@/types/workspace"
+import { useStoreMessageOption } from "@/store/option"
+import { useStoreChatModelSettings } from "@/store/model"
 import Mermaid from "@/components/Common/Mermaid"
 import { QuickNotesSection } from "./QuickNotesSection"
 import { getWorkspaceStudioNoSourcesHint } from "../source-location-copy"
@@ -271,13 +286,32 @@ const VOICE_PREVIEW_TEXT =
 const OUTPUT_VIRTUALIZATION_THRESHOLD = 50
 const OUTPUT_VIRTUAL_ROW_HEIGHT = 150
 const OUTPUT_VIRTUAL_OVERSCAN = 4
+const STUDIO_GENERATION_RAG_TIMEOUT_MS = 120000
+const STUDIO_DEFAULT_RAG_TOP_K = 8
+const STUDIO_DEFAULT_RAG_MIN_SCORE = 0.2
+const STUDIO_DEFAULT_ENABLE_RERANKING = true
+const STUDIO_DEFAULT_MAX_TOKENS = 800
 
 const isAbortLikeError = (error: unknown): boolean => {
-  if ((error as { name?: string } | null)?.name === "AbortError") {
+  const candidate = (error as {
+    name?: string
+    message?: string
+    code?: string
+  } | null) ?? { message: String(error ?? "") }
+
+  if (candidate.name === "AbortError") {
     return true
   }
-  const message = error instanceof Error ? error.message : String(error ?? "")
-  return /abort|cancel/i.test(message)
+
+  if (
+    typeof candidate.code === "string" &&
+    /^(REQUEST_ABORTED|ERR_CANCELED|ERR_CANCELLED)$/i.test(candidate.code)
+  ) {
+    return true
+  }
+
+  const message = candidate.message ?? String(error ?? "")
+  return /\babort(ed|error)?\b/i.test(message)
 }
 
 export const estimateGenerationSeconds = (
@@ -449,6 +483,30 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const setAudioSettings = useWorkspaceStore((s) => s.setAudioSettings)
   const captureToCurrentNote = useWorkspaceStore((s) => s.captureToCurrentNote)
 
+  // Workspace chat/store options
+  const selectedModel = useStoreMessageOption((s) => s.selectedModel)
+  const setSelectedModel = useStoreMessageOption((s) => s.setSelectedModel)
+  const ragSearchMode = useStoreMessageOption((s) => s.ragSearchMode)
+  const setRagSearchMode = useStoreMessageOption((s) => s.setRagSearchMode)
+  const ragTopK = useStoreMessageOption((s) => s.ragTopK)
+  const setRagTopK = useStoreMessageOption((s) => s.setRagTopK)
+  const ragEnableGeneration = useStoreMessageOption((s) => s.ragEnableGeneration)
+  const setRagEnableGeneration = useStoreMessageOption((s) => s.setRagEnableGeneration)
+  const ragEnableCitations = useStoreMessageOption((s) => s.ragEnableCitations)
+  const setRagEnableCitations = useStoreMessageOption((s) => s.setRagEnableCitations)
+  const ragAdvancedOptions = useStoreMessageOption((s) => s.ragAdvancedOptions)
+  const setRagAdvancedOptions = useStoreMessageOption((s) => s.setRagAdvancedOptions)
+
+  const apiProvider = useStoreChatModelSettings((s) => s.apiProvider)
+  const temperature = useStoreChatModelSettings((s) => s.temperature)
+  const topP = useStoreChatModelSettings((s) => s.topP)
+  const numPredict = useStoreChatModelSettings((s) => s.numPredict)
+  const setApiProvider = useStoreChatModelSettings((s) => s.setApiProvider)
+  const setTemperature = useStoreChatModelSettings((s) => s.setTemperature)
+  const setTopP = useStoreChatModelSettings((s) => s.setTopP)
+  const setNumPredict = useStoreChatModelSettings((s) => s.setNumPredict)
+  const updateModelSetting = useStoreChatModelSettings((s) => s.updateSetting)
+
   // Local state for TTS settings panel
   const [showTtsSettings, setShowTtsSettings] = useState(false)
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
@@ -463,9 +521,12 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
   // Local state for collapsible sections
+  const [studioOptionsExpanded, setStudioOptionsExpanded] = useState(true)
   const [studioExpanded, setStudioExpanded] = useState(true)
   const [outputsExpanded, setOutputsExpanded] = useState(true)
   const [notesExpanded, setNotesExpanded] = useState(true)
+  const [chatModels, setChatModels] = useState<ModelInfo[]>([])
+  const [loadingChatModels, setLoadingChatModels] = useState(false)
   const generationAbortRef = useRef<AbortController | null>(null)
   const outputListContainerRef = useRef<HTMLDivElement | null>(null)
   const [outputListScrollTop, setOutputListScrollTop] = useState(0)
@@ -491,6 +552,29 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       .catch(() => setTldwVoices([]))
       .finally(() => setLoadingVoices(false))
   }, [audioSettings.provider, inferredTldwProviderKey])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingChatModels(true)
+    tldwModels
+      .getChatModels()
+      .then((models) => {
+        if (cancelled) return
+        setChatModels(Array.isArray(models) ? models : [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setChatModels([])
+      })
+      .finally(() => {
+        if (cancelled) return
+        setLoadingChatModels(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const loadFlashcardDecks = async (signal?: AbortSignal) => {
     setLoadingDecks(true)
@@ -538,6 +622,124 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const mobileSliderClassName = isMobile
     ? "[&_.ant-slider-rail]:!h-2 [&_.ant-slider-track]:!h-2 [&_.ant-slider-handle]:!h-5 [&_.ant-slider-handle]:!w-5"
     : undefined
+  const normalizedRagAdvancedOptions = React.useMemo(() => {
+    return isRecord(ragAdvancedOptions) ? ragAdvancedOptions : {}
+  }, [ragAdvancedOptions])
+  const resolvedStudioTopK = React.useMemo(() => {
+    const value =
+      typeof ragTopK === "number" && Number.isFinite(ragTopK)
+        ? ragTopK
+        : STUDIO_DEFAULT_RAG_TOP_K
+    return Math.max(1, Math.min(50, Math.round(value)))
+  }, [ragTopK])
+  const studioSimilarityThreshold = React.useMemo(() => {
+    const raw = normalizedRagAdvancedOptions.min_score
+    const value =
+      typeof raw === "number" && Number.isFinite(raw)
+        ? raw
+        : STUDIO_DEFAULT_RAG_MIN_SCORE
+    return Math.max(0, Math.min(1, value))
+  }, [normalizedRagAdvancedOptions.min_score])
+  const studioRerankingEnabled = React.useMemo(() => {
+    const raw = normalizedRagAdvancedOptions.enable_reranking
+    return typeof raw === "boolean"
+      ? raw
+      : STUDIO_DEFAULT_ENABLE_RERANKING
+  }, [normalizedRagAdvancedOptions.enable_reranking])
+  const resolvedTemperature = React.useMemo(() => {
+    const value =
+      typeof temperature === "number" && Number.isFinite(temperature)
+        ? temperature
+        : 0.7
+    return Math.max(0, Math.min(2, Number(value.toFixed(2))))
+  }, [temperature])
+  const resolvedTopP = React.useMemo(() => {
+    const value = typeof topP === "number" && Number.isFinite(topP) ? topP : 1
+    return Math.max(0, Math.min(1, Number(value.toFixed(2))))
+  }, [topP])
+  const resolvedNumPredict = React.useMemo(() => {
+    const value =
+      typeof numPredict === "number" && Number.isFinite(numPredict)
+        ? numPredict
+        : STUDIO_DEFAULT_MAX_TOKENS
+    return Math.max(1, Math.min(32768, Math.round(value)))
+  }, [numPredict])
+  const normalizedApiProvider =
+    typeof apiProvider === "string" && apiProvider.trim().length > 0
+      ? apiProvider.trim().toLowerCase()
+      : "__auto__"
+  const providerOptions = React.useMemo(() => {
+    const providerKeys = Array.from(
+      new Set(
+        chatModels
+          .map((model) => String(model.provider || "").trim().toLowerCase())
+          .filter(Boolean)
+      )
+    )
+    providerKeys.sort((a, b) => a.localeCompare(b))
+    return providerKeys.map((provider) => ({
+      value: provider,
+      label: tldwModels.getProviderDisplayName(provider)
+    }))
+  }, [chatModels])
+  const filteredChatModels = React.useMemo(() => {
+    if (normalizedApiProvider === "__auto__") {
+      return chatModels
+    }
+    return chatModels.filter(
+      (model) =>
+        String(model.provider || "").trim().toLowerCase() ===
+        normalizedApiProvider
+    )
+  }, [chatModels, normalizedApiProvider])
+  const modelOptions = React.useMemo(() => {
+    const options = filteredChatModels.map((model) => ({
+      value: model.id,
+      label: model.name || model.id
+    }))
+    if (
+      selectedModel &&
+      !options.some((option) => option.value === selectedModel)
+    ) {
+      options.push({
+        value: selectedModel,
+        label: `${selectedModel} (${t("playground:studio.currentModel", "current")})`
+      })
+    }
+    return options
+  }, [filteredChatModels, selectedModel, t])
+  const patchRagAdvancedOptions = React.useCallback(
+    (patch: Record<string, unknown>) => {
+      setRagAdvancedOptions({
+        ...normalizedRagAdvancedOptions,
+        ...patch
+      })
+    },
+    [normalizedRagAdvancedOptions, setRagAdvancedOptions]
+  )
+  const handleStudioTopKChange = (value: number | number[]) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return
+    const nextTopK = Math.max(1, Math.min(50, Math.round(raw)))
+    setRagTopK(nextTopK)
+    patchRagAdvancedOptions({ top_k: nextTopK })
+  }
+  const handleStudioSimilarityThresholdChange = (value: number | number[]) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return
+    const nextThreshold = Math.max(0, Math.min(1, raw))
+    patchRagAdvancedOptions({ min_score: Number(nextThreshold.toFixed(2)) })
+  }
+  const handleStudioTemperatureChange = (value: number | number[]) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return
+    setTemperature(Math.max(0, Math.min(2, Number(raw.toFixed(2)))))
+  }
+  const handleStudioTopPChange = (value: number | number[]) => {
+    const raw = Array.isArray(value) ? value[0] : value
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return
+    setTopP(Math.max(0, Math.min(1, Number(raw.toFixed(2)))))
+  }
   const etaSeconds =
     isGeneratingOutput && generatingOutputType
       ? estimateGenerationSeconds(
@@ -1334,7 +1536,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       {contextHolder}
 
       {/* Header */}
@@ -1359,6 +1561,235 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             </button>
           </Tooltip>
         )}
+      </div>
+
+      {/* Studio Options Section - Collapsible */}
+      <div className="border-b border-border">
+        <button
+          type="button"
+          onClick={() => setStudioOptionsExpanded(!studioOptionsExpanded)}
+          aria-expanded={studioOptionsExpanded}
+          aria-controls="studio-options-section"
+          className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-surface2/50"
+        >
+          <h3 className="text-xs font-semibold uppercase text-text-muted">
+            {t("playground:studio.studioOptions", "Studio Options")}
+          </h3>
+          {studioOptionsExpanded ? (
+            <ChevronUp className="h-4 w-4 text-text-muted" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-text-muted" />
+          )}
+        </button>
+        <div
+          id="studio-options-section"
+          hidden={!studioOptionsExpanded}
+          className="px-4 pb-4"
+        >
+          <div
+            data-testid="studio-options-accordion"
+            className="space-y-4 rounded border border-border bg-surface2/30 p-3"
+          >
+            <section aria-label={t("playground:studio.modelRuntime", "Model Runtime")}>
+              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                {t("playground:studio.modelRuntime", "Model Runtime")}
+              </h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-text-muted">
+                    {t("playground:studio.apiProvider", "API Provider")}
+                  </label>
+                  <Select
+                    size={studioControlSize}
+                    className="w-full"
+                    value={normalizedApiProvider}
+                    onChange={(value) => {
+                      if (value === "__auto__") {
+                        updateModelSetting("apiProvider", undefined)
+                        return
+                      }
+                      setApiProvider(String(value))
+                    }}
+                    options={[
+                      {
+                        value: "__auto__",
+                        label: t(
+                          "playground:studio.apiProviderAuto",
+                          "Auto (from selected model)"
+                        )
+                      },
+                      ...providerOptions
+                    ]}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-text-muted">
+                    {t("playground:studio.modelSelection", "Model")}
+                  </label>
+                  <Select
+                    size={studioControlSize}
+                    className="w-full"
+                    value={selectedModel ?? undefined}
+                    onChange={(value) => setSelectedModel(String(value))}
+                    options={modelOptions}
+                    loading={loadingChatModels}
+                    placeholder={t(
+                      "playground:studio.modelSelectionPlaceholder",
+                      "Select a model"
+                    )}
+                  />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-text-muted">
+                    <label className="font-medium">
+                      {t("playground:studio.temperature", "Temperature")}
+                    </label>
+                    <span className="font-medium text-text">
+                      {resolvedTemperature.toFixed(2)}
+                    </span>
+                  </div>
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={0.01}
+                    value={resolvedTemperature}
+                    onChange={handleStudioTemperatureChange}
+                  />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-text-muted">
+                    <label className="font-medium">
+                      {t("playground:studio.topP", "Top P")}
+                    </label>
+                    <span className="font-medium text-text">
+                      {resolvedTopP.toFixed(2)}
+                    </span>
+                  </div>
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={resolvedTopP}
+                    onChange={handleStudioTopPChange}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-text-muted">
+                    {t("playground:studio.maxTokens", "Max Tokens")}
+                  </label>
+                  <Input
+                    size={studioControlSize}
+                    type="number"
+                    min={1}
+                    max={32768}
+                    value={resolvedNumPredict}
+                    onChange={(event) => {
+                      const raw = event.target.value.trim()
+                      if (!raw) {
+                        setNumPredict(undefined)
+                        return
+                      }
+                      const parsed = Number(raw)
+                      if (!Number.isFinite(parsed)) return
+                      setNumPredict(Math.max(1, Math.min(32768, Math.round(parsed))))
+                    }}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section aria-label={t("playground:studio.ragSettings", "RAG Settings")}>
+              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                {t("playground:studio.ragSettings", "RAG Settings")}
+              </h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-text-muted">
+                    {t("playground:studio.ragSearchMode", "Search Mode")}
+                  </label>
+                  <Select
+                    size={studioControlSize}
+                    className="w-full"
+                    value={ragSearchMode}
+                    onChange={(value) =>
+                      setRagSearchMode(value as "hybrid" | "vector" | "fts")
+                    }
+                    options={[
+                      { value: "hybrid", label: t("playground:studio.ragHybrid", "Hybrid") },
+                      { value: "vector", label: t("playground:studio.ragVector", "Vector") },
+                      { value: "fts", label: t("playground:studio.ragFts", "FTS") }
+                    ]}
+                  />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-text-muted">
+                    <span>{t("playground:studio.ragTopK", "Top K")}</span>
+                    <span className="font-medium text-text">{resolvedStudioTopK}</span>
+                  </div>
+                  <Slider
+                    min={1}
+                    max={50}
+                    step={1}
+                    value={resolvedStudioTopK}
+                    onChange={handleStudioTopKChange}
+                  />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs text-text-muted">
+                    <span>
+                      {t(
+                        "playground:studio.ragSimilarityThreshold",
+                        "Similarity threshold"
+                      )}
+                    </span>
+                    <span className="font-medium text-text">
+                      {studioSimilarityThreshold.toFixed(2)}
+                    </span>
+                  </div>
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={studioSimilarityThreshold}
+                    onChange={handleStudioSimilarityThresholdChange}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-text-muted">
+                    {t("playground:studio.ragEnableGeneration", "Enable generation")}
+                  </span>
+                  <Switch
+                    size="small"
+                    checked={ragEnableGeneration}
+                    onChange={(checked) => setRagEnableGeneration(checked)}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-text-muted">
+                    {t("playground:studio.ragEnableCitations", "Enable citations")}
+                  </span>
+                  <Switch
+                    size="small"
+                    checked={ragEnableCitations}
+                    onChange={(checked) => setRagEnableCitations(checked)}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-text-muted">
+                    {t("playground:studio.ragEnableReranking", "Enable reranking")}
+                  </span>
+                  <Switch
+                    size="small"
+                    checked={studioRerankingEnabled}
+                    onChange={(checked) =>
+                      patchRagAdvancedOptions({ enable_reranking: checked })
+                    }
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
       </div>
 
       {/* Studio Section - Collapsible */}
@@ -1497,31 +1928,39 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               )}
             </p>
           )}
-          <button
-            type="button"
-            onClick={() => setShowTtsSettings(!showTtsSettings)}
-            aria-expanded={showAudioSettingsPanel}
-            aria-controls="studio-audio-settings-panel"
-            className="flex w-full items-center justify-between rounded border border-border bg-surface2/50 px-3 py-2 text-xs text-text-muted hover:bg-surface2"
+          <div
+            data-testid="studio-audio-settings-accordion"
+            className="overflow-hidden rounded border border-border bg-surface2/30"
           >
-            <span className="flex items-center gap-2">
-              <Settings2 className="h-3.5 w-3.5" />
-              {t("playground:studio.audioSettings", "Audio Settings")}
-            </span>
-            {showAudioSettingsPanel ? (
-              <ChevronUp className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5" />
-            )}
-          </button>
-
-          {showAudioSettingsPanel && (
-            <div
-              id="studio-audio-settings-panel"
-              className={`mt-2 rounded border border-border bg-surface2/30 p-3 ${
-                isMobile ? "space-y-4" : "space-y-3"
+            <button
+              type="button"
+              onClick={() => setShowTtsSettings(!showTtsSettings)}
+              aria-expanded={showAudioSettingsPanel}
+              aria-controls="studio-audio-settings-panel"
+              className={`flex w-full items-center justify-between px-3 py-2 text-xs text-text-muted transition-colors ${
+                showAudioSettingsPanel
+                  ? "border-b border-border bg-surface2/60"
+                  : "bg-surface2/50 hover:bg-surface2"
               }`}
             >
+              <span className="flex items-center gap-2">
+                <Settings2 className="h-3.5 w-3.5" />
+                {t("playground:studio.audioSettings", "Audio Settings")}
+              </span>
+              {showAudioSettingsPanel ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </button>
+
+            {showAudioSettingsPanel && (
+              <div
+                id="studio-audio-settings-panel"
+                className={`p-3 ${
+                  isMobile ? "space-y-4" : "space-y-3"
+                }`}
+              >
               {/* Provider */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-text-muted">
@@ -1648,8 +2087,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   ]}
                 />
               </div>
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
         </div>
       </div>
@@ -1731,6 +2171,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                 const Icon = ARTIFACT_TYPE_ICONS[artifact.type] || FileText
                 const StatusConfig = STATUS_ICONS[artifact.status]
                 const StatusIcon = StatusConfig.icon
+                const failedStatusDeleteLabel = t(
+                  "playground:studio.deleteFailedOutput",
+                  "Delete failed output"
+                )
 
                 return (
                   <div
@@ -1746,9 +2190,27 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                           <p className="truncate text-sm font-medium text-text">
                             {artifact.title}
                           </p>
-                          <StatusIcon
-                            className={`h-4 w-4 shrink-0 ${StatusConfig.className}`}
-                          />
+                          {artifact.status === "failed" ? (
+                            <Tooltip title={failedStatusDeleteLabel}>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  handleDeleteArtifact(artifact)
+                                }}
+                                className="rounded p-0.5 hover:bg-error/10"
+                                aria-label={failedStatusDeleteLabel}
+                              >
+                                <StatusIcon
+                                  className={`h-4 w-4 shrink-0 ${StatusConfig.className}`}
+                                />
+                              </button>
+                            </Tooltip>
+                          ) : (
+                            <StatusIcon
+                              className={`h-4 w-4 shrink-0 ${StatusConfig.className}`}
+                            />
+                          )}
                         </div>
                         <p className="text-xs text-text-muted">
                           {artifact.createdAt.toLocaleString()}
@@ -2373,6 +2835,7 @@ async function generateSummary(
       top_k: 20,
       enable_generation: true,
       enable_citations: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2403,6 +2866,7 @@ Use the provided sources to create a comprehensive report.`,
       top_k: 30,
       enable_generation: true,
       enable_citations: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2430,6 +2894,7 @@ List events in chronological order.`,
       top_k: 30,
       enable_generation: true,
       enable_citations: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2459,6 +2924,7 @@ Use markdown headings and bullet lists. Cite source-specific evidence when possi
       top_k: 30,
       enable_generation: true,
       enable_citations: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2576,6 +3042,7 @@ Generate 10-15 flashcards.`,
       media_ids: mediaIds,
       top_k: 20,
       enable_generation: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2672,6 +3139,7 @@ Identify the central theme and 3-5 main branches with their sub-topics.`,
       media_ids: mediaIds,
       top_k: 20,
       enable_generation: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2705,6 +3173,7 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
       media_ids: mediaIds,
       top_k: 15,
       enable_generation: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2837,6 +3306,7 @@ Include:
       media_ids: mediaIds,
       top_k: 25,
       enable_generation: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )
@@ -2868,6 +3338,7 @@ Format as:
       media_ids: mediaIds,
       top_k: 25,
       enable_generation: true,
+      timeoutMs: STUDIO_GENERATION_RAG_TIMEOUT_MS,
       signal: abortSignal
     }
   )

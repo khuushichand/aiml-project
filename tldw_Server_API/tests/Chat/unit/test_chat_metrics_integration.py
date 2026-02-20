@@ -96,6 +96,27 @@ class TestChatMetricsCollector:
         assert collector.active_streams == 0
 
     @pytest.mark.asyncio
+    async def test_track_streaming_uses_start_span_without_context_attach(self):
+        """Streaming spans should not rely on current-context attach/detach."""
+        collector = ChatMetricsCollector()
+        mock_span = MagicMock()
+        mock_tracer = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        mock_tracer.start_as_current_span = MagicMock()
+        collector.tracer = mock_tracer
+
+        async with collector.track_streaming("conv_otel_regression") as tracker:
+            tracker.add_chunk()
+            tracker.add_heartbeat()
+
+        mock_tracer.start_span.assert_called_once_with(
+            "streaming_response",
+            attributes={"conversation_id": "conv_otel_regression"},
+        )
+        mock_tracer.start_as_current_span.assert_not_called()
+        mock_span.end.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_track_database_operation(self):
         """Test database operation tracking."""
         collector = ChatMetricsCollector()

@@ -1611,6 +1611,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   const [updatedToDate, setUpdatedToDate] = React.useState("")
   const [hasConversationsOnly, setHasConversationsOnly] = React.useState(false)
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = React.useState(true)
   const [showEditAdvanced, setShowEditAdvanced] = React.useState(false)
   const [showCreateAdvanced, setShowCreateAdvanced] = React.useState(false)
   const [createAdvancedSections, setCreateAdvancedSections] = React.useState<AdvancedSectionState>(
@@ -3855,6 +3856,48 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     updatedToDate.trim().length > 0 ||
     hasConversationsOnly ||
     favoritesOnly
+
+  const activeAdvancedFilterCount = React.useMemo(() => {
+    let count = 0
+    if (filterTags.length > 0) count += 1
+    if (folderFilterId) count += 1
+    if (creatorFilter) count += 1
+    if (createdFromDate.trim().length > 0 || createdToDate.trim().length > 0) count += 1
+    if (updatedFromDate.trim().length > 0 || updatedToDate.trim().length > 0) count += 1
+    if (hasConversationsOnly) count += 1
+    if (favoritesOnly) count += 1
+    return count
+  }, [
+    filterTags,
+    folderFilterId,
+    creatorFilter,
+    createdFromDate,
+    createdToDate,
+    updatedFromDate,
+    updatedToDate,
+    hasConversationsOnly,
+    favoritesOnly
+  ])
+
+  const clearFilters = React.useCallback(() => {
+    setSearchTerm("")
+    setFilterTags([])
+    setFolderFilterId(undefined)
+    setMatchAllTags(false)
+    setCreatorFilter(undefined)
+    setCreatedFromDate("")
+    setCreatedToDate("")
+    setUpdatedFromDate("")
+    setUpdatedToDate("")
+    setHasConversationsOnly(false)
+    setFavoritesOnly(false)
+  }, [])
+
+  React.useEffect(() => {
+    if (activeAdvancedFilterCount > 0) {
+      setAdvancedFiltersOpen(true)
+    }
+  }, [activeAdvancedFilterCount])
 
   const {
     setHistory,
@@ -6581,70 +6624,77 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           defaultValue: "Keyboard shortcuts"
         })}: ${shortcutSummaryText}`}
       </div>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="primary"
-            ref={newButtonRef}
-            onClick={openCreateModal}>
-            {t("settings:manageCharacters.addBtn", {
-              defaultValue: "New character"
-            })}
-          </Button>
-          <div
-            ref={importButtonContainerRef}
-            data-testid="character-import-dropzone"
-            className={`rounded-md border border-dashed px-2 py-1 transition-colors ${
-              importQueueState.dragState === "drag-over"
-                ? "border-primary bg-primary/5"
-                : "border-border bg-surface/40"
-            }`}
-            onDragEnter={handleImportDragEnter}
-            onDragOver={handleImportDragOver}
-            onDragLeave={handleImportDragLeave}
-            onDrop={(event) => {
-              void handleImportDrop(event)
-            }}>
-            <Upload
-              accept={IMPORT_UPLOAD_ACCEPT}
-              multiple
-              showUploadList={false}
-              beforeUpload={handleImportUpload}
-              disabled={isImportBusy}>
-              <Button loading={isImportBusy}>
-                {t("settings:manageCharacters.import.button", {
-                  defaultValue: "Upload character"
-                })}
-              </Button>
-            </Upload>
-            <div className="mt-1 text-[11px] text-text-subtle">
-              {t("settings:manageCharacters.import.dropHint", {
-                defaultValue: "Drag and drop files here"
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="primary"
+              ref={newButtonRef}
+              onClick={openCreateModal}>
+              {t("settings:manageCharacters.addBtn", {
+                defaultValue: "New character"
               })}
+            </Button>
+            <div
+              ref={importButtonContainerRef}
+              data-testid="character-import-dropzone"
+              className={`rounded-md border border-dashed px-2 py-1 transition-colors ${
+                importQueueState.dragState === "drag-over"
+                  ? "border-primary bg-primary/5"
+                  : "border-border bg-surface/40"
+              }`}
+              onDragEnter={handleImportDragEnter}
+              onDragOver={handleImportDragOver}
+              onDragLeave={handleImportDragLeave}
+              onDrop={(event) => {
+                void handleImportDrop(event)
+              }}>
+              <Upload
+                accept={IMPORT_UPLOAD_ACCEPT}
+                multiple
+                showUploadList={false}
+                beforeUpload={handleImportUpload}
+                disabled={isImportBusy}>
+                <Button loading={isImportBusy}>
+                  {t("settings:manageCharacters.import.button", {
+                    defaultValue: "Upload character"
+                  })}
+                </Button>
+              </Upload>
+              <div className="mt-1 text-[11px] text-text-subtle">
+                {t("settings:manageCharacters.import.dropHint", {
+                  defaultValue: "Drag and drop files here"
+                })}
+              </div>
             </div>
           </div>
-        </div>
-        <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-          <Tooltip title={t("settings:manageCharacters.search.shortcut", { defaultValue: "Press / to search" })}>
-            <Input
-              ref={searchInputRef}
-              allowClear
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder={t(
-                "settings:manageCharacters.search.placeholder",
-                {
+
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 xl:justify-end">
+            <Tooltip
+              title={t("settings:manageCharacters.search.shortcut", {
+                defaultValue: "Press / to search"
+              })}>
+              <Input
+                ref={searchInputRef}
+                allowClear
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder={t(
+                  "settings:manageCharacters.search.placeholder",
+                  {
+                    defaultValue: "Search characters"
+                  }
+                )}
+                aria-label={t("settings:manageCharacters.search.label", {
                   defaultValue: "Search characters"
+                })}
+                className="w-full sm:w-72"
+                suffix={
+                  <span className="hidden text-xs text-text-subtle sm:inline">/</span>
                 }
-              )}
-              aria-label={t("settings:manageCharacters.search.label", {
-                defaultValue: "Search characters"
-              })}
-              className="sm:max-w-xs"
-              suffix={<span className="text-xs text-text-subtle hidden sm:inline">/</span>}
-            />
-          </Tooltip>
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center">
+              />
+            </Tooltip>
+
             <Segmented
               value={characterListScope}
               onChange={(value) =>
@@ -6674,172 +6724,55 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "Character list scope"
               })}
             />
-            <Select
-              mode="multiple"
-              allowClear
-              className="min-w-[12rem]"
-              placeholder={t(
-                "settings:manageCharacters.filter.tagsPlaceholder",
-                {
-                  defaultValue: "Filter by tags"
-                }
-              )}
-              aria-label={t(
-                "settings:manageCharacters.filter.tagsAriaLabel",
-                {
-                  defaultValue: "Filter characters by tags"
-                }
-              )}
-              value={filterTags}
-              options={tagFilterOptions}
-              onChange={(value) =>
-                setFilterTags(
-                  (value as string[]).filter(
-                    (v) =>
-                      v &&
-                      v.trim().length > 0 &&
-                      !isCharacterFolderToken(v)
-                  )
+
+            <Button
+              size="small"
+              type={advancedFiltersOpen ? "primary" : "default"}
+              icon={
+                advancedFiltersOpen ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
                 )
               }
-            />
-            <Select
-              allowClear
-              className="min-w-[10rem]"
-              placeholder={t("settings:manageCharacters.filter.folderPlaceholder", {
-                defaultValue: "Filter by folder"
-              })}
-              aria-label={t("settings:manageCharacters.filter.folderAriaLabel", {
-                defaultValue: "Filter characters by folder"
-              })}
-              value={folderFilterId}
-              options={characterFolderOptions.map((folder) => ({
-                value: String(folder.id),
-                label: folder.name
-              }))}
-              loading={characterFolderOptionsLoading}
-              onChange={(value) => {
-                const normalized = normalizeCharacterFolderId(value)
-                setFolderFilterId(normalized)
-              }}
-            />
-            <Select
-              allowClear
-              className="min-w-[10rem]"
-              placeholder={t("settings:manageCharacters.filter.creatorPlaceholder", {
-                defaultValue: "Filter by creator"
-              })}
-              aria-label={t("settings:manageCharacters.filter.creatorAriaLabel", {
-                defaultValue: "Filter characters by creator"
-              })}
-              value={creatorFilter}
-              options={creatorFilterOptions}
-              onChange={(value) => setCreatorFilter(value || undefined)}
-            />
-            <Input
-              type="date"
-              className="min-w-[9.25rem]"
-              aria-label={t("settings:manageCharacters.filter.createdFromAriaLabel", {
-                defaultValue: "Filter characters created on or after"
-              })}
-              value={createdFromDate}
-              max={createdToDate || undefined}
-              onChange={(event) => setCreatedFromDate(event.target.value)}
-            />
-            <Input
-              type="date"
-              className="min-w-[9.25rem]"
-              aria-label={t("settings:manageCharacters.filter.createdToAriaLabel", {
-                defaultValue: "Filter characters created on or before"
-              })}
-              value={createdToDate}
-              min={createdFromDate || undefined}
-              onChange={(event) => setCreatedToDate(event.target.value)}
-            />
-            <Input
-              type="date"
-              className="min-w-[9.25rem]"
-              aria-label={t("settings:manageCharacters.filter.updatedFromAriaLabel", {
-                defaultValue: "Filter characters updated on or after"
-              })}
-              value={updatedFromDate}
-              max={updatedToDate || undefined}
-              onChange={(event) => setUpdatedFromDate(event.target.value)}
-            />
-            <Input
-              type="date"
-              className="min-w-[9.25rem]"
-              aria-label={t("settings:manageCharacters.filter.updatedToAriaLabel", {
-                defaultValue: "Filter characters updated on or before"
-              })}
-              value={updatedToDate}
-              min={updatedFromDate || undefined}
-              onChange={(event) => setUpdatedToDate(event.target.value)}
-            />
-            <Checkbox
-              checked={matchAllTags}
-              onChange={(e) => setMatchAllTags(e.target.checked)}>
-              {t("settings:manageCharacters.filter.matchAll", {
-                defaultValue: "Match all tags"
-              })}
-            </Checkbox>
-            <Checkbox
-              checked={hasConversationsOnly}
-              onChange={(e) => setHasConversationsOnly(e.target.checked)}>
-              {t("settings:manageCharacters.filter.hasConversations", {
-                defaultValue: "Has conversations"
-              })}
-            </Checkbox>
-            <Checkbox
-              checked={favoritesOnly}
-              onChange={(e) => setFavoritesOnly(e.target.checked)}>
-              {t("settings:manageCharacters.filter.favoritesOnly", {
-                defaultValue: "Favorites only"
-              })}
-            </Checkbox>
-            {hasFilters && (
-              <Button
-                size="small"
-                onClick={() => {
-                  setSearchTerm("")
-                  setFilterTags([])
-                  setFolderFilterId(undefined)
-                  setMatchAllTags(false)
-                  setCreatorFilter(undefined)
-                  setCreatedFromDate("")
-                  setCreatedToDate("")
-                  setUpdatedFromDate("")
-                  setUpdatedToDate("")
-                  setHasConversationsOnly(false)
-                  setFavoritesOnly(false)
-                }}>
+              aria-expanded={advancedFiltersOpen}
+              aria-controls="characters-advanced-filters-panel"
+              onClick={() => setAdvancedFiltersOpen((prev) => !prev)}>
+              {advancedFiltersOpen
+                ? t("settings:manageCharacters.filter.hideAdvanced", {
+                    defaultValue: "Hide filters"
+                  })
+                : t("settings:manageCharacters.filter.showAdvanced", {
+                    defaultValue: "Advanced filters"
+                  })}
+              {!advancedFiltersOpen && activeAdvancedFilterCount > 0
+                ? ` (${activeAdvancedFilterCount})`
+                : ""}
+            </Button>
+
+            {hasFilters && !advancedFiltersOpen && (
+              <Button size="small" onClick={clearFilters}>
                 {t("settings:manageCharacters.filter.clear", {
                   defaultValue: "Clear filters"
                 })}
               </Button>
             )}
-            <Button
-              size="small"
-              onClick={openTagManager}>
-              {t("settings:manageCharacters.tags.manageButton", {
-                defaultValue: "Manage tags"
-              })}
-            </Button>
+
             <Segmented
               value={viewMode}
-              onChange={(v) => setViewMode(v as 'table' | 'gallery')}
+              onChange={(v) => setViewMode(v as "table" | "gallery")}
               disabled={characterListScope === "deleted"}
               options={[
                 {
-                  value: 'table',
-                  icon: <List className="w-4 h-4" />,
+                  value: "table",
+                  icon: <List className="h-4 w-4" />,
                   title: t("settings:manageCharacters.viewMode.table", {
                     defaultValue: "Table view"
                   })
                 },
                 {
-                  value: 'gallery',
-                  icon: <LayoutGrid className="w-4 h-4" />,
+                  value: "gallery",
+                  icon: <LayoutGrid className="h-4 w-4" />,
                   title: t("settings:manageCharacters.viewMode.gallery", {
                     defaultValue: "Gallery view"
                   })
@@ -6849,6 +6782,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 defaultValue: "View mode"
               })}
             />
+
             {viewMode === "gallery" && (
               <Segmented
                 value={galleryDensity}
@@ -6878,17 +6812,22 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 })}
               />
             )}
+
             {/* Keyboard shortcuts help (H1) */}
             <Tooltip
               title={
-                <div className="text-xs space-y-1">
-                  <div className="font-medium mb-1">{t("settings:manageCharacters.shortcuts.title", { defaultValue: "Keyboard shortcuts" })}</div>
+                <div className="space-y-1 text-xs">
+                  <div className="mb-1 font-medium">
+                    {t("settings:manageCharacters.shortcuts.title", {
+                      defaultValue: "Keyboard shortcuts"
+                    })}
+                  </div>
                   {shortcutHelpItems.map((item) => (
                     <div key={item.id}>
                       {item.keys.map((key, index) => (
                         <React.Fragment key={`${item.id}-${key}-${index}`}>
                           {index > 0 && " "}
-                          <kbd className="px-1 bg-white/20 rounded">{key}</kbd>
+                          <kbd className="rounded bg-white/20 px-1">{key}</kbd>
                         </React.Fragment>
                       ))}{" "}
                       {item.label}
@@ -6902,13 +6841,212 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               <Button
                 type="text"
                 size="small"
-                icon={<Keyboard className="w-4 h-4" />}
-                aria-label={t("settings:manageCharacters.shortcuts.ariaLabel", { defaultValue: "Keyboard shortcuts" })}
+                icon={<Keyboard className="h-4 w-4" />}
+                aria-label={t("settings:manageCharacters.shortcuts.ariaLabel", {
+                  defaultValue: "Keyboard shortcuts"
+                })}
                 aria-describedby="characters-shortcuts-summary"
               />
             </Tooltip>
           </div>
         </div>
+
+        {advancedFiltersOpen && (
+          <div
+            id="characters-advanced-filters-panel"
+            className="space-y-3 rounded-lg border border-border bg-surface/60 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-text-muted">
+                {t("settings:manageCharacters.filter.panelDescription", {
+                  defaultValue:
+                    "Refine the character list by metadata, dates, and conversation activity."
+                })}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {hasFilters && (
+                  <Button size="small" onClick={clearFilters}>
+                    {t("settings:manageCharacters.filter.clear", {
+                      defaultValue: "Clear filters"
+                    })}
+                  </Button>
+                )}
+                <Button size="small" onClick={openTagManager}>
+                  {t("settings:manageCharacters.tags.manageButton", {
+                    defaultValue: "Manage tags"
+                  })}
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                mode="multiple"
+                allowClear
+                className="w-full sm:w-[15rem]"
+                placeholder={t("settings:manageCharacters.filter.tagsPlaceholder", {
+                  defaultValue: "Filter by tags"
+                })}
+                aria-label={t("settings:manageCharacters.filter.tagsAriaLabel", {
+                  defaultValue: "Filter characters by tags"
+                })}
+                value={filterTags}
+                options={tagFilterOptions}
+                onChange={(value) =>
+                  setFilterTags(
+                    (value as string[]).filter(
+                      (v) => v && v.trim().length > 0 && !isCharacterFolderToken(v)
+                    )
+                  )
+                }
+              />
+              <Select
+                allowClear
+                className="w-full sm:w-[13rem]"
+                placeholder={t("settings:manageCharacters.filter.folderPlaceholder", {
+                  defaultValue: "Filter by folder"
+                })}
+                aria-label={t("settings:manageCharacters.filter.folderAriaLabel", {
+                  defaultValue: "Filter characters by folder"
+                })}
+                value={folderFilterId}
+                options={characterFolderOptions.map((folder) => ({
+                  value: String(folder.id),
+                  label: folder.name
+                }))}
+                loading={characterFolderOptionsLoading}
+                onChange={(value) => {
+                  const normalized = normalizeCharacterFolderId(value)
+                  setFolderFilterId(normalized)
+                }}
+              />
+              <Select
+                allowClear
+                className="w-full sm:w-[13rem]"
+                placeholder={t("settings:manageCharacters.filter.creatorPlaceholder", {
+                  defaultValue: "Filter by creator"
+                })}
+                aria-label={t("settings:manageCharacters.filter.creatorAriaLabel", {
+                  defaultValue: "Filter characters by creator"
+                })}
+                value={creatorFilter}
+                options={creatorFilterOptions}
+                onChange={(value) => setCreatorFilter(value || undefined)}
+              />
+            </div>
+
+            <div className="grid gap-2 lg:grid-cols-2">
+              <div className="rounded-md border border-border bg-surface2/30 p-2">
+                <p className="mb-1 text-xs font-medium text-text-muted">
+                  {t("settings:manageCharacters.filter.createdDateRange", {
+                    defaultValue: "Created date range"
+                  })}
+                </p>
+                <div className="w-full max-w-[30rem] space-y-1 lg:max-w-[26rem]">
+                  <div className="flex items-center justify-between text-[11px] text-text-subtle">
+                    <span>{t("settings:manageCharacters.filter.from", { defaultValue: "From" })}</span>
+                    <span>{t("settings:manageCharacters.filter.to", { defaultValue: "To" })}</span>
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1.5">
+                    <Input
+                      size="small"
+                      type="date"
+                      className="w-full"
+                      aria-label={t("settings:manageCharacters.filter.createdFromAriaLabel", {
+                        defaultValue: "Filter characters created on or after"
+                      })}
+                      value={createdFromDate}
+                      max={createdToDate || undefined}
+                      onChange={(event) => setCreatedFromDate(event.target.value)}
+                    />
+                    <span className="text-xs text-text-subtle">
+                      {t("settings:manageCharacters.filter.rangeSeparator", {
+                        defaultValue: "to"
+                      })}
+                    </span>
+                    <Input
+                      size="small"
+                      type="date"
+                      className="w-full"
+                      aria-label={t("settings:manageCharacters.filter.createdToAriaLabel", {
+                        defaultValue: "Filter characters created on or before"
+                      })}
+                      value={createdToDate}
+                      min={createdFromDate || undefined}
+                      onChange={(event) => setCreatedToDate(event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-border bg-surface2/30 p-2">
+                <p className="mb-1 text-xs font-medium text-text-muted">
+                  {t("settings:manageCharacters.filter.updatedDateRange", {
+                    defaultValue: "Updated date range"
+                  })}
+                </p>
+                <div className="w-full max-w-[30rem] space-y-1 lg:max-w-[26rem]">
+                  <div className="flex items-center justify-between text-[11px] text-text-subtle">
+                    <span>{t("settings:manageCharacters.filter.from", { defaultValue: "From" })}</span>
+                    <span>{t("settings:manageCharacters.filter.to", { defaultValue: "To" })}</span>
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1.5">
+                    <Input
+                      size="small"
+                      type="date"
+                      className="w-full"
+                      aria-label={t("settings:manageCharacters.filter.updatedFromAriaLabel", {
+                        defaultValue: "Filter characters updated on or after"
+                      })}
+                      value={updatedFromDate}
+                      max={updatedToDate || undefined}
+                      onChange={(event) => setUpdatedFromDate(event.target.value)}
+                    />
+                    <span className="text-xs text-text-subtle">
+                      {t("settings:manageCharacters.filter.rangeSeparator", {
+                        defaultValue: "to"
+                      })}
+                    </span>
+                    <Input
+                      size="small"
+                      type="date"
+                      className="w-full"
+                      aria-label={t("settings:manageCharacters.filter.updatedToAriaLabel", {
+                        defaultValue: "Filter characters updated on or before"
+                      })}
+                      value={updatedToDate}
+                      min={updatedFromDate || undefined}
+                      onChange={(event) => setUpdatedToDate(event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 rounded-md border border-border bg-surface2/40 px-3 py-2">
+              <Checkbox
+                checked={matchAllTags}
+                onChange={(e) => setMatchAllTags(e.target.checked)}>
+                {t("settings:manageCharacters.filter.matchAll", {
+                  defaultValue: "Match all tags"
+                })}
+              </Checkbox>
+              <Checkbox
+                checked={hasConversationsOnly}
+                onChange={(e) => setHasConversationsOnly(e.target.checked)}>
+                {t("settings:manageCharacters.filter.hasConversations", {
+                  defaultValue: "Has conversations"
+                })}
+              </Checkbox>
+              <Checkbox
+                checked={favoritesOnly}
+                onChange={(e) => setFavoritesOnly(e.target.checked)}>
+                {t("settings:manageCharacters.filter.favoritesOnly", {
+                  defaultValue: "Favorites only"
+                })}
+              </Checkbox>
+            </div>
+          </div>
+        )}
       </div>
       {/* Accessible live region for search results */}
       <div
@@ -7082,17 +7220,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 <Button
                   size="small"
                   onClick={() => {
-                    setSearchTerm("")
-                    setFilterTags([])
-                    setFolderFilterId(undefined)
-                    setMatchAllTags(false)
-                    setCreatorFilter(undefined)
-                    setCreatedFromDate("")
-                    setCreatedToDate("")
-                    setUpdatedFromDate("")
-                    setUpdatedToDate("")
-                    setHasConversationsOnly(false)
-                    setFavoritesOnly(false)
+                    clearFilters()
                     refetch()
                   }}>
                   {t("settings:manageCharacters.filter.clear", {

@@ -12,6 +12,7 @@ import type {
 } from '@/components/Review/mediaSearchRequest'
 import {
   DEFAULT_MEDIA_SEARCH_FIELDS,
+  hasDefaultMediaSearchFields,
   normalizeMediaSearchFields
 } from '@/components/Review/mediaSearchRequest'
 import type {
@@ -61,6 +62,8 @@ interface FilterPanelProps {
   showFavoritesOnly?: boolean
   onShowFavoritesOnlyChange?: (show: boolean) => void
   favoritesCount?: number
+  activeFilterCount?: number
+  onClearAll?: () => void
 }
 
 // Normalize media type to Title Case for consistent display
@@ -121,7 +124,9 @@ export function FilterPanel({
   onKeywordSearch,
   showFavoritesOnly = false,
   onShowFavoritesOnlyChange,
-  favoritesCount = 0
+  favoritesCount = 0,
+  activeFilterCount = 0,
+  onClearAll
 }: FilterPanelProps) {
   const { t } = useTranslation(['review'])
   const [keywordSearchText, setKeywordSearchText] = useState('')
@@ -136,6 +141,40 @@ export function FilterPanel({
     () => normalizeMediaSearchFields(searchFields),
     [searchFields]
   )
+  const normalizedMetadataFilters = useMemo(
+    () => normalizeMetadataSearchFilters(metadataFilters),
+    [metadataFilters]
+  )
+  const derivedActiveFilterCount = useMemo(() => {
+    if (activeFilterCount > 0) return activeFilterCount
+    return (
+      selectedMediaTypes.length +
+      selectedKeywords.length +
+      selectedExcludedKeywords.length +
+      Number(Boolean(dateRange?.startDate || dateRange?.endDate)) +
+      Number(sortBy !== 'relevance') +
+      Number(Boolean(exactPhrase.trim())) +
+      Number(!hasDefaultMediaSearchFields(normalizedSearchFields)) +
+      Number(enableBoostFields) +
+      Number(searchMode === 'metadata') +
+      Number(normalizedMetadataFilters.length > 0) +
+      Number(showFavoritesOnly)
+    )
+  }, [
+    activeFilterCount,
+    dateRange?.endDate,
+    dateRange?.startDate,
+    enableBoostFields,
+    exactPhrase,
+    normalizedMetadataFilters.length,
+    normalizedSearchFields,
+    searchMode,
+    selectedExcludedKeywords.length,
+    selectedKeywords.length,
+    selectedMediaTypes.length,
+    showFavoritesOnly,
+    sortBy
+  ])
 
   const sortOptions = useMemo(
     () => [
@@ -288,6 +327,25 @@ export function FilterPanel({
     onMetadataFiltersChange(nextFilters)
   }
 
+  const handleClearAll = () => {
+    if (onClearAll) {
+      onClearAll()
+      return
+    }
+    onMediaTypesChange([])
+    onKeywordsChange([])
+    onExcludedKeywordsChange?.([])
+    onDateRangeChange?.({ startDate: null, endDate: null })
+    onSortByChange?.('relevance')
+    onExactPhraseChange?.('')
+    onSearchFieldsChange?.([...DEFAULT_MEDIA_SEARCH_FIELDS])
+    onEnableBoostFieldsChange?.(false)
+    onBoostFieldsChange?.({ title: 2, content: 1 })
+    onMetadataFiltersChange?.([createMetadataSearchFilter()])
+    onMetadataMatchModeChange?.('all')
+    onShowFavoritesOnlyChange?.(false)
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -299,24 +357,23 @@ export function FilterPanel({
         </div>
         <button
           type="button"
-          onClick={() => {
-            onMediaTypesChange([])
-            onKeywordsChange([])
-            onExcludedKeywordsChange?.([])
-            onDateRangeChange?.({ startDate: null, endDate: null })
-            onSortByChange?.('relevance')
-            onExactPhraseChange?.('')
-            onSearchFieldsChange?.([...DEFAULT_MEDIA_SEARCH_FIELDS])
-            onEnableBoostFieldsChange?.(false)
-            onBoostFieldsChange?.({ title: 2, content: 1 })
-            onMetadataFiltersChange?.([createMetadataSearchFilter()])
-            onMetadataMatchModeChange?.('all')
-            onShowFavoritesOnlyChange?.(false)
-          }}
+          onClick={handleClearAll}
           className="text-sm text-primary hover:text-primaryStrong"
-          title={t('review:mediaPage.clearAll', { defaultValue: 'Clear all' })}
+          title={
+            derivedActiveFilterCount > 0
+              ? t('review:mediaPage.clearAllWithCount', {
+                  defaultValue: 'Clear all ({{count}})',
+                  count: derivedActiveFilterCount
+                })
+              : t('review:mediaPage.clearAll', { defaultValue: 'Clear all' })
+          }
         >
-          {t('review:mediaPage.clearAll', { defaultValue: 'Clear all' })}
+          {derivedActiveFilterCount > 0
+            ? t('review:mediaPage.clearAllWithCount', {
+                defaultValue: 'Clear all ({{count}})',
+                count: derivedActiveFilterCount
+              })
+            : t('review:mediaPage.clearAll', { defaultValue: 'Clear all' })}
         </button>
       </div>
 
@@ -605,7 +662,7 @@ export function FilterPanel({
             })}
           </div>
 
-          {normalizeMetadataSearchFilters(metadataFilters).length === 0 && (
+          {normalizedMetadataFilters.length === 0 && (
             <div className="text-xs text-text-subtle">
               {t('review:mediaPage.metadataFilterHint', {
                 defaultValue: 'Add at least one filter to run metadata search.'

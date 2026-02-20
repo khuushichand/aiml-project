@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedBatchRequest, UnifiedRAGRequest
@@ -203,6 +204,34 @@ def test_search_agent_env_overrides_config_defaults(monkeypatch):
     assert kwargs["search_depth_mode"] == "balanced"
     assert kwargs["discussion_platforms"] == ["stackoverflow", "hackernews"]
     assert kwargs["enable_suggestions"] is True
+
+
+def test_build_kwargs_uses_authenticated_numeric_user_id_for_storage_paths():
+    request = UnifiedRAGRequest(query="normalize authenticated user id")
+    current_user = SimpleNamespace(id=1, id_int=1, username="single_user")
+
+    kwargs = rag_ep._build_unified_pipeline_kwargs(
+        request=request,
+        db_paths=_EMPTY_DB_PATHS,
+        media_db=None,  # type: ignore[arg-type]
+        chacha_db=None,  # type: ignore[arg-type]
+        current_user=current_user,  # type: ignore[arg-type]
+    )
+
+    assert kwargs["user_id"] == "1"
+    assert kwargs["feedback_user_id"] == "1"
+
+
+def test_resolve_implicit_feedback_user_id_maps_single_user_alias_without_user(monkeypatch):
+    monkeypatch.setattr(
+        rag_ep.DatabasePaths,
+        "get_single_user_id",
+        staticmethod(lambda: 7),
+    )
+
+    resolved = rag_ep._resolve_implicit_feedback_user_id("single_user", None)
+
+    assert resolved == "7"
 
 
 def test_batch_round2_defaults_apply_when_fields_omitted(monkeypatch):

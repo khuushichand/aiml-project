@@ -1036,6 +1036,9 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
+            logger.warning(
+                "Single-user mode received a non-matching API key; falling back to AuthNZ API key lookup."
+            )
     except HTTPException:
         # Preserve explicit auth failures (e.g., IP allowlist rejection).
         raise
@@ -1381,6 +1384,59 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             detail="Authentication failed due to internal error",
         ) from e
 
+
+def _coerce_user_id_for_log(user: User) -> Optional[int]:
+    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
+        if getattr(user, "id_int", None) is not None:
+            return int(user.id_int)  # type: ignore[arg-type]
+    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
+        return int(user.id)  # type: ignore[arg-type]
+    return None
+
+
+def _warn_single_user_context_mismatch(
+    request: Request,
+    user: User,
+    auth_source: str,
+) -> None:
+    try:
+        settings = get_settings()
+        if getattr(settings, "AUTH_MODE", None) != "single_user":
+            return
+
+        expected_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
+        resolved_id = _coerce_user_id_for_log(user)
+        if resolved_id is None or resolved_id == expected_id:
+            return
+
+        has_auth_header = bool(
+            request.headers.get("Authorization")
+            if getattr(request, "headers", None)
+            else False
+        )
+        has_api_key_header = bool(
+            request.headers.get("X-API-KEY")
+            if getattr(request, "headers", None)
+            else False
+        )
+
+        logger.warning(
+            "Single-user mode resolved unexpected principal via {}: resolved_user_id={}, "
+            "expected_user_id={}, has_authorization_header={}, has_api_key_header={}",
+            auth_source,
+            resolved_id,
+            expected_id,
+            has_auth_header,
+            has_api_key_header,
+        )
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
+        logger.debug(
+            "Could not emit single-user context mismatch warning (source={}): {}",
+            auth_source,
+            e,
+        )
+
+
 async def get_request_user(
     request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
@@ -1463,10 +1519,14 @@ async def get_request_user(
         token_is_jwt = _looks_like_jwt(token)
         if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
             logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
-            return await authenticate_api_key_user(request, token)
+            user = await authenticate_api_key_user(request, token)
+            _warn_single_user_context_mismatch(request, user, "bearer_single_user")
+            return user
         if not token_is_jwt:
             logger.debug("get_request_user: Treating Bearer token as API key (non-JWT token).")
-            return await authenticate_api_key_user(request, token)
+            user = await authenticate_api_key_user(request, token)
+            _warn_single_user_context_mismatch(request, user, "bearer_non_jwt")
+            return user
         logger.debug("get_request_user: Attempting JWT-based authentication.")
         try:
             user = await verify_jwt_and_fetch_user(request, token)
@@ -1480,11 +1540,14 @@ async def get_request_user(
             request.state._auth_user = user
         except _USER_DB_NONCRITICAL_EXCEPTIONS as cache_exc:
             logger.debug(f"Failed to cache _auth_user on request.state: {cache_exc}")
+        _warn_single_user_context_mismatch(request, user, "bearer_jwt")
         return user
 
     if api_key:
         logger.debug("get_request_user: Attempting API-key-based authentication.")
-        return await authenticate_api_key_user(request, api_key)
+        user = await authenticate_api_key_user(request, api_key)
+        _warn_single_user_context_mismatch(request, user, "x_api_key")
+        return user
 
     # Neither Bearer token nor API key provided
     logger.warning(

@@ -183,9 +183,39 @@ export const useMessageOption = (
   } = useCompareMode({ historyId, forceEnabled: opts.forceCompareEnabled })
 
   const currentChatModelSettings = useStoreChatModelSettings()
-  const [selectedModel, setSelectedModel, selectedModelStorageMeta] = useStorage<string | null>(
-    "selectedModel",
-    null
+  const selectedModelFromStore = useStoreMessageOption((s) => s.selectedModel)
+  const setSelectedModelInStore = useStoreMessageOption((s) => s.setSelectedModel)
+  const [storedSelectedModel, setStoredSelectedModel, selectedModelStorageMeta] =
+    useStorage<string | null>("selectedModel", null)
+  const normalizeSelectedModel = React.useCallback((value: string | null | undefined) => {
+    if (typeof value !== "string") return null
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }, [])
+  const selectedModel = React.useMemo(
+    () =>
+      normalizeSelectedModel(selectedModelFromStore) ??
+      normalizeSelectedModel(storedSelectedModel),
+    [normalizeSelectedModel, selectedModelFromStore, storedSelectedModel]
+  )
+  const setSelectedModel = React.useCallback(
+    (
+      nextOrUpdater: string | null | ((current: string | null) => string | null)
+    ) => {
+      const resolved =
+        typeof nextOrUpdater === "function"
+          ? nextOrUpdater(selectedModel)
+          : nextOrUpdater
+      const normalized = normalizeSelectedModel(resolved)
+      setSelectedModelInStore(normalized)
+      void setStoredSelectedModel(normalized)
+    },
+    [
+      normalizeSelectedModel,
+      selectedModel,
+      setSelectedModelInStore,
+      setStoredSelectedModel
+    ]
   )
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null)
@@ -259,6 +289,26 @@ export const useMessageOption = (
   const lastCharacterIdRef = React.useRef<string | null>(
     selectedCharacter?.id ? String(selectedCharacter.id) : null
   )
+
+  React.useEffect(() => {
+    const normalizedStoreModel = normalizeSelectedModel(selectedModelFromStore)
+    const normalizedStoredModel = normalizeSelectedModel(storedSelectedModel)
+
+    if (!normalizedStoreModel && normalizedStoredModel) {
+      setSelectedModelInStore(normalizedStoredModel)
+      return
+    }
+
+    if (normalizedStoreModel !== normalizedStoredModel) {
+      void setStoredSelectedModel(normalizedStoreModel)
+    }
+  }, [
+    normalizeSelectedModel,
+    selectedModelFromStore,
+    setSelectedModelInStore,
+    setStoredSelectedModel,
+    storedSelectedModel
+  ])
 
   React.useEffect(() => {
     const nextId = selectedCharacter?.id ? String(selectedCharacter.id) : null

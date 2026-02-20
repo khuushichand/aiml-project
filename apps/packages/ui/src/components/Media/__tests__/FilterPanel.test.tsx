@@ -84,7 +84,7 @@ describe('FilterPanel', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    fireEvent.click(screen.getByRole('button', { name: /Clear all/ }))
 
     expect(onMediaTypesChange).toHaveBeenCalledWith([])
     expect(onKeywordsChange).toHaveBeenCalledWith([])

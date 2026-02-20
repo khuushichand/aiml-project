@@ -27,9 +27,6 @@ from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessAudiosForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Ingestion_Media_Processing.audio_batch import (
-    run_audio_batch,
-)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -101,6 +98,11 @@ async def process_audios_endpoint(
         "errors": [],
         "results": [],
     }
+
+    # Lazy import to avoid import-time hard failures from optional STT backends.
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.audio_batch import (
+        run_audio_batch,
+    )
 
     # Map temporary path -> original filename for uploads.
     temp_path_to_original_name: dict[str, str] = {}

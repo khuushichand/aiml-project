@@ -1,7 +1,6 @@
 import React from "react"
 import type { NotificationInstance } from "antd/es/notification/interface"
 import type { TFunction } from "i18next"
-import { type ChatHistory, type Message } from "~/store/option"
 import {
   generateID,
   saveHistory,
@@ -73,10 +72,13 @@ import type {
   MessageSteeringPromptTemplates,
   MessageSteeringState
 } from "@/types/message-steering"
-import type {
-  Knowledge,
-  ReplyTarget,
-  ToolChoice
+import {
+  type ChatHistory,
+  type Message,
+  useStoreMessageOption,
+  type Knowledge,
+  type ReplyTarget,
+  type ToolChoice
 } from "@/store/option"
 import type { ChatModelSettings } from "@/store/model"
 import type { SaveMessageData } from "@/types/chat-modes"
@@ -95,6 +97,7 @@ type ChatModelSettingsStore = ChatModelSettings & {
 type ChatModeOverrides = {
   historyId?: string | null
   serverChatId?: string | null
+  selectedModel?: string | null
 } & Record<string, unknown>
 
 const loadActorSettings = () => import("@/services/actor-settings")
@@ -276,6 +279,37 @@ export const useChatActions = ({
   messageSteeringForceNarrate,
   clearMessageSteering
 }: UseChatActionsOptions) => {
+  const normalizeSelectedModel = React.useCallback(
+    (value: string | null | undefined): string | null => {
+      if (typeof value !== "string") return null
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    },
+    []
+  )
+
+  const getEffectiveSelectedModel = React.useCallback(
+    (preferred?: string | null): string | null => {
+      const fromPreferred = normalizeSelectedModel(preferred)
+      if (fromPreferred) return fromPreferred
+
+      const fromHookState = normalizeSelectedModel(selectedModel)
+      if (fromHookState) return fromHookState
+
+      try {
+        const fromStore = normalizeSelectedModel(
+          useStoreMessageOption.getState().selectedModel
+        )
+        if (fromStore) return fromStore
+      } catch {
+        // Best-effort fallback only.
+      }
+
+      return null
+    },
+    [normalizeSelectedModel, selectedModel]
+  )
+
   const { settings: chatSettings } = useChatSettingsRecord({
     historyId,
     serverChatId
@@ -474,8 +508,12 @@ export const useChatActions = ({
       serverChatId: resolvedServerChatId
     })
 
+    const effectiveSelectedModel = getEffectiveSelectedModel(
+      overrides.selectedModel
+    )
+
     return {
-      selectedModel,
+      selectedModel: effectiveSelectedModel || "",
       useOCR,
       selectedSystemPrompt,
       selectedKnowledge,
@@ -1395,6 +1433,7 @@ export const useChatActions = ({
   }
 
   const validateBeforeSubmitFn = () => {
+    const effectiveSelectedModel = getEffectiveSelectedModel()
     if (compareModeActive) {
       const maxModels =
         typeof compareMaxModels === "number" && compareMaxModels > 0
@@ -1424,7 +1463,7 @@ export const useChatActions = ({
       }
       return true
     }
-    return validateBeforeSubmit(selectedModel, t, notification)
+    return validateBeforeSubmit(effectiveSelectedModel || "", t, notification)
   }
 
   const onSubmit = async ({
@@ -1456,6 +1495,7 @@ export const useChatActions = ({
     continueOutputTarget?: "chat" | "composer_input"
     serverChatIdOverride?: string | null
   }) => {
+    const effectiveSelectedModel = getEffectiveSelectedModel()
     setStreaming(true)
     const trimmedImageBackendOverride =
       typeof imageBackendOverride === "string"
@@ -1498,6 +1538,7 @@ export const useChatActions = ({
     }
 
     const chatModeParams = await buildChatModeParams({
+      selectedModel: effectiveSelectedModel,
       messageSteering: messageSteeringForTurn
     })
     const baseMessages = chatHistory || messages
@@ -1609,15 +1650,15 @@ export const useChatActions = ({
         ? [trimmedImageBackendOverride]
         : resolveImageBackendCandidates(
             currentChatModelSettings?.apiProvider,
-            selectedModel
+            effectiveSelectedModel
           )
       if (hasExplicitImageBackend || imageBackendCandidates.length > 0) {
         const resolvedImageModelLabel = hasExplicitImageBackend
           ? trimmedImageBackendOverride ||
-            (selectedModel || "").trim() ||
+            (effectiveSelectedModel || "").trim() ||
             currentChatModelSettings?.apiProvider ||
             "image-generation"
-          : (selectedModel || "").trim() ||
+          : (effectiveSelectedModel || "").trim() ||
             currentChatModelSettings?.apiProvider ||
             "image-generation"
         const enhancedChatModeParams = {
@@ -1706,7 +1747,7 @@ export const useChatActions = ({
         if (!compareModeActive) {
           const resolvedSelectedCharacter = await resolveSelectedCharacter()
           if (resolvedSelectedCharacter?.id) {
-            const resolvedModel = selectedModel?.trim()
+            const resolvedModel = effectiveSelectedModel?.trim()
             if (!resolvedModel) {
               notification.error({
                 message: t("error"),
@@ -1755,8 +1796,8 @@ export const useChatActions = ({
           const modelsRaw =
             compareSelectedModels && compareSelectedModels.length > 0
               ? compareSelectedModels
-              : selectedModel
-                ? [selectedModel]
+              : effectiveSelectedModel
+                ? [effectiveSelectedModel]
                 : []
           if (modelsRaw.length === 0) {
             throw new Error("No models selected for Compare mode")
@@ -1815,7 +1856,7 @@ export const useChatActions = ({
             activeHistoryId = "temp"
           } else if (!activeHistoryId) {
             const title = await generateTitle(
-              uniqueModels[0] || selectedModel || "",
+              uniqueModels[0] || effectiveSelectedModel || "",
               message,
               message
             )
@@ -1831,7 +1872,7 @@ export const useChatActions = ({
             await saveMessage({
               id: compareUserMessageId,
               history_id: activeHistoryId,
-              name: selectedModel || uniqueModels[0] || "You",
+              name: effectiveSelectedModel || uniqueModels[0] || "You",
               role: "user",
               content: message,
               images: resolvedImage ? [resolvedImage] : [],

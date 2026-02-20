@@ -95,6 +95,45 @@ def test_should_allow_cors_credentials_env_override_true() -> None:
         importlib.reload(config_mod)
 
 
+def test_get_cors_runtime_diagnostics_reports_env_sources() -> None:
+    prior_disable_cors = os.getenv("DISABLE_CORS")
+    prior_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS")
+    prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
+    try:
+        os.environ["DISABLE_CORS"] = "false"
+        os.environ["CORS_ALLOW_CREDENTIALS"] = "true"
+        os.environ["ALLOWED_ORIGINS"] = "http://127.0.0.1:8080,http://localhost:3000"
+        reloaded_config = importlib.reload(config_mod)
+
+        diagnostics = reloaded_config.get_cors_runtime_diagnostics()
+        assert diagnostics["disable_cors"] is False
+        assert diagnostics["disable_cors_source"] == "env"
+        assert diagnostics["allow_credentials"] is True
+        assert diagnostics["allow_credentials_source"] == "env"
+        assert diagnostics["allowed_origins_source"] == "env"
+        assert diagnostics["allowed_origins_count"] == 2
+        assert diagnostics["allowed_origins"] == ["http://127.0.0.1:8080", "http://localhost:3000"]
+        assert diagnostics["config_path"]
+    finally:
+        _restore_env("DISABLE_CORS", prior_disable_cors)
+        _restore_env("CORS_ALLOW_CREDENTIALS", prior_allow_credentials)
+        _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
+        importlib.reload(config_mod)
+
+
+def test_get_cors_runtime_diagnostics_marks_empty_origins_env_as_default() -> None:
+    prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
+    try:
+        os.environ["ALLOWED_ORIGINS"] = ""
+        reloaded_config = importlib.reload(config_mod)
+        diagnostics = reloaded_config.get_cors_runtime_diagnostics()
+        assert diagnostics["allowed_origins_source"] == "default(empty-env)"
+        assert diagnostics["allowed_origins_count"] >= 1
+    finally:
+        _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
+        importlib.reload(config_mod)
+
+
 def test_compute_openapi_cors_allow_origin_echoes_allowed_explicit_origin() -> None:
     allow_origin = app_main._compute_openapi_cors_allow_origin(
         "http://localhost:3000",
@@ -128,13 +167,16 @@ def test_compute_openapi_cors_allow_origin_supports_wildcard_when_credentials_di
 def test_main_import_fails_for_wildcard_origins_with_credentials() -> None:
     prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
     prior_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS")
+    prior_disable_cors = os.getenv("DISABLE_CORS")
     try:
+        os.environ["DISABLE_CORS"] = "false"
         os.environ["ALLOWED_ORIGINS"] = "*"
         os.environ["CORS_ALLOW_CREDENTIALS"] = "true"
         importlib.reload(config_mod)
         with pytest.raises(RuntimeError, match="cannot include '\\*'"):
             importlib.reload(app_main)
     finally:
+        _restore_env("DISABLE_CORS", prior_disable_cors)
         _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
         _restore_env("CORS_ALLOW_CREDENTIALS", prior_allow_credentials)
         importlib.reload(config_mod)
@@ -144,7 +186,9 @@ def test_main_import_fails_for_wildcard_origins_with_credentials() -> None:
 def test_main_import_allows_wildcard_origins_when_credentials_disabled() -> None:
     prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
     prior_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS")
+    prior_disable_cors = os.getenv("DISABLE_CORS")
     try:
+        os.environ["DISABLE_CORS"] = "false"
         os.environ["ALLOWED_ORIGINS"] = "*"
         os.environ["CORS_ALLOW_CREDENTIALS"] = "false"
         reloaded_config = importlib.reload(config_mod)
@@ -153,6 +197,7 @@ def test_main_import_allows_wildcard_origins_when_credentials_disabled() -> None
         assert reloaded_config.ALLOWED_ORIGINS == ["*"]
         assert reloaded_main._resolve_cors_origins_or_raise(reloaded_config.ALLOWED_ORIGINS) == ["*"]
     finally:
+        _restore_env("DISABLE_CORS", prior_disable_cors)
         _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
         _restore_env("CORS_ALLOW_CREDENTIALS", prior_allow_credentials)
         importlib.reload(config_mod)
@@ -176,13 +221,16 @@ def test_empty_string_allowed_origins_env_falls_back_to_defaults() -> None:
 
 def test_main_import_fails_for_explicit_empty_allowed_origins_list() -> None:
     prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
+    prior_disable_cors = os.getenv("DISABLE_CORS")
     try:
+        os.environ["DISABLE_CORS"] = "false"
         os.environ["ALLOWED_ORIGINS"] = "[]"
         reloaded_config = importlib.reload(config_mod)
         assert reloaded_config.ALLOWED_ORIGINS == []
         with pytest.raises(RuntimeError, match="ALLOWED_ORIGINS is empty"):
             importlib.reload(app_main)
     finally:
+        _restore_env("DISABLE_CORS", prior_disable_cors)
         _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
         importlib.reload(config_mod)
         importlib.reload(app_main)

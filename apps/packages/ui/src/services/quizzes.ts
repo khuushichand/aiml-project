@@ -6,6 +6,8 @@ const quizzesClient = createResourceClient({
   basePath: "/api/v1/quizzes" as AllowedPath
 })
 
+export const QUIZ_GENERATION_TIMEOUT_MS = 120000
+
 const quizAttemptsClient = createResourceClient({
   basePath: "/api/v1/quizzes/attempts" as AllowedPath,
   updateMethod: "PUT"
@@ -367,14 +369,20 @@ export async function getAttempt(
 
 export async function generateQuiz(
   request: QuizGenerateRequest,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<QuizGenerateResponse> {
+  const timeoutMs =
+    typeof options?.timeoutMs === "number" && options.timeoutMs > 0
+      ? options.timeoutMs
+      : QUIZ_GENERATION_TIMEOUT_MS
+
   return await bgRequest<QuizGenerateResponse, AllowedPath, "POST">({
     path: "/api/v1/quizzes/generate",
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: request,
-    abortSignal: options?.signal
+    abortSignal: options?.signal,
+    timeoutMs
   })
 }
 

@@ -123,6 +123,8 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
 void seedTldwConfigFromEnv()
 
 const WEB_DEFAULTS_MIRRORED_KEY = "tldw:web-defaults:mirrored"
+const WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY =
+  "tldw:web-defaults:header-shortcuts-document-workspace:v1"
 
 const isWebRuntime = () => {
   if (typeof window === "undefined") return false
@@ -216,4 +218,44 @@ const mirrorWebDefaultsFromExtension = () => {
   writeLocalStorageValue(WEB_DEFAULTS_MIRRORED_KEY, "true")
 }
 
+const backfillDocumentWorkspaceHeaderShortcutForWeb = () => {
+  if (!isWebRuntime()) return
+  if (getLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY) === "true") {
+    return
+  }
+
+  const rawSelection = getLocalStorageValue(HEADER_SHORTCUT_SELECTION_SETTING.key)
+  if (rawSelection === null) {
+    writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+    return
+  }
+
+  let parsedSelection: unknown = null
+  try {
+    parsedSelection = JSON.parse(rawSelection)
+  } catch {
+    writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+    return
+  }
+
+  if (!Array.isArray(parsedSelection)) {
+    writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+    return
+  }
+
+  const selectedIds = new Set(
+    parsedSelection.filter(
+      (entry): entry is string => typeof entry === "string"
+    )
+  )
+  selectedIds.add("document-workspace")
+
+  const nextSelection = DEFAULT_HEADER_SHORTCUT_SELECTION.filter((id) =>
+    selectedIds.has(id)
+  )
+  writeLocalStorageValue(HEADER_SHORTCUT_SELECTION_SETTING.key, nextSelection)
+  writeLocalStorageValue(WEB_HEADER_SHORTCUT_DOC_WORKSPACE_BACKFILL_KEY, "true")
+}
+
 mirrorWebDefaultsFromExtension()
+backfillDocumentWorkspaceHeaderShortcutForWeb()

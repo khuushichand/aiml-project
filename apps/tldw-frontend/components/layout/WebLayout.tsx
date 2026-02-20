@@ -38,6 +38,10 @@ import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
 import {
+  DOCUMENT_WORKSPACE_PATH,
+  WORKSPACE_PLAYGROUND_PATH
+} from "@/routes/route-paths"
+import {
   CHAT_BACKGROUND_IMAGE_SETTING,
   HEADER_SHORTCUTS_EXPANDED_SETTING
 } from "@/services/settings/ui-settings"
@@ -116,6 +120,10 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     useState<BackendUnreachableDetail | null>(null)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
+  const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
+  const isWorkspacePlayground = location.pathname === WORKSPACE_PLAYGROUND_PATH
+  const isViewportConstrainedRoute =
+    isDocumentWorkspace || isWorkspacePlayground
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage
       ? {
@@ -321,7 +329,10 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
   return (
     <div
-      className="relative flex min-h-screen w-full"
+      className={classNames(
+        "relative flex w-full",
+        isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
+      )}
       style={chatScreenBackgroundStyle}
     >
       {/* Persistent ChatSidebar when feature flag enabled */}
@@ -344,7 +355,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {shortcutLoading && renderShortcutOverlay()}
           </div>
         ) : (
-          <div className="relative flex min-h-[135vh] flex-col">
+          <div
+            className={classNames(
+              "relative flex flex-col",
+              isViewportConstrainedRoute ? "min-h-0 flex-1" : "min-h-[135vh]"
+            )}
+          >
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}

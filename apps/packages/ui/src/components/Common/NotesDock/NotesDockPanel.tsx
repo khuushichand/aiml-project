@@ -67,6 +67,41 @@ const clampPosition = (
   }
 }
 
+const readObservedBorderBoxSize = (entry: ResizeObserverEntry) => {
+  const borderBoxSize = Array.isArray(entry.borderBoxSize)
+    ? entry.borderBoxSize[0]
+    : entry.borderBoxSize
+
+  if (
+    borderBoxSize &&
+    Number.isFinite(borderBoxSize.inlineSize) &&
+    Number.isFinite(borderBoxSize.blockSize)
+  ) {
+    return {
+      width: borderBoxSize.inlineSize,
+      height: borderBoxSize.blockSize
+    }
+  }
+
+  const rect = entry.target.getBoundingClientRect()
+  if (
+    Number.isFinite(rect.width) &&
+    rect.width > 0 &&
+    Number.isFinite(rect.height) &&
+    rect.height > 0
+  ) {
+    return {
+      width: rect.width,
+      height: rect.height
+    }
+  }
+
+  return {
+    width: entry.contentRect.width,
+    height: entry.contentRect.height
+  }
+}
+
 const parseKeywords = (input: string): string[] =>
   input
     .split(",")
@@ -507,12 +542,15 @@ export const NotesDockPanel: React.FC = () => {
   }, [position.x, position.y, size.width, size.height, setPosition])
 
   useEffect(() => {
-    if (!dockRef.current) return
+    const dockElement = dockRef.current
+    if (!dockElement) return
+
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (!entry) return
-      const nextWidth = Math.max(MIN_WIDTH, Math.round(entry.contentRect.width))
-      const nextHeight = Math.max(MIN_HEIGHT, Math.round(entry.contentRect.height))
+      const observedSize = readObservedBorderBoxSize(entry)
+      const nextWidth = Math.max(MIN_WIDTH, Math.round(observedSize.width))
+      const nextHeight = Math.max(MIN_HEIGHT, Math.round(observedSize.height))
       if (nextWidth !== size.width || nextHeight !== size.height) {
         setSize({ width: nextWidth, height: nextHeight })
         const clamped = clampPosition(position.x, position.y, nextWidth, nextHeight)
@@ -521,7 +559,11 @@ export const NotesDockPanel: React.FC = () => {
         }
       }
     })
-    observer.observe(dockRef.current)
+    try {
+      observer.observe(dockElement, { box: "border-box" })
+    } catch {
+      observer.observe(dockElement)
+    }
     return () => observer.disconnect()
   }, [position.x, position.y, setPosition, setSize, size.height, size.width])
 

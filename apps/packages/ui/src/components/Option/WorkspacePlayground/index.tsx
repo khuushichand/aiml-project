@@ -1169,7 +1169,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 id="workspace-studio-panel"
                 role="complementary"
                 aria-label={t("playground:workspace.studioPanel", "Studio panel")}
-                className="hidden w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col"
+                className="hidden min-h-0 w-80 shrink-0 border-l border-border bg-surface lg:flex lg:flex-col"
               >
                 <StudioPane onHide={() => setRightPaneCollapsed(true)} />
               </aside>

@@ -9,6 +9,9 @@ const {
   mockSetIsGeneratingOutput,
   mockSetAudioSettings,
   mockCaptureToCurrentNote,
+  mockGetChatModels,
+  messageOptionStoreState,
+  chatModelSettingsStoreState,
   mockMessageSuccess,
   mockMessageError,
   mockMessageInfo,
@@ -19,6 +22,7 @@ const {
   const setIsGeneratingOutput = vi.fn()
   const setAudioSettings = vi.fn()
   const captureToCurrentNote = vi.fn()
+  const getChatModels = vi.fn()
   const messageSuccess = vi.fn()
   const messageError = vi.fn()
   const messageInfo = vi.fn()
@@ -46,12 +50,43 @@ const {
     captureToCurrentNote,
     noteFocusTarget: null as { field: "title" | "content"; token: number } | null
   }
+  const messageOptionState = {
+    selectedModel: "gpt-4o-mini",
+    setSelectedModel: vi.fn(),
+    ragSearchMode: "hybrid" as "hybrid" | "vector" | "fts",
+    setRagSearchMode: vi.fn(),
+    ragTopK: 8,
+    setRagTopK: vi.fn(),
+    ragEnableGeneration: true,
+    setRagEnableGeneration: vi.fn(),
+    ragEnableCitations: true,
+    setRagEnableCitations: vi.fn(),
+    ragAdvancedOptions: { min_score: 0.2, enable_reranking: true } as Record<
+      string,
+      unknown
+    >,
+    setRagAdvancedOptions: vi.fn()
+  }
+  const chatModelSettingsState = {
+    apiProvider: undefined as string | undefined,
+    temperature: 0.7,
+    topP: 1,
+    numPredict: 800,
+    setApiProvider: vi.fn(),
+    setTemperature: vi.fn(),
+    setTopP: vi.fn(),
+    setNumPredict: vi.fn(),
+    updateSetting: vi.fn()
+  }
 
   return {
     mockRemoveArtifact: removeArtifact,
     mockSetIsGeneratingOutput: setIsGeneratingOutput,
     mockSetAudioSettings: setAudioSettings,
     mockCaptureToCurrentNote: captureToCurrentNote,
+    mockGetChatModels: getChatModels,
+    messageOptionStoreState: messageOptionState,
+    chatModelSettingsStoreState: chatModelSettingsState,
     mockMessageSuccess: messageSuccess,
     mockMessageError: messageError,
     mockMessageInfo: messageInfo,
@@ -91,6 +126,10 @@ vi.mock("../source-location-copy", () => ({
   getWorkspaceStudioNoSourcesHint: () => "Select sources first"
 }))
 
+vi.mock("@/types/workspace", () => ({
+  OUTPUT_TYPES: []
+}))
+
 vi.mock("@/services/tldw/audio-voices", () => ({
   fetchTldwVoiceCatalog: vi.fn().mockResolvedValue([])
 }))
@@ -117,6 +156,25 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
+}))
+
+vi.mock("@/services/tldw", () => ({
+  tldwModels: {
+    getChatModels: mockGetChatModels,
+    getProviderDisplayName: (provider: string) => provider
+  }
+}))
+
+vi.mock("@/store/option", () => ({
+  useStoreMessageOption: (
+    selector: (state: typeof messageOptionStoreState) => unknown
+  ) => selector(messageOptionStoreState)
+}))
+
+vi.mock("@/store/model", () => ({
+  useStoreChatModelSettings: (
+    selector: (state: typeof chatModelSettingsStoreState) => unknown
+  ) => selector(chatModelSettingsStoreState)
 }))
 
 vi.mock("@/store/workspace", () => ({
@@ -174,6 +232,7 @@ describe("StudioPane Stage 4 outputs virtualization", () => {
     workspaceStoreState.isGeneratingOutput = false
     workspaceStoreState.generatingOutputType = null
     workspaceStoreState.noteFocusTarget = null
+    mockGetChatModels.mockResolvedValue([])
   })
 
   it("activates virtualization when artifact history is large", () => {
@@ -217,4 +276,3 @@ describe("StudioPane Stage 4 outputs virtualization", () => {
     expect(mockRemoveArtifact).toHaveBeenCalledWith("artifact-30")
   })
 })
-

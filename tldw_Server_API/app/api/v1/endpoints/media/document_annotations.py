@@ -85,6 +85,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _log_missing_media_context(
+    operation: str,
+    media_id: int,
+    user_id: str,
+    db: MediaDatabase,
+) -> None:
+    db_path = getattr(db, "db_path_str", getattr(db, "db_path", "<unknown>"))
+    logger.warning(
+        "Document annotations {} requested for missing media_id={} user_id={} db_path={}",
+        operation,
+        media_id,
+        user_id,
+        db_path,
+    )
+
+
 def _row_to_response(row: dict, media_id: int) -> AnnotationResponse:
     """Convert a database row to an AnnotationResponse."""
     return AnnotationResponse(
@@ -133,6 +149,7 @@ async def list_annotations(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("list", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -200,6 +217,7 @@ async def create_annotation(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("create", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",
@@ -453,6 +471,7 @@ async def sync_annotations(
     # Verify media exists
     media = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
     if not media:
+        _log_missing_media_context("sync", media_id, user_id, db)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found",

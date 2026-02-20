@@ -16,6 +16,9 @@ const {
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
+  mockGetChatModels,
+  messageOptionStoreState,
+  chatModelSettingsStoreState,
   baseAudioSettings,
   workspaceStoreState
 } = vi.hoisted(() => {
@@ -31,6 +34,7 @@ const {
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
+  const getChatModels = vi.fn()
   const defaultAudioSettings = {
     provider: "browser" as const,
     model: "kokoro",
@@ -54,6 +58,34 @@ const {
     setAudioSettings,
     noteFocusTarget: null as { field: "title" | "content"; token: number } | null
   }
+  const messageOptionState = {
+    selectedModel: "gpt-4o-mini",
+    setSelectedModel: vi.fn(),
+    ragSearchMode: "hybrid" as "hybrid" | "vector" | "fts",
+    setRagSearchMode: vi.fn(),
+    ragTopK: 8,
+    setRagTopK: vi.fn(),
+    ragEnableGeneration: true,
+    setRagEnableGeneration: vi.fn(),
+    ragEnableCitations: true,
+    setRagEnableCitations: vi.fn(),
+    ragAdvancedOptions: { min_score: 0.2, enable_reranking: true } as Record<
+      string,
+      unknown
+    >,
+    setRagAdvancedOptions: vi.fn()
+  }
+  const chatModelSettingsState = {
+    apiProvider: undefined as string | undefined,
+    temperature: 0.7,
+    topP: 1,
+    numPredict: 800,
+    setApiProvider: vi.fn(),
+    setTemperature: vi.fn(),
+    setTopP: vi.fn(),
+    setNumPredict: vi.fn(),
+    updateSetting: vi.fn()
+  }
   return {
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
@@ -66,6 +98,9 @@ const {
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
+    mockGetChatModels: getChatModels,
+    messageOptionStoreState: messageOptionState,
+    chatModelSettingsStoreState: chatModelSettingsState,
     baseAudioSettings: defaultAudioSettings,
     workspaceStoreState: storeState
   }
@@ -100,6 +135,10 @@ vi.mock("../source-location-copy", () => ({
   getWorkspaceStudioNoSourcesHint: () => "Select sources to start generating outputs"
 }))
 
+vi.mock("@/types/workspace", () => ({
+  OUTPUT_TYPES: []
+}))
+
 vi.mock("@/services/tldw/audio-voices", () => ({
   fetchTldwVoiceCatalog: vi.fn().mockResolvedValue([])
 }))
@@ -126,6 +165,25 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
+}))
+
+vi.mock("@/services/tldw", () => ({
+  tldwModels: {
+    getChatModels: mockGetChatModels,
+    getProviderDisplayName: (provider: string) => provider
+  }
+}))
+
+vi.mock("@/store/option", () => ({
+  useStoreMessageOption: (
+    selector: (state: typeof messageOptionStoreState) => unknown
+  ) => selector(messageOptionStoreState)
+}))
+
+vi.mock("@/store/model", () => ({
+  useStoreChatModelSettings: (
+    selector: (state: typeof chatModelSettingsStoreState) => unknown
+  ) => selector(chatModelSettingsStoreState)
 }))
 
 vi.mock("@/store/workspace", () => ({
@@ -234,6 +292,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       version: 1,
       created_at: "2026-02-18T00:00:00.000Z"
     })
+    mockGetChatModels.mockResolvedValue([])
   })
 
   it("shows cancel control during generation and aborts active run", async () => {
@@ -277,6 +336,88 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageInfo).toHaveBeenCalledWith("Generation canceled")
   })
 
+  it("treats non-abort cancellation wording as generation failure", async () => {
+    mockRagSearch.mockRejectedValue(
+      new Error("Generation cancelled by upstream worker")
+    )
+
+    const { rerender } = render(<StudioPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+    rerender(<StudioPane />)
+
+    await waitFor(() => {
+      expect(mockSetIsGeneratingOutput).toHaveBeenLastCalledWith(false)
+    })
+
+    expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+      "artifact-1",
+      "failed",
+      expect.objectContaining({
+        errorMessage: "Generation cancelled by upstream worker"
+      })
+    )
+    expect(mockMessageError).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to generate")
+    )
+    expect(mockMessageInfo).not.toHaveBeenCalledWith("Generation canceled")
+  })
+
+  it("passes extended timeout to summary generation RAG request", async () => {
+    render(<StudioPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockRagSearch).toHaveBeenCalled()
+    })
+
+    expect(mockRagSearch).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        timeoutMs: 120000
+      })
+    )
+  })
+
+  it("passes extended timeout to report generation RAG request", async () => {
+    render(<StudioPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Report" }))
+
+    await waitFor(() => {
+      expect(mockRagSearch).toHaveBeenCalled()
+    })
+
+    expect(mockRagSearch).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        timeoutMs: 120000
+      })
+    )
+  })
+
+  it("passes extended timeout to flashcard generation RAG request", async () => {
+    mockRagSearch.mockResolvedValue({
+      generation: "Front: Term\nBack: Definition"
+    })
+
+    render(<StudioPane />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+      expect(mockRagSearch).toHaveBeenCalled()
+    })
+
+    expect(mockRagSearch).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        timeoutMs: 120000
+      })
+    )
+  })
+
   it("confirms before deleting a generated artifact", () => {
     workspaceStoreState.generatedArtifacts = [
       {
@@ -305,6 +446,37 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
 
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(mockRemoveArtifact).toHaveBeenCalledWith("artifact-existing")
+  })
+
+  it("uses failed status x icon to delete failed generated output", () => {
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-failed",
+        type: "summary",
+        title: "Failed output",
+        status: "failed",
+        errorMessage: "Generation failed",
+        content: "",
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]
+
+    const confirmSpy = vi
+      .spyOn(Modal, "confirm")
+      .mockImplementation((config) => {
+        config.onOk?.()
+        return {
+          destroy: vi.fn(),
+          update: vi.fn()
+        } as any
+      })
+
+    render(<StudioPane />)
+
+    fireEvent.click(screen.getByLabelText("Delete failed output"))
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(mockRemoveArtifact).toHaveBeenCalledWith("artifact-failed")
   })
 
   it("regenerates in replace mode without creating a new artifact", async () => {

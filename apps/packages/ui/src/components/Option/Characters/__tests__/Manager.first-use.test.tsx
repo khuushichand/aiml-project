@@ -1311,6 +1311,58 @@ describe("CharactersManager first-use onboarding", () => {
     expect(await screen.findByText("No Chats")).toBeInTheDocument()
   }, 30000)
 
+  it("toggles advanced filters panel while keeping primary controls visible", async () => {
+    const user = userEvent.setup()
+    const records = [
+      {
+        id: "char-a",
+        name: "With Chats",
+        creator: "alice",
+        system_prompt: "Prompt text",
+        version: 1
+      }
+    ]
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: records, status: "success" })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    expect(
+      await screen.findByLabelText("Filter characters by creator")
+    ).toBeInTheDocument()
+    expect(screen.getByPlaceholderText("Search characters")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Hide filters" }))
+
+    await waitFor(() => {
+      expect(
+        screen.queryByLabelText("Filter characters by creator")
+      ).not.toBeInTheDocument()
+    })
+    expect(screen.getByPlaceholderText("Search characters")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Advanced filters" })
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: "Advanced filters" }))
+
+    expect(
+      await screen.findByLabelText("Filter characters by creator")
+    ).toBeInTheDocument()
+  }, 30000)
+
   it("serializes folder filter into reserved folder tag query params and clears it", async () => {
     const user = userEvent.setup()
     const records = [

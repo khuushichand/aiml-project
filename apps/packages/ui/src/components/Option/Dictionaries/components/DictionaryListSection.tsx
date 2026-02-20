@@ -52,13 +52,13 @@ export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
 }) => {
   return (
     <>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-2 sm:flex-1 sm:max-w-3xl sm:flex-row">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             value={dictionarySearch}
             onChange={(event) => onDictionarySearchChange(event.target.value)}
             allowClear
-            className="sm:max-w-md"
+            className="w-full min-w-[220px] md:w-72"
             placeholder="Search dictionaries by name, description, category, or tags"
             aria-label="Search dictionaries"
           />
@@ -71,7 +71,7 @@ export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
               value: category,
             }))}
             placeholder="All categories"
-            className="sm:min-w-[180px]"
+            className="w-40"
             aria-label="Filter dictionaries by category"
           />
           <Select
@@ -84,20 +84,22 @@ export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
               value: tag,
             }))}
             placeholder="Filter by tags"
-            className="sm:min-w-[220px]"
+            className="w-44"
             maxTagCount="responsive"
             aria-label="Filter dictionaries by tags"
           />
         </div>
-        <div className="flex justify-end gap-2">
+        <div className="flex items-center gap-2">
           <Button onClick={onOpenImport}>Import</Button>
           <Button type="primary" icon={<Plus className="w-4 h-4" />} onClick={onOpenCreate}>
             New Dictionary
           </Button>
         </div>
       </div>
-      <div className="text-xs text-text-muted">
-        Processing order for active dictionaries uses Priority (alphabetical by dictionary name), then each dictionary&apos;s entry order.
+      <div className="rounded border border-border bg-surface-secondary px-3 py-2">
+        <p className="text-xs text-text-muted">
+          Processing order for active dictionaries uses Priority (alphabetical by dictionary name), then each dictionary&apos;s entry order.
+        </p>
       </div>
       {status === "pending" && <Skeleton active paragraph={{ rows: 6 }} />}
       {status === "success" && dictionariesUnsupported && (

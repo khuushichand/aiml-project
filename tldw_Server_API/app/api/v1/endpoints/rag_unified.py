@@ -225,10 +225,16 @@ def _build_unified_pipeline_kwargs(
     payload["media_db"] = media_db
     payload["chacha_db"] = chacha_db
     payload["index_namespace"] = request.index_namespace or request.corpus
-    payload["feedback_user_id"] = payload.get("feedback_user_id") or (
-        current_user.username if current_user else None
+    resolved_storage_user_id = _resolve_implicit_feedback_user_id(None, current_user)
+    if resolved_storage_user_id is None:
+        resolved_storage_user_id = _resolve_implicit_feedback_user_id(
+            payload.get("user_id"), current_user
+        )
+    payload["user_id"] = resolved_storage_user_id
+    payload["feedback_user_id"] = (
+        _resolve_implicit_feedback_user_id(payload.get("feedback_user_id"), current_user)
+        or resolved_storage_user_id
     )
-    payload["user_id"] = current_user.username if current_user else payload.get("user_id")
     signature = inspect.signature(unified_rag_pipeline)
     params = list(signature.parameters.values())
     if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
@@ -267,20 +273,25 @@ def _resolve_implicit_feedback_user_id(
     Resolve a stable user identifier for implicit-feedback personalization state.
 
     Prefer explicit request user_id when provided, but normalize legacy
-    ``single_user`` to the authenticated numeric user id to avoid filesystem-path
-    validation failures in single-user mode.
+    ``single_user`` aliases to a numeric user id to avoid filesystem-path
+    validation failures.
     """
     raw_request = str(request_user_id).strip() if request_user_id is not None else ""
     if raw_request:
-        if raw_request.lower() == "single_user" and current_user is not None:
-            current_id = getattr(current_user, "id_int", None)
-            if isinstance(current_id, int):
-                return str(current_id)
-            fallback_id = getattr(current_user, "id", None)
-            if fallback_id is not None:
-                fallback_raw = str(fallback_id).strip()
-                if fallback_raw:
-                    return fallback_raw
+        if raw_request.lower() == "single_user":
+            if current_user is not None:
+                current_id = getattr(current_user, "id_int", None)
+                if isinstance(current_id, int):
+                    return str(current_id)
+                fallback_id = getattr(current_user, "id", None)
+                if fallback_id is not None:
+                    fallback_raw = str(fallback_id).strip()
+                    if fallback_raw:
+                        return fallback_raw
+            try:
+                return str(DatabasePaths.get_single_user_id())
+            except (RuntimeError, ValueError, OSError, TypeError):
+                pass
         return raw_request
 
     if current_user is None:
@@ -1412,7 +1423,16 @@ async def unified_batch_endpoint(
             )
             checkpoint_id = checkpoint_state.checkpoint_id
         kwargs.update(db_paths)
-        kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
+        resolved_storage_user_id = _resolve_implicit_feedback_user_id(None, current_user)
+        if resolved_storage_user_id is None:
+            resolved_storage_user_id = _resolve_implicit_feedback_user_id(
+                kwargs.get("user_id"), current_user
+            )
+        kwargs["user_id"] = resolved_storage_user_id
+        kwargs["feedback_user_id"] = (
+            _resolve_implicit_feedback_user_id(kwargs.get("feedback_user_id"), current_user)
+            or resolved_storage_user_id
+        )
 
         # Process batch
         on_query_done = None
@@ -1588,7 +1608,7 @@ async def simple_search_endpoint(
             notes_db_path=(chacha_db.db_path if chacha_db else None),
             character_db_path=(chacha_db.db_path if chacha_db else None),
             kanban_db_path=_resolve_kanban_db_path(current_user),
-            user_id=current_user.username if current_user else None,
+            user_id=_resolve_implicit_feedback_user_id(None, current_user),
         )
 
         # Best-effort RAG query logging (counts as a single query).
@@ -1709,7 +1729,16 @@ async def resume_batch_endpoint(
             "character_db_path": chacha_db.db_path if chacha_db else None,
         }
         kwargs.update(db_paths)
-        kwargs["user_id"] = current_user.username if current_user else kwargs.get("user_id")
+        resolved_storage_user_id = _resolve_implicit_feedback_user_id(None, current_user)
+        if resolved_storage_user_id is None:
+            resolved_storage_user_id = _resolve_implicit_feedback_user_id(
+                kwargs.get("user_id"), current_user
+            )
+        kwargs["user_id"] = resolved_storage_user_id
+        kwargs["feedback_user_id"] = (
+            _resolve_implicit_feedback_user_id(kwargs.get("feedback_user_id"), current_user)
+            or resolved_storage_user_id
+        )
 
         start_time = time.time()
 

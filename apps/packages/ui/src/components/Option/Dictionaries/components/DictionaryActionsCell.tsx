@@ -1,6 +1,17 @@
 import React from "react"
-import { Dropdown, Tooltip } from "antd"
-import { Copy, History, MessageCircle, MoreHorizontal, Pen, Trash2 } from "lucide-react"
+import { Button, Dropdown, Tooltip } from "antd"
+import {
+  BarChart3,
+  Copy,
+  Download,
+  FileText,
+  History,
+  Link2,
+  List,
+  MoreHorizontal,
+  Pen,
+  Trash2
+} from "lucide-react"
 
 type DictionaryActionsCellProps = {
   record: any
@@ -30,24 +41,24 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
   onDelete
 }) => {
   return (
-    <div className="flex gap-1 items-center">
+    <div className="flex gap-2 items-center">
       <Tooltip title="Edit dictionary">
-        <button
-          className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+        <Button
+          type="text"
+          size="small"
+          icon={<Pen className="w-4 h-4" />}
           onClick={() => onOpenEdit(record)}
           aria-label={`Edit dictionary ${record.name}`}
-        >
-          <Pen className="w-5 h-5" />
-        </button>
+        />
       </Tooltip>
       <Tooltip title="Manage entries">
-        <button
-          className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+        <Button
+          type="text"
+          size="small"
+          icon={<List className="w-4 h-4" />}
           onClick={() => onOpenEntries(record.id)}
           aria-label={`Manage entries for ${record.name}`}
-        >
-          Entries
-        </button>
+        />
       </Tooltip>
       {useCompactDictionaryActions ? (
         <Dropdown
@@ -57,7 +68,7 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
               {
                 key: "assign",
                 label: "Quick assign to chats",
-                icon: <MessageCircle className="w-4 h-4" />
+                icon: <Link2 className="w-4 h-4" />
               },
               { key: "json", label: "Export JSON" },
               { key: "markdown", label: "Export Markdown" },
@@ -109,79 +120,79 @@ export const DictionaryActionsCell: React.FC<DictionaryActionsCellProps> = ({
           }}
           placement="bottomRight"
         >
-          <button
-            type="button"
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+          <Button
+            type="text"
+            size="small"
+            icon={<MoreHorizontal className="w-4 h-4" />}
             aria-label={`More actions for ${record.name}`}
             aria-haspopup="menu"
-          >
-            <MoreHorizontal className="w-5 h-5" />
-          </button>
+          />
         </Dropdown>
       ) : (
         <>
           <Tooltip title="Quick assign to chat sessions">
-            <button
-              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+            <Button
+              type="text"
+              size="small"
+              icon={<Link2 className="w-4 h-4" />}
               onClick={() => onOpenQuickAssign(record)}
               aria-label={`Quick assign ${record.name} to chats`}
-            >
-              <MessageCircle className="w-5 h-5" />
-            </button>
+            />
           </Tooltip>
           <Tooltip title="Export as JSON">
-            <button
-              className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            <Button
+              type="text"
+              size="small"
+              icon={<Download className="w-4 h-4" />}
               onClick={() => onExportJson(record)}
               aria-label={`Export ${record.name} as JSON`}
-            >
-              JSON
-            </button>
+            />
           </Tooltip>
           <Tooltip title="Export as Markdown">
-            <button
-              className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            <Button
+              type="text"
+              size="small"
+              icon={<FileText className="w-4 h-4" />}
               onClick={() => onExportMarkdown(record)}
               aria-label={`Export ${record.name} as Markdown`}
-            >
-              MD
-            </button>
+            />
           </Tooltip>
           <Tooltip title="View statistics">
-            <button
-              className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            <Button
+              type="text"
+              size="small"
+              icon={<BarChart3 className="w-4 h-4" />}
               onClick={() => onOpenStats(record)}
               aria-label={`View statistics for ${record.name}`}
-            >
-              Stats
-            </button>
+            />
           </Tooltip>
           <Tooltip title="View version history">
-            <button
-              className="min-w-[44px] min-h-[44px] px-2 flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors text-sm"
+            <Button
+              type="text"
+              size="small"
+              icon={<History className="w-4 h-4" />}
               onClick={() => onOpenVersions(record)}
               aria-label={`Version history for ${record.name}`}
-            >
-              Versions
-            </button>
+            />
           </Tooltip>
           <Tooltip title="Duplicate dictionary">
-            <button
-              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-text-muted hover:text-text hover:bg-surface2 rounded-md transition-colors"
+            <Button
+              type="text"
+              size="small"
+              icon={<Copy className="w-4 h-4" />}
               onClick={() => onDuplicate(record)}
               aria-label={`Duplicate dictionary ${record.name}`}
-            >
-              <Copy className="w-5 h-5" />
-            </button>
+            />
           </Tooltip>
           <Tooltip title="Delete dictionary">
-            <button
-              className="min-w-[44px] min-h-[44px] flex items-center justify-center text-danger hover:bg-danger/10 rounded-md transition-colors"
+            <Button
+              type="text"
+              size="small"
+              danger
+              icon={<Trash2 className="w-4 h-4" />}
               onClick={() => onDelete(record)}
               aria-label={`Delete dictionary ${record.name}`}
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
+            />
           </Tooltip>
         </>
       )}

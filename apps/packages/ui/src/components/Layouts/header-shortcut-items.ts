@@ -29,7 +29,8 @@ import {
   UserCircle2,
   Volume2,
   Table2,
-  Workflow
+  Workflow,
+  Zap
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
 import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
@@ -68,6 +69,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: NotebookPen,
         labelKey: "option:header.modePromptsPlayground",
         labelDefault: "Prompts"
+      },
+      {
+        id: "prompt-studio",
+        to: "/prompt-studio",
+        icon: NotebookPen,
+        labelKey: "option:header.modePromptStudio",
+        labelDefault: "Prompt Studio"
       },
       {
         id: "characters",
@@ -131,6 +139,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: LayoutGrid,
         labelKey: "option:header.libraryView",
         labelDefault: "Multi-Item Review"
+      },
+      {
+        id: "content-review",
+        to: "/content-review",
+        icon: FileText,
+        labelKey: "option:header.contentReview",
+        labelDefault: "Content Review"
       },
       {
         id: "collections",
@@ -243,6 +258,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Bot,
         labelKey: "option:header.acpPlayground",
         labelDefault: "ACP Playground"
+      },
+      {
+        id: "skills",
+        to: "/skills",
+        icon: Zap,
+        labelKey: "settings:skillsNav",
+        labelDefault: "Skills"
       },
       {
         id: "kanban-playground",

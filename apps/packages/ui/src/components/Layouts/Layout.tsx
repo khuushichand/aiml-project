@@ -34,7 +34,10 @@ import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { setSettingsReturnTo } from "@/utils/settings-return"
-import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
+import {
+  DOCUMENT_WORKSPACE_PATH,
+  WORKSPACE_PLAYGROUND_PATH
+} from "@/routes/route-paths"
 import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 
@@ -121,6 +124,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
   const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
+  const isWorkspacePlayground = location.pathname === WORKSPACE_PLAYGROUND_PATH
+  const isViewportConstrainedRoute =
+    isDocumentWorkspace || isWorkspacePlayground
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage
       ? {
@@ -304,7 +310,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       <div
         className={classNames(
           "relative flex w-full",
-          isDocumentWorkspace ? "h-screen min-h-0" : "min-h-screen"
+          isViewportConstrainedRoute ? "h-screen min-h-0" : "min-h-screen"
         )}
         style={chatScreenBackgroundStyle}
       >
@@ -331,7 +337,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
           <div
             className={classNames(
               "relative flex flex-col",
-              isDocumentWorkspace ? "min-h-0 flex-1" : "min-h-[135vh]"
+              isViewportConstrainedRoute ? "min-h-0 flex-1" : "min-h-[135vh]"
             )}
           >
             <div className="relative z-20 w-full">

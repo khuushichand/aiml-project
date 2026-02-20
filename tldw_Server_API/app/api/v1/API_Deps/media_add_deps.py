@@ -12,9 +12,6 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ChunkMethod,
     PdfEngine,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
-    resolve_default_transcription_model,
-)
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -257,6 +254,11 @@ async def get_add_media_form(
     Dependency function to parse form data for the /media/add endpoint and
     validate it against the AddMediaForm model.
     """
+    # Lazy import to avoid pulling optional STT backends during module import.
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+        resolve_default_transcription_model,
+    )
+
     transcription_model_value = (transcription_model or "").strip()
     if not transcription_model_value:
         transcription_model_value = resolve_default_transcription_model("whisper-large-v3")

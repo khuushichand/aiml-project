@@ -6,6 +6,7 @@ export type ConnectionErrorKind =
   | "dns_failed"
   | "refused"
   | "timeout"
+  | "cors_blocked"
   | "ssl_error"
   | "auth_invalid"
   | "server_error"
@@ -62,13 +63,22 @@ export const categorizeConnectionError = (
   status: number | null,
   error: string | null
 ): ConnectionErrorKind => {
+  const normalized = (error || "").toLowerCase()
   if (status === 401 || status === 403) return "auth_invalid"
   if (status && status >= 500) return "server_error"
-  if (error?.includes("timeout")) return "timeout"
-  if (error?.includes("ENOTFOUND") || error?.includes("getaddrinfo"))
+  if (
+    normalized.includes("cors") ||
+    normalized.includes("cross-origin") ||
+    normalized.includes("disallowed origin") ||
+    normalized.includes("likely cors mismatch")
+  ) {
+    return "cors_blocked"
+  }
+  if (normalized.includes("timeout")) return "timeout"
+  if (error?.includes("ENOTFOUND") || normalized.includes("getaddrinfo"))
     return "dns_failed"
   if (error?.includes("ECONNREFUSED")) return "refused"
-  if (error?.includes("SSL") || error?.includes("certificate"))
+  if (error?.includes("SSL") || normalized.includes("certificate"))
     return "ssl_error"
   if (!status && error) return "refused"
   return null
