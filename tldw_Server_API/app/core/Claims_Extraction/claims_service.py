@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_webhook_delivery,
 )
 from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
+from tldw_Server_API.app.core.Claims_Extraction.output_parser import coerce_llm_response_text
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
@@ -408,26 +409,6 @@ def _get_email_service():
     return get_email_service()
 
 
-def _coerce_llm_response_text(response: Any) -> str:
-    if isinstance(response, str):
-        return response
-    if isinstance(response, dict):
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            choices = response.get("choices") or []
-            if isinstance(choices, list) and choices:
-                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
-                content = msg.get("content") if isinstance(msg, dict) else None
-                if isinstance(content, str):
-                    return content
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            alt = response.get("response") or response.get("text")
-            if isinstance(alt, str):
-                return alt
-    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-        return "".join(list(response))
-    return str(response)
-
-
 def _fva_claims_analyze_call(
     api_endpoint: str | None,
     input_data: Any,
@@ -482,7 +463,7 @@ def _fva_claims_analyze_call(
 
     try:
         response = perform_chat_api_call(**call_kwargs)
-        return _coerce_llm_response_text(response)
+        return coerce_llm_response_text(response)
     except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"FVA analyze function failed: {exc}")
         return ""

@@ -35,9 +35,15 @@ from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
 )
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
+    coerce_llm_response_text,
     extract_claim_texts,
     parse_claims_llm_output,
     resolve_claims_response_format,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_alignment_config,
+    resolve_claims_json_parse_mode,
+    resolve_claims_llm_config,
 )
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
@@ -64,11 +70,7 @@ _CLAIMS_IMPORT_EXCEPTIONS = (
     RuntimeError,
 )
 
-_CLAIMS_COERCE_EXCEPTIONS = (
-    TypeError,
-    ValueError,
-    OverflowError,
-)
+_CLAIMS_COERCE_EXCEPTIONS = (TypeError, ValueError, OverflowError)
 
 _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS = (
     KeyError,
@@ -124,27 +126,6 @@ _INGESTION_CLAIMS_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
-def _resolve_claims_parse_mode() -> str:
-    mode = str(_settings.get("CLAIMS_JSON_PARSE_MODE", "lenient") or "lenient").strip().lower()
-    if mode not in {"lenient", "strict"}:
-        return "lenient"
-    return mode
-
-
-def _resolve_alignment_config() -> tuple[str, float]:
-    mode = str(_settings.get("CLAIMS_ALIGNMENT_MODE", "fuzzy") or "fuzzy").strip().lower()
-    if mode not in {"off", "exact", "fuzzy"}:
-        mode = "fuzzy"
-    try:
-        threshold = float(_settings.get("CLAIMS_ALIGNMENT_THRESHOLD", 0.75))
-    except _CLAIMS_COERCE_EXCEPTIONS:
-        threshold = 0.75
-    threshold = max(0.0, min(1.0, threshold))
-    return mode, threshold
-
-
-
-
 def extract_claims_for_chunks(
     chunks: list[dict[str, Any]],
     *,
@@ -169,20 +150,24 @@ def extract_claims_for_chunks(
         )
         resolved_mode, resolved_language = resolve_claims_extractor_mode(resolved_mode, combined_text)
 
-    parse_mode = _resolve_claims_parse_mode()
-    alignment_mode, alignment_threshold = _resolve_alignment_config()
+    parse_mode = resolve_claims_json_parse_mode(_settings, default_mode="lenient")
+    alignment_mode, alignment_threshold = resolve_claims_alignment_config(
+        _settings,
+        default_mode="fuzzy",
+        default_threshold=0.75,
+    )
     current_mode = resolved_mode
 
     def _llm_extract_claim_texts(txt: str, max_items: int, _language_hint: str | None) -> list[str]:
         nonlocal current_mode
         cost_estimate = None
-        provider = current_mode if current_mode in LLM_PROVIDER_MODES else str(_settings.get("CLAIMS_LLM_PROVIDER", "openai")).lower()
+        default_provider, model_override, temperature = resolve_claims_llm_config(
+            _settings,
+            default_provider="openai",
+            default_temperature=0.1,
+        )
+        provider = current_mode if current_mode in LLM_PROVIDER_MODES else default_provider
         provider_name = normalize_provider(provider)
-        model_override = str(_settings.get("CLAIMS_LLM_MODEL", "") or "") or None
-        try:
-            temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-        except _CLAIMS_COERCE_EXCEPTIONS:
-            temperature = 0.1
         response_format = resolve_claims_response_format(
             provider,
             schema_name="ingestion_claims_extraction",
@@ -331,24 +316,7 @@ def extract_claims_for_chunks(
             logger.debug(f"LLM-based claim extraction failed ({current_mode}): {exc}")
             return []
 
-        if isinstance(resp, str):
-            text = resp
-        elif isinstance(resp, dict):
-            try:
-                choices = resp.get("choices") or []
-                if choices:
-                    msg = choices[0].get("message") or {}
-                    content = msg.get("content")
-                    text = content if isinstance(content, str) else str(resp)
-                else:
-                    text = str(resp)
-            except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
-                text = str(resp)
-        else:
-            try:
-                text = "".join(list(resp))
-            except _CLAIMS_RESPONSE_PARSE_EXCEPTIONS:
-                text = str(resp)
+        text = coerce_llm_response_text(resp)
         if budget is not None:
             budget.add_usage(tokens=estimate_claims_tokens(text))
 

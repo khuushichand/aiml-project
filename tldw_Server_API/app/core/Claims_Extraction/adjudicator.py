@@ -12,20 +12,27 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+from tldw_Server_API.app.core.Claims_Extraction.analyze_types import (
+    AdjudicatorAnalyzeCallable,
+)
 from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
     Document,
     VerificationStatus,
 )
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
+    coerce_llm_response_text,
     parse_claims_llm_output,
     resolve_claims_response_format,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_json_parse_mode,
+    resolve_claims_llm_config,
 )
 
 if TYPE_CHECKING:
@@ -35,7 +42,7 @@ if TYPE_CHECKING:
     )
 
 
-_ADJUDICATOR_RESPONSE_SCHEMA = {
+_ADJUDICATOR_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "stance": {
@@ -51,68 +58,6 @@ _ADJUDICATOR_RESPONSE_SCHEMA = {
     "required": ["stance", "confidence"],
     "additionalProperties": True,
 }
-
-
-def _resolve_claims_parse_mode() -> str:
-    try:
-        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-    except Exception:
-        return "lenient"
-    mode = str(_settings.get("CLAIMS_JSON_PARSE_MODE", "lenient") or "lenient").strip().lower()
-    if mode not in {"lenient", "strict"}:
-        return "lenient"
-    return mode
-
-
-def _resolve_claims_llm_config() -> tuple[str, str | None, float]:
-    try:
-        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-    except Exception:
-        return "openai", None, 0.1
-
-    provider: str | None = None
-    model_override: str | None = None
-    temperature = 0.1
-    with suppress(Exception):
-        provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-    with suppress(Exception):
-        model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-    with suppress(Exception):
-        temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-
-    if provider is None:
-        with suppress(Exception):
-            rag_cfg = _settings.get("RAG", {}) or {}
-            provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-    if provider is None:
-        with suppress(Exception):
-            provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-    if model_override is None:
-        with suppress(Exception):
-            rag_cfg = _settings.get("RAG", {}) or {}
-            model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-
-    return provider or "openai", model_override, temperature
-
-
-def _coerce_llm_response_text(response: Any) -> str:
-    if isinstance(response, str):
-        return response
-    if isinstance(response, dict):
-        with suppress(Exception):
-            choices = response.get("choices") or []
-            if isinstance(choices, list) and choices:
-                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
-                content = msg.get("content") if isinstance(msg, dict) else None
-                if isinstance(content, str):
-                    return content
-        with suppress(Exception):
-            alt = response.get("response") or response.get("text")
-            if isinstance(alt, str):
-                return alt
-    with suppress(Exception):
-        return "".join(list(response))
-    return str(response)
 
 
 class EvidenceStance(str, Enum):
@@ -175,7 +120,7 @@ class ClaimAdjudicator:
     def __init__(
         self,
         nli_pipeline: Any | None = None,
-        llm_analyze_fn: Callable | None = None,
+        llm_analyze_fn: AdjudicatorAnalyzeCallable | None = None,
         contested_threshold: float = 0.4,
         min_contradict_score: float = 0.1,
         strong_contradict_threshold: float = 0.7,
@@ -371,7 +316,7 @@ class ClaimAdjudicator:
             )
             if inspect.isawaitable(response):
                 response = await response
-            text = _coerce_llm_response_text(response)
+            text = coerce_llm_response_text(response)
             if text.strip():
                 return text
         except TypeError as exc:
@@ -382,7 +327,7 @@ class ClaimAdjudicator:
             fallback = fn(prompt)
             if inspect.isawaitable(fallback):
                 fallback = await fallback
-            return _coerce_llm_response_text(fallback)
+            return coerce_llm_response_text(fallback)
         except Exception as fallback_exc:
             if extended_error is not None:
                 raise fallback_exc from extended_error
@@ -402,8 +347,8 @@ Respond with a JSON object:
 {{"stance": "SUPPORTS" | "CONTRADICTS" | "NEUTRAL", "confidence": 0.0-1.0}}"""
 
         try:
-            provider, model_override, temperature = _resolve_claims_llm_config()
-            parse_mode = _resolve_claims_parse_mode()
+            provider, model_override, temperature = resolve_claims_llm_config(default_temperature=0.1)
+            parse_mode = resolve_claims_json_parse_mode(default_mode="lenient")
             response_format = resolve_claims_response_format(
                 provider,
                 schema_name="claims_adjudication",
@@ -535,7 +480,7 @@ Respond with a JSON object:
 
 def create_adjudicator(
     nli_pipeline: Any | None = None,
-    llm_analyze_fn: Callable | None = None,
+    llm_analyze_fn: AdjudicatorAnalyzeCallable | None = None,
     contested_threshold: float = 0.4,
 ) -> ClaimAdjudicator:
     """

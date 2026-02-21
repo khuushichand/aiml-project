@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Claims_Extraction.analyze_types import ClaimsAnalyzeCallable
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
     ClaimsJobContext,
@@ -49,9 +50,15 @@ from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
     ClaimsOutputSchemaError,
+    coerce_llm_response_text,
     extract_claim_texts,
     parse_claims_llm_output,
     resolve_claims_response_format,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_alignment_config as resolve_runtime_alignment_config,
+    resolve_claims_json_parse_mode as resolve_runtime_parse_mode,
+    resolve_claims_llm_config as resolve_runtime_llm_config,
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
@@ -526,73 +533,15 @@ def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> tuple[int, in
 
 
 def _resolve_claims_llm_config() -> tuple[str, str | None, float]:
-    try:
-        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        _settings = {}
-
-    provider = None
-    model_override = None
-    temperature = 0.1
-    try:
-        provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        provider = None
-    try:
-        model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        model_override = None
-    try:
-        temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        temperature = 0.1
-
-    if provider is None:
-        try:
-            rag_cfg = _settings.get("RAG", {}) or {}
-            provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            provider = None
-    if provider is None:
-        try:
-            provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            provider = "openai"
-    if model_override is None:
-        try:
-            rag_cfg = _settings.get("RAG", {}) or {}
-            model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-            model_override = None
-
-    return provider or "openai", model_override, temperature
+    return resolve_runtime_llm_config(default_temperature=0.1)
 
 
 def _resolve_claims_json_parse_mode() -> str:
-    try:
-        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        return "lenient"
-    mode = str(_settings.get("CLAIMS_JSON_PARSE_MODE", "lenient") or "lenient").strip().lower()
-    if mode not in {"lenient", "strict"}:
-        return "lenient"
-    return mode
+    return resolve_runtime_parse_mode(default_mode="lenient")
 
 
 def _resolve_claims_alignment_config() -> tuple[str, float]:
-    try:
-        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        return "fuzzy", 0.75
-    mode = str(_settings.get("CLAIMS_ALIGNMENT_MODE", "fuzzy") or "fuzzy").strip().lower()
-    if mode not in {"off", "exact", "fuzzy"}:
-        mode = "fuzzy"
-    try:
-        threshold = float(_settings.get("CLAIMS_ALIGNMENT_THRESHOLD", 0.75))
-    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
-        threshold = 0.75
-    threshold = max(0.0, min(1.0, threshold))
-    return mode, threshold
+    return resolve_runtime_alignment_config(default_mode="fuzzy", default_threshold=0.75)
 
 
 def _claims_local_nli_enabled() -> bool:
@@ -673,7 +622,7 @@ class HeuristicSentenceExtractor:
 class LLMBasedClaimExtractor:
     """Prompt an LLM to extract decontextualized atomic propositions as JSON."""
 
-    def __init__(self, analyze_fn: Any):
+    def __init__(self, analyze_fn: ClaimsAnalyzeCallable):
         self._analyze = analyze_fn
 
     async def extract(
@@ -766,7 +715,7 @@ class LLMBasedClaimExtractor:
                 latency_s=latency_s,
                 estimated_cost=cost_estimate,
             )
-            text = raw if isinstance(raw, str) else str(raw)
+            text = coerce_llm_response_text(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
             with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
@@ -830,7 +779,7 @@ class LLMBasedClaimExtractor:
 class HybridClaimVerifier:
     """Verify with numeric/date checks, retrieve evidence, then LLM-judge entailment."""
 
-    def __init__(self, analyze_fn: Any, nli_model: str | None = None):
+    def __init__(self, analyze_fn: ClaimsAnalyzeCallable, nli_model: str | None = None):
         self._analyze = analyze_fn
         self._nli = None
         self._nli_lock = asyncio.Lock()
@@ -1067,7 +1016,7 @@ class HybridClaimVerifier:
                 latency_s=latency_s,
                 estimated_cost=cost_estimate,
             )
-            text = raw if isinstance(raw, str) else str(raw)
+            text = coerce_llm_response_text(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
             with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
@@ -1195,7 +1144,7 @@ class HybridClaimVerifier:
 class ClaimsEngine:
     """High-level entry: extracts and verifies claims for a generated answer."""
 
-    def __init__(self, analyze_fn: Any):
+    def __init__(self, analyze_fn: ClaimsAnalyzeCallable):
         self.extractor_llm = LLMBasedClaimExtractor(analyze_fn)
         self.extractor_heur = HeuristicSentenceExtractor()
         self._analyze = analyze_fn

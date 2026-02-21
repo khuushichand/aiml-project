@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import suppress
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -138,6 +139,27 @@ def parse_claims_llm_output(
     raise ClaimsOutputNoJsonError(f"Unable to parse JSON from model output: {last_error}")
 
 
+def coerce_llm_response_text(response: Any) -> str:
+    """Best-effort normalization of provider response shapes to plain text."""
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        with suppress(Exception):
+            choices = response.get("choices") or []
+            if isinstance(choices, list) and choices:
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if isinstance(content, str):
+                    return content
+        with suppress(Exception):
+            alt = response.get("response") or response.get("text")
+            if isinstance(alt, str):
+                return alt
+    with suppress(Exception):
+        return "".join(list(response))
+    return str(response)
+
+
 def extract_claim_items(
     payload: Any,
     *,
@@ -253,6 +275,7 @@ __all__ = [
     "ClaimsOutputNoJsonError",
     "ClaimsOutputSchemaError",
     "ClaimsParserOptions",
+    "coerce_llm_response_text",
     "extract_claim_items",
     "extract_claim_texts",
     "parse_claims_llm_output",

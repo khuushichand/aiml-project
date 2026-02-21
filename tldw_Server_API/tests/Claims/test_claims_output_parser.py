@@ -3,6 +3,7 @@ import pytest
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputNoJsonError,
     ClaimsOutputSchemaError,
+    coerce_llm_response_text,
     extract_claim_texts,
     parse_claims_llm_output,
     resolve_claims_response_format,
@@ -129,3 +130,20 @@ def test_response_format_none_when_provider_blocks_field(monkeypatch):
         json_schema={"type": "object"},
     )
     assert response_format is None
+
+
+@pytest.mark.unit
+def test_coerce_llm_response_text_prefers_choices_content():
+    payload = {"choices": [{"message": {"content": "from-choices"}}]}
+    assert coerce_llm_response_text(payload) == "from-choices"
+
+
+@pytest.mark.unit
+def test_coerce_llm_response_text_uses_response_fallback():
+    payload = {"response": "fallback-text"}
+    assert coerce_llm_response_text(payload) == "fallback-text"
+
+
+@pytest.mark.unit
+def test_coerce_llm_response_text_joins_iterables():
+    assert coerce_llm_response_text(["a", "b", "c"]) == "abc"
