@@ -81,3 +81,39 @@ def test_claims_engine_nli_only_without_model_returns_nei():
         assert all(c.get("label") == "nei" for c in claims)
 
     asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_claims_engine_uses_structured_response_format():
+    observed_formats = []
+
+    def _analyze_with_capture(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs,
+    ):
+        observed_formats.append(kwargs.get("response_format"))
+        if system_message and "fact-checking judge" in system_message:
+            return '{"label": "nei", "confidence": 0.4, "rationale": "stub"}'
+        return '{"claims": [{"text": "Captured claim."}]}'
+
+    engine = ClaimsEngine(_analyze_with_capture)
+    documents = [Doc("d1", "Captured claim context.", 0.5)]
+
+    async def _run():
+        result = await engine.run(
+            answer="Captured claim.",
+            query="Q",
+            documents=documents,
+            claim_extractor="llm",
+            claim_verifier="llm",
+            claims_max=2,
+        )
+        assert result.get("claims")
+
+    asyncio.run(_run())
+    assert any(isinstance(fmt, dict) for fmt in observed_formats if fmt is not None)

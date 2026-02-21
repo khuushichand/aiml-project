@@ -1034,6 +1034,9 @@ def _claims_settings_snapshot() -> dict[str, Any]:
         "claims_llm_provider": str(settings.get("CLAIMS_LLM_PROVIDER", "")),
         "claims_llm_temperature": float(settings.get("CLAIMS_LLM_TEMPERATURE", 0.1)),
         "claims_llm_model": str(settings.get("CLAIMS_LLM_MODEL", "")),
+        "claims_json_parse_mode": str(settings.get("CLAIMS_JSON_PARSE_MODE", "lenient")),
+        "claims_alignment_mode": str(settings.get("CLAIMS_ALIGNMENT_MODE", "fuzzy")),
+        "claims_alignment_threshold": float(settings.get("CLAIMS_ALIGNMENT_THRESHOLD", 0.75)),
         "claims_rebuild_enabled": bool(settings.get("CLAIMS_REBUILD_ENABLED", False)),
         "claims_rebuild_interval_sec": int(settings.get("CLAIMS_REBUILD_INTERVAL_SEC", 3600)),
         "claims_rebuild_policy": str(settings.get("CLAIMS_REBUILD_POLICY", "missing")),
@@ -1949,6 +1952,12 @@ def update_claims_settings(
         updates["CLAIMS_LLM_TEMPERATURE"] = float(payload["claims_llm_temperature"])
     if payload.get("claims_llm_model") is not None:
         updates["CLAIMS_LLM_MODEL"] = str(payload["claims_llm_model"])
+    if payload.get("claims_json_parse_mode") is not None:
+        updates["CLAIMS_JSON_PARSE_MODE"] = str(payload["claims_json_parse_mode"]).strip().lower()
+    if payload.get("claims_alignment_mode") is not None:
+        updates["CLAIMS_ALIGNMENT_MODE"] = str(payload["claims_alignment_mode"]).strip().lower()
+    if payload.get("claims_alignment_threshold") is not None:
+        updates["CLAIMS_ALIGNMENT_THRESHOLD"] = float(payload["claims_alignment_threshold"])
     if payload.get("claims_rebuild_enabled") is not None:
         updates["CLAIMS_REBUILD_ENABLED"] = bool(payload["claims_rebuild_enabled"])
     if payload.get("claims_rebuild_interval_sec") is not None:

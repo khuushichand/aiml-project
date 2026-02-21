@@ -42,11 +42,12 @@ def test_ingestion_time_claims_extract_and_store_sql():
         rows = db.get_claims_by_media(media_id)
         assert len(rows) == inserted
         assert any("Hello world" in r["claim_text"] or "test document" in r["claim_text"] for r in rows)
+        assert any(r.get("span_start") is not None and r.get("span_end") is not None for r in rows)
     finally:
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None
 
 
 def test_ingestion_time_claims_extract_auto_multilingual():
@@ -80,4 +81,4 @@ def test_ingestion_time_claims_extract_auto_multilingual():
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None
