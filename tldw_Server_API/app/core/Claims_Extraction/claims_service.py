@@ -408,6 +408,86 @@ def _get_email_service():
     return get_email_service()
 
 
+def _coerce_llm_response_text(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
+            choices = response.get("choices") or []
+            if isinstance(choices, list) and choices:
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if isinstance(content, str):
+                    return content
+        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
+            alt = response.get("response") or response.get("text")
+            if isinstance(alt, str):
+                return alt
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
+        return "".join(list(response))
+    return str(response)
+
+
+def _fva_claims_analyze_call(
+    api_endpoint: str | None,
+    input_data: Any,
+    prompt: str | None,
+    api_key: str | None,
+    system_message: str | None,
+    temp: float | None = None,
+    streaming: bool = False,
+    recursive_summarization: bool = False,
+    chunked_summarization: bool = False,
+    chunk_options: Any = None,
+    model_override: str | None = None,
+    response_format: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> str:
+    """ClaimsEngine-compatible sync analyze fn used by FVA service paths."""
+    del recursive_summarization, chunked_summarization, chunk_options
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"FVA analyze call unavailable: {exc}")
+        return ""
+
+    provider = str(api_endpoint or settings.get("CLAIMS_LLM_PROVIDER", "openai")).strip() or "openai"
+    model = str(model_override or settings.get("CLAIMS_LLM_MODEL", "gpt-4o-mini")).strip() or "gpt-4o-mini"
+    try:
+        temperature = float(temp if temp is not None else settings.get("CLAIMS_LLM_TEMPERATURE", 0.3))
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        temperature = 0.3
+
+    user_prompt = prompt if isinstance(prompt, str) and prompt.strip() else str(input_data or "")
+    if not user_prompt.strip():
+        return ""
+
+    call_kwargs: dict[str, Any] = {
+        "api_endpoint": provider,
+        "api_key": api_key,
+        "messages_payload": [{"role": "user", "content": user_prompt}],
+        "system_message": system_message,
+        "model": model,
+        "temp": temperature,
+        "streaming": bool(streaming),
+        "max_tokens": int(kwargs.get("max_tokens", 2000) or 2000),
+    }
+    if response_format is not None:
+        call_kwargs["response_format"] = response_format
+
+    with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
+        topp = kwargs.get("topp")
+        if topp is not None:
+            call_kwargs["topp"] = float(topp)
+
+    try:
+        response = perform_chat_api_call(**call_kwargs)
+        return _coerce_llm_response_text(response)
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"FVA analyze function failed: {exc}")
+        return ""
+
+
 def _enqueue_claim_rebuild_if_needed(*, media_id: int, db_path: str) -> None:
     """Best-effort enqueue of a claims rebuild task for a media item."""
     try:
@@ -3986,33 +4066,8 @@ async def verify_claims_with_fva(
         config=retrieval_config,
     )
 
-    # Create claims engine with LLM analyze function
-    async def _fva_analyze_fn(prompt: str) -> str:
-        """Analyze function for FVA claims engine using configured LLM."""
-        try:
-            from tldw_Server_API.app.core.config import settings as _cfg
-            from tldw_Server_API.app.core.LLM_Calls.Unified_OpenAI_API import (
-                unified_llm_call,
-            )
-
-            provider = _cfg.get("CLAIMS_LLM_PROVIDER", "openai")
-            model = _cfg.get("CLAIMS_LLM_MODEL", "gpt-4o-mini")
-            temp = float(_cfg.get("CLAIMS_LLM_TEMPERATURE", 0.3))
-
-            result = await unified_llm_call(
-                api_endpoint=provider,
-                api_key=None,  # Uses config
-                input_data=prompt,
-                model=model,
-                temperature=temp,
-                max_tokens=2000,
-            )
-            return str(result) if result else ""
-        except Exception as e:
-            logger.warning(f"FVA analyze function failed: {e}")
-            return ""
-
-    claims_engine = ClaimsEngine(analyze_fn=_fva_analyze_fn)
+    # Create claims engine with a sync analyze function that matches ClaimsEngine call contract.
+    claims_engine = ClaimsEngine(analyze_fn=_fva_claims_analyze_call)
 
     # Create FVA pipeline
     pipeline = FVAPipeline(
