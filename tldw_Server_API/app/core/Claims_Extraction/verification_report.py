@@ -13,35 +13,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import (
-        ClaimType,
-        MatchLevel,
-        SourceAuthority,
-        VerificationStatus,
-    )
-except Exception:
-    from enum import Enum
-
-    class ClaimType(Enum):  # type: ignore
-        GENERAL = "general"
-
-    class VerificationStatus(Enum):  # type: ignore
-        VERIFIED = "verified"
-        REFUTED = "refuted"
-        CITATION_NOT_FOUND = "citation_not_found"
-        MISQUOTED = "misquoted"
-        MISLEADING = "misleading"
-        HALLUCINATION = "hallucination"
-        UNVERIFIED = "unverified"
-        NUMERICAL_ERROR = "numerical_error"
-        CONTESTED = "contested"
-
-    class MatchLevel(Enum):  # type: ignore
-        EXACT = "exact"
-
-    class SourceAuthority(Enum):  # type: ignore
-        SECONDARY = 1
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    ClaimType,
+    MatchLevel,
+    SourceAuthority,
+    VerificationStatus,
+)
 
 
 def _enum_to_str(val: Any) -> str:

@@ -11,11 +11,15 @@ Inspired by FVA-RAG paper (arXiv:2512.07015).
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    Document,
+    VerificationStatus,
+)
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
     parse_claims_llm_output,
@@ -26,29 +30,6 @@ if TYPE_CHECKING:
         Claim,
         ClaimVerification,
     )
-
-# Import types - matches existing pattern
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import (
-        Document,
-        VerificationStatus,
-    )
-except ImportError:
-    from dataclasses import dataclass as _dc
-    from enum import Enum as _Enum
-
-    class VerificationStatus(_Enum):  # type: ignore
-        VERIFIED = "verified"
-        REFUTED = "refuted"
-        CONTESTED = "contested"
-        UNVERIFIED = "unverified"
-
-    @_dc
-    class Document:  # type: ignore
-        id: str
-        content: str
-        metadata: dict[str, Any] = field(default_factory=dict)
-        score: float = 0.0
 
 
 class EvidenceStance(str, Enum):

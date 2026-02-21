@@ -34,6 +34,13 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     suggest_claims_concurrency,
 )
 from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
+from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
+    ClaimType,
+    Document,
+    MatchLevel,
+    SourceAuthority,
+    VerificationStatus,
+)
 from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
     extract_heuristic_claims_texts,
     extract_ner_claims_texts,
@@ -47,60 +54,6 @@ from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     resolve_claims_response_format,
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-
-# Prefer importing Document and verification types from RAG types for consistency
-try:
-    from tldw_Server_API.app.core.RAG.rag_service.types import (
-        ClaimType,
-        Document,
-        MatchLevel,
-        SourceAuthority,
-        VerificationStatus,
-    )
-except ImportError:
-    # Lightweight fallback types for non-RAG usage
-    from enum import Enum
-
-    class ClaimType(Enum):  # type: ignore
-        STATISTIC = "statistic"
-        COMPARATIVE = "comparative"
-        TEMPORAL = "temporal"
-        ATTRIBUTION = "attribution"
-        CAUSAL = "causal"
-        EXISTENCE = "existence"
-        RANKING = "ranking"
-        QUOTE = "quote"
-        GENERAL = "general"
-
-    class VerificationStatus(Enum):  # type: ignore
-        VERIFIED = "verified"
-        CITATION_NOT_FOUND = "citation_not_found"
-        MISQUOTED = "misquoted"
-        MISLEADING = "misleading"
-        HALLUCINATION = "hallucination"
-        UNVERIFIED = "unverified"
-        NUMERICAL_ERROR = "numerical_error"
-        REFUTED = "refuted"
-        CONTESTED = "contested"
-
-    class MatchLevel(Enum):  # type: ignore
-        EXACT = "exact"
-        PARAPHRASE = "paraphrase"
-        INTERPRETATION = "interpretation"
-
-    class SourceAuthority(Enum):  # type: ignore
-        PRIMARY = 5
-        GOVERNMENT = 4
-        PEER_REVIEWED = 3
-        INDUSTRY = 2
-        SECONDARY = 1
-
-    @dataclass
-    class Document:  # type: ignore
-        id: str
-        content: str
-        metadata: dict[str, Any] = field(default_factory=dict)
-        score: float = 0.0
 
 
 _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS = (
