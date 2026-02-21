@@ -11,12 +11,15 @@ Inspired by FVA-RAG paper (arXiv:2512.07015).
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
+from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
+    ClaimsOutputParseError,
+    parse_claims_llm_output,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Claims_Extraction.claims_engine import (
@@ -282,18 +285,23 @@ Respond with a JSON object:
 
         try:
             response = await self.llm_analyze_fn(prompt)
+            parsed = parse_claims_llm_output(
+                str(response or ""),
+                parse_mode="lenient",
+                strip_think_tags=True,
+            )
+            if not isinstance(parsed, dict):
+                raise ClaimsOutputParseError(
+                    f"Expected object payload from adjudicator LLM output, got {type(parsed).__name__}."
+                )
 
-            # Try to parse JSON from response
-            # Handle cases where response is wrapped in markdown code blocks
-            response_text = response
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0]
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0]
-
-            result = json.loads(response_text.strip())
-            stance_str = result.get("stance", "NEUTRAL").upper()
-            confidence = float(result.get("confidence", 0.5))
+            stance_str = str(parsed.get("stance", "NEUTRAL")).strip().upper()
+            confidence_raw = parsed.get("confidence", 0.5)
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError):
+                confidence = 0.5
+            confidence = max(0.0, min(1.0, confidence))
 
             stance_map = {
                 "SUPPORTS": EvidenceStance.SUPPORTS,

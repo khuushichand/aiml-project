@@ -546,6 +546,37 @@ class TestClaimAdjudicatorLLMAssess:
 
     @pytest.mark.unit
     @pytest.mark.asyncio
+    async def test_llm_handles_think_tag_wrapped_json(self):
+        """Should handle <think> blocks before fenced JSON."""
+        mock_llm = AsyncMock(
+            return_value=(
+                "<think>intermediate reasoning</think>\n"
+                "```json\n{\"stance\": \"CONTRADICTS\", \"confidence\": 0.88}\n```"
+            )
+        )
+
+        adjudicator = ClaimAdjudicator(llm_analyze_fn=mock_llm)
+
+        stance, confidence = await adjudicator._llm_assess("claim", "evidence")
+
+        assert stance == EvidenceStance.CONTRADICTS
+        assert confidence == 0.88
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_llm_clamps_confidence_bounds(self):
+        """Should clamp confidence to [0, 1] range."""
+        mock_llm = AsyncMock(return_value='{"stance": "SUPPORTS", "confidence": 1.7}')
+
+        adjudicator = ClaimAdjudicator(llm_analyze_fn=mock_llm)
+
+        stance, confidence = await adjudicator._llm_assess("claim", "evidence")
+
+        assert stance == EvidenceStance.SUPPORTS
+        assert confidence == 1.0
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
     async def test_llm_handles_failure(self):
         """Should return NEUTRAL on LLM failure."""
         mock_llm = AsyncMock(side_effect=Exception("API error"))
