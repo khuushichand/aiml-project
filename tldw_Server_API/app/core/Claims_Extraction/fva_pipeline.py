@@ -160,8 +160,10 @@ class FVAPipeline:
             self.config.anti_context_config,
         )
 
-        # Get NLI pipeline from claims_engine if available
-        nli_pipeline = getattr(claims_engine, "_nli", None)
+        # Prefer verifier-managed NLI pipeline (where ClaimsEngine stores it), then legacy fallback.
+        nli_pipeline = getattr(getattr(claims_engine, "verifier", None), "_nli", None)
+        if nli_pipeline is None:
+            nli_pipeline = getattr(claims_engine, "_nli", None)
 
         self.adjudicator = ClaimAdjudicator(
             nli_pipeline=nli_pipeline,
