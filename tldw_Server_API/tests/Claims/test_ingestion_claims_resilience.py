@@ -160,3 +160,32 @@ def test_ingestion_parse_error_falls_back_and_records_parse_event(monkeypatch):
     assert all(c.get("extractor_mode") == "heuristic" for c in claims)
     assert any(item.get("outcome") == "error" for item in captured["parse"])
     assert any(item.get("reason") == "parse_error" for item in captured["fallback"])
+
+
+@pytest.mark.unit
+def test_ingestion_records_response_format_selection(monkeypatch):
+    import tldw_Server_API.app.core.Claims_Extraction.ingestion_claims as ingestion_mod
+
+    captured: dict[str, Any] = {"format": []}
+
+    def _fake_chat_api_call(*args, **kwargs):
+        return '{"claims":[{"text":"Metric claim one."}]}'
+
+    def _record_format(**kwargs):
+        captured["format"].append(kwargs)
+
+    monkeypatch.setattr(ingestion_mod, "chat_api_call", _fake_chat_api_call, raising=False)
+    monkeypatch.setattr(
+        ingestion_mod,
+        "record_claims_response_format_selection",
+        _record_format,
+    )
+
+    claims = extract_claims_for_chunks(
+        [{"text": "Metric claim one.", "metadata": {"chunk_index": 0}}],
+        extractor_mode="openai",
+        max_per_chunk=1,
+    )
+
+    assert claims
+    assert any(item.get("mode") == "ingestion" for item in captured["format"])

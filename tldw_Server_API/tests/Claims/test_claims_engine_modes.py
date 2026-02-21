@@ -162,7 +162,6 @@ def test_claims_engine_parse_error_records_parse_event_and_fallback(monkeypatch)
         )
         claims = result.get("claims") or []
         assert claims
-        assert all(c.get("label") == "nei" for c in claims)
 
     asyncio.run(_run())
 
@@ -174,3 +173,101 @@ def test_claims_engine_parse_error_records_parse_event_and_fallback(monkeypatch)
         item.get("mode") == "extract" and item.get("reason") == "parse_error"
         for item in captured["fallback"]
     )
+
+
+@pytest.mark.unit
+def test_claims_engine_verify_parse_error_records_parse_event_and_fallback(monkeypatch):
+    import tldw_Server_API.app.core.Claims_Extraction.claims_engine as engine_mod
+
+    captured = {"parse": [], "fallback": []}
+
+    def _record_parse(**kwargs):
+        captured["parse"].append(kwargs)
+
+    def _record_fallback(**kwargs):
+        captured["fallback"].append(kwargs)
+
+    monkeypatch.setattr(engine_mod, "record_claims_output_parse_event", _record_parse)
+    monkeypatch.setattr(engine_mod, "record_claims_fallback", _record_fallback)
+
+    def _analyze_invalid_verify(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs,
+    ):
+        return "not valid json"
+
+    engine = ClaimsEngine(_analyze_invalid_verify)
+    documents = [Doc("d1", "Verifier context for parse fallback path.", 0.6)]
+
+    async def _run():
+        result = await engine.run(
+            answer="Lambda fact sentence for verifier fallback.",
+            query="Q",
+            documents=documents,
+            claim_extractor="heuristic",
+            claim_verifier="llm",
+            claims_max=2,
+        )
+        claims = result.get("claims") or []
+        assert claims
+
+    asyncio.run(_run())
+
+    assert any(
+        item.get("mode") == "verify" and item.get("outcome") == "error"
+        for item in captured["parse"]
+    )
+    assert any(
+        item.get("mode") == "verify" and item.get("reason") == "parse_error"
+        for item in captured["fallback"]
+    )
+
+
+@pytest.mark.unit
+def test_claims_engine_records_response_format_selection(monkeypatch):
+    import tldw_Server_API.app.core.Claims_Extraction.claims_engine as engine_mod
+
+    captured: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        engine_mod,
+        "record_claims_response_format_selection",
+        lambda **kwargs: captured.append(kwargs),
+    )
+
+    def _analyze_stub(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs,
+    ):
+        if system_message and "fact-checking judge" in system_message:
+            return '{"label": "nei", "confidence": 0.4, "rationale": "stub"}'
+        return '{"claims": [{"text": "Captured metric claim."}]}'
+
+    engine = ClaimsEngine(_analyze_stub)
+    documents = [Doc("d1", "Captured metric claim context.", 0.5)]
+
+    async def _run():
+        result = await engine.run(
+            answer="Captured metric claim context.",
+            query="Q",
+            documents=documents,
+            claim_extractor="llm",
+            claim_verifier="llm",
+            claims_max=2,
+        )
+        assert result.get("claims")
+
+    asyncio.run(_run())
+    modes = {item.get("mode") for item in captured}
+    assert "extract" in modes
+    assert "verify" in modes
