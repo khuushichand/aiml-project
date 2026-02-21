@@ -47,8 +47,11 @@ from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
 )
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
+    record_claims_fallback,
     record_claims_budget_exhausted,
+    record_claims_output_parse_event,
     record_claims_provider_request,
+    record_claims_response_format_selection,
     record_claims_throttle,
     should_throttle_claims_provider,
 )
@@ -173,6 +176,12 @@ def extract_claims_for_chunks(
             schema_name="ingestion_claims_extraction",
             json_schema=_INGESTION_CLAIMS_RESPONSE_SCHEMA,
         )
+        record_claims_response_format_selection(
+            provider=provider,
+            model=model_override or "",
+            mode="ingestion",
+            response_format=response_format,
+        )
 
         system = load_prompt("ingestion", "claims_extractor_system") or (
             "You extract specific, verifiable, decontextualized factual propositions. Output strict JSON."
@@ -265,11 +274,23 @@ def extract_claims_for_chunks(
                 mode="ingestion",
                 reason=reason or "throttle",
             )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason=reason or "throttle",
+            )
             return []
         if budget is not None:
             prompt_tokens = estimate_claims_tokens(prompt)
             if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
                 record_claims_budget_exhausted(
+                    provider=provider,
+                    model=model_override or "",
+                    mode="ingestion",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                record_claims_fallback(
                     provider=provider,
                     model=model_override or "",
                     mode="ingestion",
@@ -296,6 +317,12 @@ def extract_claims_for_chunks(
                         error="timeout",
                         estimated_cost=cost_estimate,
                     )
+                    record_claims_fallback(
+                        provider=provider,
+                        model=model_override or "",
+                        mode="ingestion",
+                        reason="timeout",
+                    )
                     return []
             record_claims_provider_request(
                 provider=provider,
@@ -313,6 +340,12 @@ def extract_claims_for_chunks(
                 error=str(exc),
                 estimated_cost=cost_estimate,
             )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason="provider_error",
+            )
             logger.debug(f"LLM-based claim extraction failed ({current_mode}): {exc}")
             return []
 
@@ -326,13 +359,51 @@ def extract_claims_for_chunks(
                 parse_mode=parse_mode,
                 strip_think_tags=True,
             )
-            return extract_claim_texts(
+            claim_texts = extract_claim_texts(
                 parsed,
                 wrapper_key="claims",
                 parse_mode=parse_mode,
                 max_claims=max_items,
             )
+            if claim_texts:
+                record_claims_output_parse_event(
+                    provider=provider,
+                    model=model_override or "",
+                    mode="ingestion",
+                    parse_mode=parse_mode,
+                    outcome="success",
+                )
+                return claim_texts
+            record_claims_output_parse_event(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                parse_mode=parse_mode,
+                outcome="empty",
+                reason="no_claims",
+            )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason="empty_claims",
+            )
+            return []
         except ClaimsOutputParseError as exc:
+            record_claims_output_parse_event(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                parse_mode=parse_mode,
+                outcome="error",
+                reason=exc.__class__.__name__,
+            )
+            record_claims_fallback(
+                provider=provider,
+                model=model_override or "",
+                mode="ingestion",
+                reason="parse_error",
+            )
             logger.debug(f"Failed to parse LLM claims JSON ({current_mode}): {exc}")
             return []
 

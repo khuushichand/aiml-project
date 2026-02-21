@@ -121,3 +121,42 @@ def test_ingestion_budget_exhaustion_falls_back_to_heuristic(monkeypatch):
     assert all(c.get("extractor_mode") == "heuristic" for c in claims)
     assert provider_calls["count"] == 0
     assert captured["budget"], "Expected budget exhausted metric call."
+
+
+@pytest.mark.unit
+def test_ingestion_parse_error_falls_back_and_records_parse_event(monkeypatch):
+    import tldw_Server_API.app.core.Claims_Extraction.ingestion_claims as ingestion_mod
+
+    captured: dict[str, Any] = {"parse": [], "fallback": []}
+
+    def _fake_chat_api_call(*args, **kwargs):
+        return "not valid json"
+
+    def _record_parse(**kwargs):
+        captured["parse"].append(kwargs)
+
+    def _record_fallback(**kwargs):
+        captured["fallback"].append(kwargs)
+
+    monkeypatch.setattr(ingestion_mod, "chat_api_call", _fake_chat_api_call, raising=False)
+    monkeypatch.setattr(ingestion_mod, "record_claims_output_parse_event", _record_parse)
+    monkeypatch.setattr(ingestion_mod, "record_claims_fallback", _record_fallback)
+
+    claims = extract_claims_for_chunks(
+        [
+            {
+                "text": (
+                    "Eta fact sentence for parse fallback. "
+                    "Theta fact sentence for parse fallback."
+                ),
+                "metadata": {"chunk_index": 0},
+            }
+        ],
+        extractor_mode="openai",
+        max_per_chunk=2,
+    )
+
+    assert claims
+    assert all(c.get("extractor_mode") == "heuristic" for c in claims)
+    assert any(item.get("outcome") == "error" for item in captured["parse"])
+    assert any(item.get("reason") == "parse_error" for item in captured["fallback"])

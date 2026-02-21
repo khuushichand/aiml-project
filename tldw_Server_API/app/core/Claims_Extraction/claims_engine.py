@@ -28,8 +28,11 @@ from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
 )
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
+    record_claims_fallback,
     record_claims_budget_exhausted,
+    record_claims_output_parse_event,
     record_claims_provider_request,
+    record_claims_response_format_selection,
     record_claims_throttle,
     should_throttle_claims_provider,
     suggest_claims_concurrency,
@@ -659,6 +662,12 @@ class LLMBasedClaimExtractor:
             schema_name="claims_extraction",
             json_schema=_CLAIMS_EXTRACT_RESPONSE_SCHEMA,
         )
+        record_claims_response_format_selection(
+            provider=provider or "openai",
+            model=model_override or "",
+            mode="extract",
+            response_format=response_format,
+        )
         cost_estimate = estimate_claims_cost(
             provider=provider or "openai",
             model=model_override or "",
@@ -677,6 +686,12 @@ class LLMBasedClaimExtractor:
                 mode="extract",
                 reason=reason or "throttle",
             )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                reason=reason or "throttle",
+            )
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
         if budget is not None:
             prompt_tokens = estimate_claims_tokens(prompt)
@@ -689,6 +704,12 @@ class LLMBasedClaimExtractor:
                 )
                 if budget.strict:
                     return []
+                record_claims_fallback(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    reason=budget.exhausted_reason or "budget",
+                )
                 return await HeuristicSentenceExtractor().extract(answer, max_claims)
         try:
             start_time = time.time()
@@ -743,10 +764,45 @@ class LLMBasedClaimExtractor:
             )
             out: list[Claim] = [Claim(id=f"c{i+1}", text=ct) for i, ct in enumerate(claim_texts[:max_claims])]
             if not out:
+                record_claims_output_parse_event(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    parse_mode=parse_mode,
+                    outcome="empty",
+                    reason="no_claims",
+                )
+                record_claims_fallback(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    reason="empty_claims",
+                )
                 logger.debug("LLM extractor returned no claims; falling back to heuristics")
                 return await HeuristicSentenceExtractor().extract(answer, max_claims)
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                parse_mode=parse_mode,
+                outcome="success",
+            )
             return out
         except ClaimsOutputParseError as e:
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                parse_mode=parse_mode,
+                outcome="error",
+                reason=e.__class__.__name__,
+            )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                reason="parse_error",
+            )
             logger.warning(f"Claim extraction JSON parse failed; falling back to heuristics: {e}")
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
         except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
@@ -771,6 +827,12 @@ class LLMBasedClaimExtractor:
                     estimated=True,
                 )
             logger.warning(f"Claim extraction via LLM failed: {e}")
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                reason="provider_error",
+            )
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
 
 
@@ -952,6 +1014,12 @@ class HybridClaimVerifier:
             schema_name="claims_verification",
             json_schema=_CLAIMS_VERIFY_RESPONSE_SCHEMA,
         )
+        record_claims_response_format_selection(
+            provider=provider or "openai",
+            model=model_override or "",
+            mode="verify",
+            response_format=response_format,
+        )
         cost_estimate = estimate_claims_cost(
             provider=provider or "openai",
             model=model_override or "",
@@ -970,6 +1038,12 @@ class HybridClaimVerifier:
                 mode="verify",
                 reason=reason or "throttle",
             )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                reason=reason or "throttle",
+            )
             return ClaimVerification(
                 claim=claim,
                 status=VerificationStatus.UNVERIFIED,
@@ -982,6 +1056,12 @@ class HybridClaimVerifier:
             prompt_tokens = estimate_claims_tokens(judge_prompt)
             if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
                 record_claims_budget_exhausted(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="verify",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                record_claims_fallback(
                     provider=provider or "openai",
                     model=model_override or "",
                     mode="verify",
@@ -1038,11 +1118,34 @@ class HybridClaimVerifier:
             )
             if not isinstance(data, dict):
                 raise ClaimsOutputSchemaError("Verifier response must be a JSON object.")
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                parse_mode=parse_mode,
+                outcome="success",
+            )
             lab = str(data.get("label", "nei")).lower().strip()
             if lab in {"supported", "refuted", "nei"}:
                 label = lab
             confidence = float(data.get("confidence", confidence))
             rationale = data.get("rationale")
+        except ClaimsOutputParseError as e:
+            record_claims_output_parse_event(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                parse_mode=parse_mode,
+                outcome="error",
+                reason=e.__class__.__name__,
+            )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                reason="parse_error",
+            )
+            logger.warning(f"LLM judge parse failed; defaulting to NEI: {e}")
         except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
             record_claims_provider_request(
                 provider=provider or "openai",
@@ -1064,6 +1167,12 @@ class HybridClaimVerifier:
                     status=500,
                     estimated=True,
                 )
+            record_claims_fallback(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                reason="provider_error",
+            )
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
         # Check numeric precision for statistic claims
         numeric_match: bool | None = None

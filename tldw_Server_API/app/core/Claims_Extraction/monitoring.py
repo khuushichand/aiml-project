@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS = (
@@ -158,6 +160,30 @@ def _register_claims_metrics() -> None:
             name="claims_provider_throttled_total",
             type=MetricType.COUNTER,
             description="Claims provider throttling applied",
+            labels=["provider", "model", "mode", "reason"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_response_format_selected_total",
+            type=MetricType.COUNTER,
+            description="Claims response format selection by mode",
+            labels=["provider", "model", "mode", "response_format_type"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_output_parse_events_total",
+            type=MetricType.COUNTER,
+            description="Claims output parse events by mode/outcome",
+            labels=["provider", "model", "mode", "parse_mode", "outcome", "reason"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_fallback_total",
+            type=MetricType.COUNTER,
+            description="Claims fallback events by mode/reason",
             labels=["provider", "model", "mode", "reason"],
         )
     )
@@ -464,6 +490,107 @@ def record_claims_throttle(
             "model": str(model or ""),
             "mode": str(mode or ""),
             "reason": str(reason or "unknown"),
+        },
+    )
+
+
+def _normalize_claims_metric_label(value: str | None, *, fallback: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    with_camel_split = re.sub(r"(?<!^)(?=[A-Z])", "_", raw)
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", with_camel_split).strip("_").lower()
+    return normalized or fallback
+
+
+def _resolve_response_format_type(response_format: object | None) -> str:
+    if response_format is None:
+        return "none"
+    if isinstance(response_format, Mapping):
+        value = response_format.get("type")
+        if isinstance(value, str) and value.strip():
+            return _normalize_claims_metric_label(value, fallback="unknown")
+    return "unknown"
+
+
+def record_claims_response_format_selection(
+    *,
+    provider: str,
+    model: str,
+    mode: str,
+    response_format: object | None,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
+        return
+    increment_counter(
+        "claims_response_format_selected_total",
+        1,
+        labels={
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "mode": _normalize_claims_metric_label(mode, fallback="unknown"),
+            "response_format_type": _resolve_response_format_type(response_format),
+        },
+    )
+
+
+def record_claims_output_parse_event(
+    *,
+    provider: str,
+    model: str,
+    mode: str,
+    parse_mode: str,
+    outcome: str,
+    reason: str | None = None,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
+        return
+    increment_counter(
+        "claims_output_parse_events_total",
+        1,
+        labels={
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "mode": _normalize_claims_metric_label(mode, fallback="unknown"),
+            "parse_mode": _normalize_claims_metric_label(parse_mode, fallback="lenient"),
+            "outcome": _normalize_claims_metric_label(outcome, fallback="unknown"),
+            "reason": _normalize_claims_metric_label(reason, fallback="none"),
+        },
+    )
+
+
+def record_claims_fallback(
+    *,
+    provider: str,
+    model: str,
+    mode: str,
+    reason: str,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
+        return
+    increment_counter(
+        "claims_fallback_total",
+        1,
+        labels={
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "mode": _normalize_claims_metric_label(mode, fallback="unknown"),
+            "reason": _normalize_claims_metric_label(reason, fallback="unknown"),
         },
     )
 

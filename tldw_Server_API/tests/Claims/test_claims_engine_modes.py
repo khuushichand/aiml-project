@@ -117,3 +117,60 @@ def test_claims_engine_uses_structured_response_format():
 
     asyncio.run(_run())
     assert any(isinstance(fmt, dict) for fmt in observed_formats if fmt is not None)
+
+
+@pytest.mark.unit
+def test_claims_engine_parse_error_records_parse_event_and_fallback(monkeypatch):
+    import tldw_Server_API.app.core.Claims_Extraction.claims_engine as engine_mod
+
+    captured = {"parse": [], "fallback": []}
+
+    def _record_parse(**kwargs):
+        captured["parse"].append(kwargs)
+
+    def _record_fallback(**kwargs):
+        captured["fallback"].append(kwargs)
+
+    monkeypatch.setattr(engine_mod, "record_claims_output_parse_event", _record_parse)
+    monkeypatch.setattr(engine_mod, "record_claims_fallback", _record_fallback)
+
+    def _analyze_invalid_json(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs,
+    ):
+        return "not valid json"
+
+    engine = ClaimsEngine(_analyze_invalid_json)
+    documents = [Doc("d1", "Context for parse fallback path.", 0.1)]
+
+    async def _run():
+        result = await engine.run(
+            answer=(
+                "Iota fact sentence for extractor fallback. "
+                "Kappa fact sentence for extractor fallback."
+            ),
+            query="Q",
+            documents=documents,
+            claim_extractor="llm",
+            claim_verifier="nli",
+            claims_max=2,
+        )
+        claims = result.get("claims") or []
+        assert claims
+        assert all(c.get("label") == "nei" for c in claims)
+
+    asyncio.run(_run())
+
+    assert any(
+        item.get("mode") == "extract" and item.get("outcome") == "error"
+        for item in captured["parse"]
+    )
+    assert any(
+        item.get("mode") == "extract" and item.get("reason") == "parse_error"
+        for item in captured["fallback"]
+    )
