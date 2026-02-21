@@ -13,6 +13,12 @@
 - `claims_output_parse_events_total{provider,model,mode,parse_mode,outcome,reason}`
 - `claims_fallback_total{provider,model,mode,reason}`
 
+## Recommended Ratios
+- Parse error ratio (10m):
+  - `sum(increase(claims_output_parse_events_total{outcome="error"}[10m])) / clamp_min(sum(increase(claims_provider_requests_total{mode=~"extract|verify|ingestion"}[10m])), 1)`
+- Fallback ratio (10m):
+  - `sum(increase(claims_fallback_total[10m])) / clamp_min(sum(increase(claims_provider_requests_total{mode=~"extract|verify|ingestion"}[10m])), 1)`
+
 ## Rebuild Metrics
 - `claims_rebuild_queue_size`
 - `claims_rebuild_processed_total`

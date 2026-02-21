@@ -7,6 +7,7 @@ Overview
 Dashboards
 - `llm_gateway_dashboard.json`: LLM gateway and HTTP endpoint metrics (e.g., `/api/v1/chat/completions`).
 - `tts_audio_dashboard.json`: TTS service and `/api/v1/audio/speech` metrics (provider success/failure, latency, audio size, active requests, HTTP error rate).
+- `../claims_grafana_dashboard.json`: Claims extraction/verification monitoring (provider health, parse/fallback ratios, response-format selection, rebuild/review signals).
 
 Prometheus Scrape (example)
 Add a scrape job pointing to your server (adjust host/port):
@@ -19,7 +20,7 @@ Add a scrape job pointing to your server (adjust host/port):
 
 Importing the Dashboard
 1) In Grafana: Dashboards -> New -> Import.
-2) Upload `llm_gateway_dashboard.json` or `tts_audio_dashboard.json`.
+2) Upload `llm_gateway_dashboard.json`, `tts_audio_dashboard.json`, or `../claims_grafana_dashboard.json`.
 3) Set the Prometheus datasource when prompted.
 
 Variables

@@ -55,6 +55,14 @@ Env or `[Claims]` in `Config_Files/config.txt`:
 - `CLAIMS_EMBED` (bool, default: false)
 - `CLAIMS_EMBED_MODEL_ID` (string, optional)
 - `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE` (used when an LLM extractor is selected)
+- `CLAIMS_JSON_PARSE_MODE` (`lenient|strict`, default: `lenient`)
+- `CLAIMS_ALIGNMENT_MODE` (`off|exact|fuzzy`, default: `fuzzy`)
+- `CLAIMS_ALIGNMENT_THRESHOLD` (float, default: `0.75`)
+- `CLAIMS_MONITORING_ENABLED` (bool)
+- `CLAIMS_ADAPTIVE_THROTTLE_ENABLED` with optional thresholds:
+  - `CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS`
+  - `CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE`
+  - `CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO`
 
 Provider resolution for ingestion LLM extraction follows this order:
 - Use `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE` when set.
@@ -164,3 +172,21 @@ curl -s -X POST -H "Authorization: Bearer <JWT>" \
 - The answer-time Claims Engine (APS/LLM extractor + Hybrid verifier) is documented in design and is separate from these API endpoints.
 - `GET /status` - Claims rebuild worker status (admin only)
   - Response: `{ "status": "ok", "stats": { "enqueued": int, "processed": int, "failed": int }, "queue_length": int, "workers": int }`
+
+## Monitoring and Alerting
+
+Claims telemetry counters include:
+- Provider and budget health:
+  - `claims_provider_requests_total`
+  - `claims_provider_errors_total`
+  - `claims_provider_budget_exhausted_total`
+  - `claims_provider_throttled_total`
+- Structured output and parsing quality:
+  - `claims_response_format_selected_total`
+  - `claims_output_parse_events_total`
+  - `claims_fallback_total`
+
+Operational assets:
+- Dashboard: `Docs/Monitoring/claims_grafana_dashboard.json`
+- Alert rules: `Docs/Monitoring/claims_alerts_prometheus.yaml`
+- Runbook: `Docs/Operations/Claims_Alerts_Runbook.md`

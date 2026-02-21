@@ -34,6 +34,14 @@ Config (env or `[Claims]` in `Config_Files/config.txt`, see `tldw_Server_API.app
 - `CLAIMS_EMBED`: bool (optional)
 - `CLAIMS_EMBED_MODEL_ID`: str (optional)
 - `CLAIMS_LLM_PROVIDER`, `CLAIMS_LLM_MODEL`, `CLAIMS_LLM_TEMPERATURE`: used for the LLM path
+- `CLAIMS_JSON_PARSE_MODE`: `lenient|strict` (default `lenient`)
+- `CLAIMS_ALIGNMENT_MODE`: `off|exact|fuzzy` (default `fuzzy`)
+- `CLAIMS_ALIGNMENT_THRESHOLD`: float (default `0.75`)
+- `CLAIMS_MONITORING_ENABLED`: enable claims telemetry counters
+- `CLAIMS_ADAPTIVE_THROTTLE_ENABLED` plus thresholds:
+  - `CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS`
+  - `CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE`
+  - `CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO`
 
 Storage schema: see `Media_DB_v2.py` (table `Claims` + `claims_fts`)
 - FTS: `claims_fts` is content-backed and maintained via SQLite triggers (insert/update/delete).
@@ -91,3 +99,21 @@ Prompts can be overridden via files in `tldw_Server_API/Config_Files/Prompts/` a
 
 - The RAG module re-exports the engine types via `core/RAG/rag_service/claims.py` for compatibility.
 - Stored claims can be indexed (FTS/vectors) and retrieved to support fact-seeking queries or faithfulness checks.
+
+## Observability and Structured Output
+
+- Claims extraction/judging calls attempt `response_format` automatically:
+  - `json_schema` when provider capabilities support it,
+  - `json_object` otherwise,
+  - and fallback to plain output when unsupported.
+- Output parsing is centralized (`output_parser.py`) and records telemetry outcomes.
+- Key counters:
+  - `claims_response_format_selected_total`
+  - `claims_output_parse_events_total`
+  - `claims_fallback_total`
+  - `claims_provider_budget_exhausted_total`
+  - `claims_provider_throttled_total`
+- Dashboards and alert thresholds are maintained in:
+  - `Docs/Monitoring/claims_grafana_dashboard.json`
+  - `Docs/Monitoring/claims_alerts_prometheus.yaml`
+  - `Docs/Operations/Claims_Alerts_Runbook.md`

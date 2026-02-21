@@ -197,6 +197,14 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `CLAIMS_EMBED_MODEL_ID` (str)
 - `CLAIMS_LLM_PROVIDER|CLAIMS_LLM_MODEL` (str)
 - `CLAIMS_LLM_TEMPERATURE` (float)
+- `CLAIMS_JSON_PARSE_MODE` (str): `lenient|strict`
+- `CLAIMS_ALIGNMENT_MODE` (str): `off|exact|fuzzy`
+- `CLAIMS_ALIGNMENT_THRESHOLD` (float)
+- `CLAIMS_MONITORING_ENABLED` (bool)
+- `CLAIMS_ADAPTIVE_THROTTLE_ENABLED` (bool)
+- `CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS` (float)
+- `CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE` (float)
+- `CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO` (float)
 - `CLAIMS_REBUILD_ENABLED` (bool)
 - `CLAIMS_REBUILD_INTERVAL_SEC` (int)
 - `CLAIMS_REBUILD_POLICY` (str)
