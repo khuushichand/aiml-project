@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock
 
+import tldw_Server_API.app.core.Claims_Extraction.adjudicator as adjudicator_module
 from tldw_Server_API.app.core.Claims_Extraction.adjudicator import (
     ClaimAdjudicator,
     EvidenceStance,
@@ -587,6 +588,64 @@ class TestClaimAdjudicatorLLMAssess:
 
         assert stance == EvidenceStance.NEUTRAL
         assert confidence == 0.5
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_llm_assess_supports_claims_engine_signature(self, monkeypatch):
+        """Should support sync analyze callbacks with ClaimsEngine signature."""
+        captured: dict[str, Any] = {}
+
+        def mock_claims_engine_analyze(
+            api_endpoint: str | None,
+            input_data: Any,
+            prompt: str | None,
+            api_key: str | None,
+            system_message: str | None,
+            temp: float | None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            captured["api_endpoint"] = api_endpoint
+            captured["input_data"] = input_data
+            captured["prompt"] = prompt
+            captured["system_message"] = system_message
+            captured["temp"] = temp
+            captured["response_format"] = kwargs.get("response_format")
+            return {"choices": [{"message": {"content": '{"stance":"SUPPORTS","confidence":0.91}'}}]}
+
+        monkeypatch.setattr(
+            adjudicator_module,
+            "resolve_claims_response_format",
+            lambda *args, **kwargs: {"type": "json_object"},
+        )
+
+        adjudicator = ClaimAdjudicator(llm_analyze_fn=mock_claims_engine_analyze)
+
+        stance, confidence = await adjudicator._llm_assess("claim", "evidence")
+
+        assert stance == EvidenceStance.SUPPORTS
+        assert confidence == 0.91
+        assert captured["api_endpoint"]
+        assert isinstance(captured["input_data"], str)
+        assert isinstance(captured["prompt"], str)
+        assert captured["response_format"] == {"type": "json_object"}
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_llm_assess_falls_back_to_prompt_only_signature(self):
+        """Should gracefully fallback when callback only accepts a prompt string."""
+        calls = {"count": 0}
+
+        def prompt_only_llm(prompt: str) -> str:
+            calls["count"] += 1
+            return '{"stance": "NEUTRAL", "confidence": 0.66}'
+
+        adjudicator = ClaimAdjudicator(llm_analyze_fn=prompt_only_llm)
+
+        stance, confidence = await adjudicator._llm_assess("claim", "evidence")
+
+        assert calls["count"] == 1
+        assert stance == EvidenceStance.NEUTRAL
+        assert confidence == 0.66
 
 
 class TestCreateAdjudicator:

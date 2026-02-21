@@ -11,6 +11,8 @@ Inspired by FVA-RAG paper (arXiv:2512.07015).
 from __future__ import annotations
 
 import asyncio
+import inspect
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
@@ -23,6 +25,7 @@ from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
     parse_claims_llm_output,
+    resolve_claims_response_format,
 )
 
 if TYPE_CHECKING:
@@ -30,6 +33,86 @@ if TYPE_CHECKING:
         Claim,
         ClaimVerification,
     )
+
+
+_ADJUDICATOR_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stance": {
+            "type": "string",
+            "enum": ["SUPPORTS", "CONTRADICTS", "NEUTRAL"],
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
+    },
+    "required": ["stance", "confidence"],
+    "additionalProperties": True,
+}
+
+
+def _resolve_claims_parse_mode() -> str:
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+    except Exception:
+        return "lenient"
+    mode = str(_settings.get("CLAIMS_JSON_PARSE_MODE", "lenient") or "lenient").strip().lower()
+    if mode not in {"lenient", "strict"}:
+        return "lenient"
+    return mode
+
+
+def _resolve_claims_llm_config() -> tuple[str, str | None, float]:
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+    except Exception:
+        return "openai", None, 0.1
+
+    provider: str | None = None
+    model_override: str | None = None
+    temperature = 0.1
+    with suppress(Exception):
+        provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
+    with suppress(Exception):
+        model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
+    with suppress(Exception):
+        temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
+
+    if provider is None:
+        with suppress(Exception):
+            rag_cfg = _settings.get("RAG", {}) or {}
+            provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
+    if provider is None:
+        with suppress(Exception):
+            provider = str(_settings.get("default_api", "openai")).strip() or "openai"
+    if model_override is None:
+        with suppress(Exception):
+            rag_cfg = _settings.get("RAG", {}) or {}
+            model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
+
+    return provider or "openai", model_override, temperature
+
+
+def _coerce_llm_response_text(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        with suppress(Exception):
+            choices = response.get("choices") or []
+            if isinstance(choices, list) and choices:
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if isinstance(content, str):
+                    return content
+        with suppress(Exception):
+            alt = response.get("response") or response.get("text")
+            if isinstance(alt, str):
+                return alt
+    with suppress(Exception):
+        return "".join(list(response))
+    return str(response)
 
 
 class EvidenceStance(str, Enum):
@@ -251,6 +334,60 @@ class ClaimAdjudicator:
             return EvidenceStance.CONTRADICTS, contradiction
         return EvidenceStance.NEUTRAL, neutral
 
+    async def _invoke_llm_assess_call(
+        self,
+        *,
+        prompt: str,
+        provider: str,
+        model_override: str | None,
+        temperature: float,
+        response_format: dict[str, Any] | None,
+    ) -> str:
+        fn = self.llm_analyze_fn
+        if fn is None:
+            return ""
+
+        system = (
+            "You classify whether evidence supports, contradicts, or is neutral toward a claim. "
+            "Return strict JSON only."
+        )
+        extended_error: Exception | None = None
+
+        try:
+            response = fn(
+                provider,
+                prompt,
+                prompt,
+                None,
+                system,
+                temperature,
+                streaming=False,
+                recursive_summarization=False,
+                chunked_summarization=False,
+                chunk_options=None,
+                model_override=model_override,
+                response_format=response_format,
+                max_tokens=300,
+            )
+            if inspect.isawaitable(response):
+                response = await response
+            text = _coerce_llm_response_text(response)
+            if text.strip():
+                return text
+        except TypeError as exc:
+            # Most likely callback expects the simple prompt-only signature.
+            extended_error = exc
+
+        try:
+            fallback = fn(prompt)
+            if inspect.isawaitable(fallback):
+                fallback = await fallback
+            return _coerce_llm_response_text(fallback)
+        except Exception as fallback_exc:
+            if extended_error is not None:
+                raise fallback_exc from extended_error
+            raise
+
     async def _llm_assess(
         self, claim: str, evidence: str
     ) -> tuple[EvidenceStance, float]:
@@ -265,10 +402,23 @@ Respond with a JSON object:
 {{"stance": "SUPPORTS" | "CONTRADICTS" | "NEUTRAL", "confidence": 0.0-1.0}}"""
 
         try:
-            response = await self.llm_analyze_fn(prompt)
+            provider, model_override, temperature = _resolve_claims_llm_config()
+            parse_mode = _resolve_claims_parse_mode()
+            response_format = resolve_claims_response_format(
+                provider,
+                schema_name="claims_adjudication",
+                json_schema=_ADJUDICATOR_RESPONSE_SCHEMA,
+            )
+            response_text = await self._invoke_llm_assess_call(
+                prompt=prompt,
+                provider=provider,
+                model_override=model_override,
+                temperature=temperature,
+                response_format=response_format,
+            )
             parsed = parse_claims_llm_output(
-                str(response or ""),
-                parse_mode="lenient",
+                response_text,
+                parse_mode=parse_mode,
                 strip_think_tags=True,
             )
             if not isinstance(parsed, dict):
