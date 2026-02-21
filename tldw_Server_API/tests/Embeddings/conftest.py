@@ -81,7 +81,7 @@ class _RedisHarness:
         try:
             self._sync_client.close()
         except Exception:
-            pass
+            _ = None
 
     def __getattr__(self, item):
         return getattr(self.client, item)
@@ -114,7 +114,7 @@ def redis_client():
     try:
         sync_client.flushdb()
     except Exception:
-        pass
+        _ = None
 
     loop = asyncio.new_event_loop()
     try:
@@ -146,19 +146,19 @@ def redis_client():
         try:
             harness.flush()
         except Exception:
-            pass
+            _ = None
         try:
             harness.run(harness.client.close())
         except Exception:
-            pass
+            _ = None
         try:
             harness.loop.run_until_complete(harness.loop.shutdown_asyncgens())
         except Exception:
-            pass
+            _ = None
         try:
             harness.loop.close()
         except Exception:
-            pass
+            _ = None
         harness.close_sync()
 
 
@@ -183,7 +183,7 @@ def test_client(disable_heavy_startup):
         try:
             app.dependency_overrides.clear()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture
@@ -219,7 +219,7 @@ def _sanitize_jsonschema_module(monkeypatch):
             try:
                 setattr(wrapper, attr, getattr(mod, attr))
             except Exception:
-                pass
+                _ = None
         monkeypatch.setitem(_sys.modules, "jsonschema", wrapper)
 
 
@@ -252,7 +252,7 @@ def _patch_hypothesis_local_constants(monkeypatch):
                     hash(mod)
                     continue
                 except Exception:
-                    pass
+                    _ = None
                 if isinstance(mod, _types.SimpleNamespace):
                     wrapper = _types.ModuleType(name)
                     for attr in dir(mod):
@@ -261,7 +261,7 @@ def _patch_hypothesis_local_constants(monkeypatch):
                         try:
                             setattr(wrapper, attr, getattr(mod, attr))
                         except Exception:
-                            pass
+                            _ = None
                     _sys.modules[name] = wrapper
             try:
                 return orig()

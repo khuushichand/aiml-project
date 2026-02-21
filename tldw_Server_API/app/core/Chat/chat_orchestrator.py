@@ -141,8 +141,8 @@ def _shutdown_sync_executor() -> None:
         except TypeError:
             # Python < 3.9 doesn't support cancel_futures
             _SYNC_EXECUTOR.shutdown(wait=True)
-        except Exception:  # noqa: BLE001 - shutdown must not raise during exit
-            pass
+        except Exception as shutdown_error:  # noqa: BLE001 - shutdown must not raise during exit
+            logger.debug("Chat orchestrator sync executor shutdown raised non-fatal error", exc_info=shutdown_error)
 
 
 # Register cleanup on interpreter shutdown

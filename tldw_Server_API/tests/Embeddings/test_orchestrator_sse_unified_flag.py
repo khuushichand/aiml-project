@@ -60,7 +60,7 @@ def test_embeddings_orchestrator_events_unified_sse(redis_client, monkeypatch):
                 try:
                     await agen.aclose()
                 except Exception:
-                    pass
+                    _ = None
             return saw_event, obj, "".join(acc)
 
         saw_event, obj, dump = redis_client.run(_collect_until_data())

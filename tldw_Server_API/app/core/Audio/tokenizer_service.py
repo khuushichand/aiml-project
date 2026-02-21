@@ -168,8 +168,8 @@ def _load_qwen3_tokenizer(model_id: str, allow_download: bool) -> Any:
         tokenizer_cls = getattr(tokenizer_mod, "Qwen3TTSTokenizer", None)
         if tokenizer_cls is not None:
             return _instantiate_tokenizer(tokenizer_cls, model_id, allow_download)
-    except Exception:
-        pass
+    except Exception as tokenizer_error:
+        _ = tokenizer_error  # allow fallback error path below
 
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,

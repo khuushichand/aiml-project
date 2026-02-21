@@ -80,7 +80,7 @@ async def test_api_key_rotation_marks_old_key_and_links():
                 if extra.exists():
                     extra.unlink()
         except Exception:
-            pass
+            _ = None
 
         # Restore prior environment
         if prev_auth_mode is None:

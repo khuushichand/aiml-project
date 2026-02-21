@@ -681,8 +681,8 @@ def shutdown_evaluations_pool_if_initialized() -> None:
             finally:
                 try:
                     get_connection_manager.cache_clear()  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-    except Exception:
+                except Exception as cache_clear_error:
+                    logger.debug("Failed to clear connection manager cache during shutdown", exc_info=cache_clear_error)
+    except Exception as shutdown_error:
         # Be conservative: never raise during shutdown
-        pass
+        logger.debug("Connection manager shutdown encountered non-fatal error", exc_info=shutdown_error)

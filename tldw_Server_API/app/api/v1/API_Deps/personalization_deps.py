@@ -26,7 +26,12 @@ def get_personalization_db_for_user(user: User = Depends(get_request_user)) -> P
         # Derive a stable numeric from string id (e.g., "test_user")
         try:
             import hashlib
-            digest = hashlib.sha1(str(user.id).encode("utf-8")).digest()
+            # Deterministic non-crypto ID derivation for non-integer test/single-user IDs.
+            # `usedforsecurity=False` keeps behavior while making intent explicit.
+            try:
+                digest = hashlib.sha1(str(user.id).encode("utf-8"), usedforsecurity=False).digest()
+            except TypeError:  # pragma: no cover - compatibility fallback
+                digest = hashlib.sha1(str(user.id).encode("utf-8")).digest()  # nosec B324
             uid = int.from_bytes(digest[:4], byteorder="big", signed=False)
         except Exception:
             uid = 0

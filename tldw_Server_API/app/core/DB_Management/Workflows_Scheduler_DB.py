@@ -208,8 +208,8 @@ class WorkflowsSchedulerDB:
             spath = getattr(cfg, "sqlite_path", None)
             if spath:
                 logger.info(f"WorkflowsSchedulerDB using SQLite path: {spath}")
-        except Exception:
-            pass
+        except Exception as sqlite_path_log_error:
+            logger.debug("Failed to log workflows scheduler sqlite path", exc_info=sqlite_path_log_error)
         with self.backend.transaction() as conn:
             backend_type = getattr(getattr(self.backend, "config", None), "backend_type", None)
             schema = SCHED_POSTGRES_SCHEMA if backend_type == BackendType.POSTGRESQL else SCHED_SQLITE_SCHEMA

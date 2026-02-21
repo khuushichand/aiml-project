@@ -71,6 +71,21 @@ class SnapshotManager:
         """Get the path for a snapshot's metadata file."""
         return self._snapshot_dir(session_id) / f"{snapshot_id}.meta.json"
 
+    @staticmethod
+    def _validate_tar_member(member: tarfile.TarInfo, extract_root: Path) -> None:
+        """Validate a tar archive member before extraction."""
+        if member.islnk() or member.issym():
+            raise ValueError(f"Refusing to extract link member: {member.name}")
+        if member.ischr() or member.isblk() or member.isfifo():
+            raise ValueError(f"Refusing to extract special device member: {member.name}")
+        if not (member.isdir() or member.isreg()):
+            raise ValueError(f"Unsupported tar member type: {member.name}")
+
+        target = (extract_root / member.name).resolve()
+        root = extract_root.resolve()
+        if target != root and root not in target.parents:
+            raise ValueError(f"Path traversal detected: {member.name}")
+
     def create_snapshot(self, session_id: str, workspace_path: str) -> dict:
         """Create a snapshot of the session workspace.
 
@@ -189,16 +204,10 @@ class SnapshotManager:
         # Extract snapshot
         try:
             with tarfile.open(snapshot_path, "r:gz") as tar:
-                # Security: prevent path traversal
-                def safe_extract(tar, path):
-                    for member in tar.getmembers():
-                        member_path = os.path.join(path, member.name)
-                        abs_path = os.path.abspath(member_path)
-                        if not abs_path.startswith(os.path.abspath(path) + os.sep) and abs_path != os.path.abspath(path):
-                            raise ValueError(f"Path traversal detected: {member.name}")
-                    tar.extractall(path)
-
-                safe_extract(tar, workspace_path)
+                workspace_root = Path(workspace_path)
+                for member in tar.getmembers():
+                    self._validate_tar_member(member, workspace_root)
+                    tar.extract(member, workspace_path)
         except ValueError:
             raise
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:

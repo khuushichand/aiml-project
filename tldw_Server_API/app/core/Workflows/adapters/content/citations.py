@@ -68,8 +68,8 @@ async def run_citations_adapter(config: dict[str, Any], context: dict[str, Any])
                 docs = last.get("documents") or last.get("results") or []
                 if isinstance(docs, list):
                     documents = docs
-        except Exception:
-            pass
+        except Exception as documents_context_error:
+            logger.debug("Citations adapter failed to read documents from context fallback", exc_info=documents_context_error)
 
     if not documents:
         return {
@@ -101,8 +101,8 @@ async def run_citations_adapter(config: dict[str, Any], context: dict[str, Any])
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 query = str(last.get("query") or "")
-        except Exception:
-            pass
+        except Exception as query_context_error:
+            logger.debug("Citations adapter failed to read query from context fallback", exc_info=query_context_error)
 
     # Test mode simulation
     if is_test_mode():

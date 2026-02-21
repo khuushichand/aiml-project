@@ -78,7 +78,7 @@ def testing_env(monkeypatch, tmp_path):
 
         reset_media_db_cache()
     except Exception:
-        pass
+        _ = None
     yield
     os.environ.pop("TESTING", None)
     os.environ.pop("USER_DB_BASE_DIR", None)

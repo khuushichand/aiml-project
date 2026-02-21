@@ -112,7 +112,7 @@ def _cluster_id_for_label(label: str) -> str:
     normalized = _normalize_topic_label(label)
     slug = re.sub(r"[^a-z0-9]+", "-", normalized).strip("-")
     slug = slug[:32] or "topic"
-    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
     return f"topic-{slug}-{digest}"
 
 

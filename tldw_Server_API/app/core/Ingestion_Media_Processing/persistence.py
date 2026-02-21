@@ -249,6 +249,43 @@ def _callable_accepts_keyword(
     )
 
 
+def _callable_for_keyword_probe(
+    *,
+    candidate_callable: Callable[..., Any],
+    core_fallback: Callable[..., Any],
+) -> Callable[..., Any]:
+    """
+    Return the callable that should be inspected for keyword support.
+
+    Endpoint media shim wrappers intentionally use `*args, **kwargs` and can
+    over-report support for keywords the underlying core implementation does not
+    accept. When we detect that known shim pattern, inspect the core fallback
+    instead.
+    """
+    try:
+        signature = inspect.signature(candidate_callable)
+    except (TypeError, ValueError):
+        return candidate_callable
+
+    has_var_keyword = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    if not has_var_keyword:
+        return candidate_callable
+
+    candidate_module = getattr(candidate_callable, "__module__", "")
+    candidate_name = getattr(candidate_callable, "__name__", "")
+    if (
+        candidate_module
+        == "tldw_Server_API.app.api.v1.endpoints.media"
+        and candidate_name in {"process_videos", "process_audio_files"}
+    ):
+        return core_fallback
+
+    return candidate_callable
+
+
 def _resolve_shimmed_batch_processor(
     *,
     core_callable: Callable[..., Any],
@@ -3724,7 +3761,10 @@ async def process_batch_media(
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 target_callable = process_videos
             attach_chunk_options = _callable_accepts_keyword(
-                target_callable,
+                _callable_for_keyword_probe(
+                    candidate_callable=target_callable,
+                    core_fallback=process_videos,
+                ),
                 "chunk_options",
             )
 
@@ -3812,7 +3852,10 @@ async def process_batch_media(
             except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
                 target_callable = process_audio_files
             attach_chunk_options = _callable_accepts_keyword(
-                target_callable,
+                _callable_for_keyword_probe(
+                    candidate_callable=target_callable,
+                    core_fallback=process_audio_files,
+                ),
                 "chunk_options",
             )
 

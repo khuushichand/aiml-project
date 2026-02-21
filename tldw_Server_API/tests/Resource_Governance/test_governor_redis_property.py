@@ -37,7 +37,7 @@ async def test_atomic_multi_category_rollback_on_denial():
             for k in keys:
                 await client.delete(k)
         except Exception:
-            pass
+            _ = None
 
     # Pre-consume the tokens window so the combined reserve will be denied.
     d0, h0 = await rg.reserve(RGRequest(entity="user:1", categories={"tokens": {"units": 1}}, tags={"policy_id": "p"}))

@@ -107,6 +107,7 @@ def _resolve_settings() -> dict[str, Any]:
     settings = {
         "enabled": _as_bool(stt_cfg.get("vibevoice_enabled"), False),
         "model_id": model_id,
+        "model_revision": _as_str(stt_cfg.get("vibevoice_model_revision"), ""),
         "device": _as_str(stt_cfg.get("vibevoice_device"), "cuda"),
         "dtype": _as_str(stt_cfg.get("vibevoice_dtype"), "bfloat16"),
         "cache_dir": _as_str(stt_cfg.get("vibevoice_cache_dir"), "./models/vibevoice"),
@@ -403,6 +404,7 @@ def _load_local_components(settings: dict[str, Any]) -> tuple[Any, Any, str]:
     device = _resolve_device(str(settings["device"]))
     dtype_name = str(settings["dtype"])
     allow_download = bool(settings["allow_download"])
+    model_revision = str(settings.get("model_revision") or "").strip() or None
     cache_dir = Path(str(settings["cache_dir"]))
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -426,20 +428,22 @@ def _load_local_components(settings: dict[str, Any]) -> tuple[Any, Any, str]:
 
         processor = AutoProcessor.from_pretrained(
             model_id,
+            revision=model_revision,
             trust_remote_code=True,
             cache_dir=str(cache_dir),
             local_files_only=local_only,
-        )
+        )  # nosec B615
 
         device_map = "auto" if device != "cpu" else None
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
+            revision=model_revision,
             trust_remote_code=True,
             cache_dir=str(cache_dir),
             local_files_only=local_only,
             torch_dtype=torch_dtype,
             device_map=device_map,
-        )
+        )  # nosec B615
 
         if device_map is None:
             model = model.to(device)

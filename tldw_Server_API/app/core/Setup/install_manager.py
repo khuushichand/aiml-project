@@ -593,11 +593,17 @@ def _install_qwen2_audio() -> None:
         raise RuntimeError('transformers (with Qwen2Audio) is required for Qwen installs.') from exc
 
     repo = 'Qwen/Qwen2-Audio-7B-Instruct'
+    repo_revision = _resolve_hf_revision(repo)
     logger.info("Fetching Qwen2Audio assets from {}", repo)
     try:
-        AutoProcessor.from_pretrained(repo)
+        AutoProcessor.from_pretrained(repo, revision=repo_revision)  # nosec B615
         dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        Qwen2AudioForConditionalGeneration.from_pretrained(repo, torch_dtype=dtype, device_map='cpu')
+        Qwen2AudioForConditionalGeneration.from_pretrained(  # nosec B615
+            repo,
+            revision=repo_revision,
+            torch_dtype=dtype,
+            device_map='cpu',
+        )
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo}.') from exc
@@ -726,11 +732,13 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
         return
     try:
         # Download into cache, then copy to the exact destination path
+        repo_revision = _resolve_hf_revision(repo_id)
         src_fp = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
+            revision=repo_revision,
             force_download=force,
-        )
+        )  # nosec B615
         shutil.copy2(src_fp, destination)
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
@@ -753,14 +761,16 @@ def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
 
     try:
         # Download snapshot into a temporary folder then copy requested subdir
+        repo_revision = _resolve_hf_revision(repo_id)
         import tempfile
         with tempfile.TemporaryDirectory(prefix="tldw_hf_") as _td:
             snapshot_path = Path(snapshot_download(
                 repo_id=repo_id,
                 local_dir=str(_td),
+                revision=repo_revision,
                 allow_patterns=[f"{subdir}", f"{subdir}/*", f"{subdir}/**"],
                 force_download=force,
-            ))
+            ))  # nosec B615
             src = snapshot_path / subdir
             if not src.exists():
                 raise FileNotFoundError(f'Subdirectory {subdir!r} not found in snapshot of {repo_id}')
@@ -786,6 +796,16 @@ def _force_downloads() -> bool:
             return True
     return False
 
+
+def _resolve_hf_revision(repo_id: str) -> str | None:
+    """Resolve optional pinned HF revision from environment."""
+    normalized = "".join(ch if ch.isalnum() else "_" for ch in str(repo_id)).upper()
+    return (
+        os.getenv(f"HF_REVISION_{normalized}")
+        or os.getenv("HF_DEFAULT_REVISION")
+        or None
+    )
+
 def _snapshot_repo(repo_id: str) -> None:
     _ensure_downloads_allowed(f'{repo_id} snapshot')
     try:
@@ -795,7 +815,11 @@ def _snapshot_repo(repo_id: str) -> None:
 
     try:
         # Prefetch into cache; no local_dir required and no symlink flag
-        snapshot_download(repo_id=repo_id, force_download=_force_downloads())
+        snapshot_download(  # nosec B615
+            repo_id=repo_id,
+            revision=_resolve_hf_revision(repo_id),
+            force_download=_force_downloads(),
+        )
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc

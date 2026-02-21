@@ -54,8 +54,8 @@ class AuthnzUserProviderSecretsRepo:
         try:
             keys = row.keys()
             return {key: row[key] for key in keys}
-        except Exception:
-            pass
+        except Exception as row_keys_error:
+            logger.debug("User provider secret row key materialization failed; falling back to dict(row)", exc_info=row_keys_error)
         return dict(row)
 
     async def upsert_secret(

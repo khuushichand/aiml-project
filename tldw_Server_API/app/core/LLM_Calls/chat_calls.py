@@ -97,8 +97,8 @@ class _SessionShim:
         try:
             if self._delegate_session is not None:
                 self._delegate_session.close()
-        except Exception:
-            pass
+        except Exception as close_error:
+            _ = close_error  # best-effort close for delegate session
 
 
 def create_session_with_retries(

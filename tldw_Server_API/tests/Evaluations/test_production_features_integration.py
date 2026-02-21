@@ -393,7 +393,7 @@ class TestWebhookManager:
             try:
                 await _runner.cleanup()  # type: ignore[name-defined]
             except Exception:
-                pass
+                _ = None
 
         user_id = "delivery_user"
         url = webhook_receiver_server["url"]
@@ -502,7 +502,7 @@ class TestWebhookManager:
             try:
                 await _runner.cleanup()  # type: ignore[name-defined]
             except Exception:
-                pass
+                _ = None
 
         user_id = "retry_user"
         url = flaky_webhook_receiver_server["url"]
@@ -647,7 +647,7 @@ class TestAdvancedMetrics:
             with metrics.track_sli_request(endpoint):
                 raise Exception("Simulated error")
         except:
-            pass
+            _ = None
 
         # Force SLO calculation
         metrics._calculate_slos()

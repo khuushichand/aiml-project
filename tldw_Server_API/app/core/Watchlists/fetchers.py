@@ -27,6 +27,8 @@ from threading import Lock
 from typing import Any
 from urllib.parse import urljoin
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 import regex
 from loguru import logger
 from lxml import html
@@ -55,6 +57,7 @@ _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     ET.ParseError,
+    DefusedXmlException,
     XPathError,
 )
 
@@ -1608,7 +1611,7 @@ async def fetch_rss_feed(
             return {"status": status, "items": []}
 
         try:
-            root = ET.fromstring(text)
+            root = DET.fromstring(text)
         except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS:
             return {
                 "status": status,
@@ -1728,7 +1731,7 @@ def discover_hub_url(
 
     # Phase 2: Parse XML for <link rel="hub"> and <link rel="self">
     try:
-        root = ET.fromstring(xml_text)
+        root = DET.fromstring(xml_text)
         atom_link_tag = "{http://www.w3.org/2005/Atom}link"
         # Search both direct children and descendants (RSS puts atom:link inside <channel>)
         for ln in list(root.findall(atom_link_tag)) + list(root.findall(".//" + atom_link_tag)) + list(root.findall("link")) + list(root.findall(".//link")):

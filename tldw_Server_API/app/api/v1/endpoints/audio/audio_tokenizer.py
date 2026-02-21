@@ -82,8 +82,8 @@ def _audio_shim_attr(name: str):
     try:
         if hasattr(audio_shim, name):
             return getattr(audio_shim, name)
-    except Exception:
-        pass
+    except Exception as resolve_error:
+        _ = resolve_error  # best-effort shim resolution; fallback path below
     if not hasattr(audio_shim, name):
         raise NameError(name)
     return getattr(audio_shim, name)

@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import shutil
+import stat
 import threading
 import time
 import uuid
@@ -40,6 +41,8 @@ _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     json.JSONDecodeError,
 )
+
+_OWNER_ONLY_DIR_MODE = stat.S_IRWXU
 
 
 class IdempotencyConflict(Exception):
@@ -516,7 +519,7 @@ class SandboxOrchestrator:
                 ).strip().lower()
             )
             if bind_workspace:
-                os.chmod(ws, 0o777)
+                os.chmod(ws, _OWNER_ONLY_DIR_MODE)
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
             pass
         with self._lock:

@@ -1198,7 +1198,7 @@ def discover_openrouter_models(
         return []
 
     models_url = _resolve_openrouter_models_url()
-    key_digest = hashlib.sha1(resolved_key.encode("utf-8")).hexdigest()[:12]
+    key_digest = hashlib.sha1(resolved_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
     cache_key = f"{models_url}|{key_digest}"
     now = time.time()
     ttl = _openrouter_discovery_ttl_seconds()

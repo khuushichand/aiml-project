@@ -16,7 +16,7 @@ def _client(monkeypatch) -> TestClient:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()
     except Exception:
-        pass
+        _ = None
     existing_enable = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing_enable.split(",") if p.strip()]
     if "sandbox" not in parts:

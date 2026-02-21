@@ -555,9 +555,9 @@ async def ingest_web_content_orchestrate(
                     scope_type="user",
                     scope_id=str(uid) if uid else None,
                 )
-    except Exception:
+    except Exception as monitoring_error:
         # Do not let monitoring failures break ingestion.
-        pass
+        _ = monitoring_error
 
     scrape_method = getattr(request, "scrape_method", None)
 

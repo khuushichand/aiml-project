@@ -100,7 +100,7 @@ class AuthnzBillingRepo:
             async with self.db_pool.acquire() as conn:
                 if self._is_postgres(conn):
                     rows = await conn.fetch(
-                        f"""
+                        f"""  # nosec B608
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
                                stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
                                is_public,
@@ -458,14 +458,14 @@ class AuthnzBillingRepo:
                     set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
                     params = [org_id] + list(updates.values())
                     await conn.execute(
-                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = $1",
+                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = $1",  # nosec B608
                         *params,
                     )
                 else:
                     set_clause = ", ".join(f"{k} = ?" for k in updates)
                     params = list(updates.values()) + [org_id]
                     await conn.execute(
-                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = ?",
+                        f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = ?",  # nosec B608
                         tuple(params),
                     )
 

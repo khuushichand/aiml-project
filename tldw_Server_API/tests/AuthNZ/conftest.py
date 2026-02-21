@@ -144,7 +144,7 @@ async def _ensure_postgres_available(host: str, port: int, user: str, password: 
     try:
         await asyncio.to_thread(subprocess.run, [docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
-        pass
+        _ = None
 
     envs = [
         "-e", f"POSTGRES_USER={user}",
@@ -510,7 +510,7 @@ async def reset_singletons(request):
         await _reset_cleanup_service()
         await _reset_storage_service()
     except Exception:
-        pass
+        _ = None
     await shutdown_audit_service()
     await reset_api_key_manager()
     await reset_users_db()
@@ -546,7 +546,7 @@ async def reset_singletons(request):
                 _app.dependency_overrides[get_usage_event_logger] = _override_usage_logger
         except Exception:
             # If import fails here, tests that don't hit audit won't care
-            pass
+            _ = None
 
         # Also, in TEST_MODE, strip non-essential middlewares that may perform
         # background DB work after response (to avoid TaskGroup noise in full runs)
@@ -564,9 +564,9 @@ async def reset_singletons(request):
                 # Rebuild the Starlette middleware stack
                 _app.middleware_stack = _app.build_middleware_stack()
         except Exception:
-            pass
+            _ = None
     except Exception:
-        pass
+        _ = None
 
     yield
 
@@ -590,12 +590,12 @@ async def reset_singletons(request):
     try:
         close_all_chacha_db_instances()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.main import app as _app
         _app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     # Restore original CSRF setting
     if original_csrf_setting is not None:
@@ -624,7 +624,7 @@ async def real_audit_service(tmp_path):
         try:
             await _shutdown_all()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest_asyncio.fixture
@@ -1411,7 +1411,7 @@ async def isolated_test_environment(monkeypatch):
         await _reset_cleanup_service()
         await _reset_storage_service()
     except Exception:
-        pass
+        _ = None
     await reset_registration_service()
     await shutdown_audit_service()
     await reset_users_db()
@@ -1460,7 +1460,7 @@ async def setup_test_database(monkeypatch):
         await _reset_rate_limiter()
         await _reset_lockout_tracker()
     except Exception:
-        pass
+        _ = None
     # Ensure Postgres reachable before creating the session DB
     ok = await _ensure_postgres_available(TEST_DB_HOST, TEST_DB_PORT, TEST_DB_USER, TEST_DB_PASSWORD, require_pg=require_pg, default_db="postgres")
     if not ok:

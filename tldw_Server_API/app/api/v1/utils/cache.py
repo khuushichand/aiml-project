@@ -169,7 +169,7 @@ def generate_etag(payload: Any) -> str:
     The ETag is a hex MD5 of a deterministic JSON serialization.
     """
     serialized = _serialize_for_etag(payload)
-    return hashlib.md5(serialized.encode("utf-8")).hexdigest()
+    return hashlib.md5(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def parse_if_none_match(header_value: str | None) -> Sequence[str]:

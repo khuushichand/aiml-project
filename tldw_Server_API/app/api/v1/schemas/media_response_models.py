@@ -227,7 +227,7 @@ class MediaItemProcessResult(BaseModel):
     """
     status: str = Field(..., description="Processing status ('Success', 'Skipped', 'Warning', 'Error').", json_schema_extra={"example": "Success"})
     input_ref: str = Field(..., description="The original URL or filename provided by the user.", json_schema_extra={"example": "https://example.com/my_video.mp4"})
-    processing_source: Optional[str] = Field(None, description="The actual source used by the processor (e.g., temp file path or URL).",json_schema_extra={"example": "/tmp/media_processing_xyz/my_video.mp4"})
+    processing_source: Optional[str] = Field(None, description="The actual source used by the processor (e.g., temp file path or URL).",json_schema_extra={"example": "/var/media_processing_xyz/my_video.mp4"})
     media_type: str = Field(..., description="Detected or specified media type.", json_schema_extra={"example": "video"})
     metadata: Optional[dict[str, Any]] = Field(None, description="Extracted metadata.", json_schema_extra={"example": {"title": "My Video", "duration": 120.5}})
     content: Optional[str] = Field(None, description="Extracted text content or transcript.")

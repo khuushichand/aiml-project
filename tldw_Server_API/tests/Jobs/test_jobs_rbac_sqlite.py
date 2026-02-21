@@ -29,7 +29,7 @@ def test_rbac_requires_domain_filter_and_allowlist(monkeypatch, tmp_path):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:

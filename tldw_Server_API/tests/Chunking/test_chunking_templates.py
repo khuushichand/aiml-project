@@ -50,14 +50,14 @@ def temp_db():
     try:
         db.close_connection()
     except:
-        pass
+        _ = None
 
     # Delete the database file
     try:
         if os.path.exists(db_path):
             os.unlink(db_path)
     except:
-        pass
+        _ = None
 
 
 @pytest.fixture

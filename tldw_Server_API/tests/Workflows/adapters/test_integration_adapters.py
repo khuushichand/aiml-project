@@ -1434,6 +1434,32 @@ async def test_podcast_rss_publish_blocks_remote_seed_without_opt_in(monkeypatch
     assert result.get("error") == "remote_fetch_disabled"
 
 
+@pytest.mark.asyncio
+async def test_podcast_rss_publish_rejects_non_http_seed_url(monkeypatch, tmp_path):
+    """Test remote feed seeding only accepts http(s) source URLs."""
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import (
+        run_podcast_rss_publish_adapter,
+    )
+
+    result = await run_podcast_rss_publish_adapter(
+        {
+            "feed_uri": "file://feeds/podcast.xml",
+            "source_feed_url": "file:///tmp/feed.xml",
+            "allow_remote_fetch": True,
+            "episode": {
+                "guid": "episode-remote-invalid",
+                "title": "Episode",
+                "audio_url": "https://cdn.example.com/episode.mp3",
+            },
+        },
+        {"user_id": "test_user"},
+    )
+    assert result.get("published") is False
+    assert result.get("error") == "invalid_remote_seed_url"
+
+
 # ==============================================================================
 # Import Tests
 # ==============================================================================

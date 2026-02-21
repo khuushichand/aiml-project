@@ -41,14 +41,14 @@ def _isolate_app_state_per_test(monkeypatch, request):
         from tldw_Server_API.app.core.config import settings as _global_settings
         _global_settings["CSRF_ENABLED"] = False
     except Exception:
-        pass
+        _ = None
 
     # Reset JWT singleton so a fresh key/config is used each test
     try:
         from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service as _reset_jwt
         _reset_jwt()
     except Exception:
-        pass
+        _ = None
 
     global app  # type: ignore
 
@@ -58,7 +58,7 @@ def _isolate_app_state_per_test(monkeypatch, request):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     if _should_reload:
         # Reload app.main under the new environment and rebind global `app`
@@ -86,14 +86,14 @@ def _isolate_app_state_per_test(monkeypatch, request):
                     app.user_middleware = kept
                     app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
             setattr(request.node, "_tldw_app_reloaded", True)
         except Exception:
             # If reload fails for any reason, at least clear overrides on existing app
             try:
                 app.dependency_overrides.clear()
             except Exception:
-                pass
+                _ = None
 
     yield
 
@@ -101,7 +101,7 @@ def _isolate_app_state_per_test(monkeypatch, request):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidCredentialsError,
     UserNotFoundError,

@@ -479,7 +479,7 @@ class UserFeedbackStore:
         Returns:
             Feedback ID
         """
-        feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode()).hexdigest()[:8]}"
+        feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode(), usedforsecurity=False).hexdigest()[:8]}"
 
         helpful_value: Optional[bool]
         helpful_value = None if helpful is None else bool(helpful)

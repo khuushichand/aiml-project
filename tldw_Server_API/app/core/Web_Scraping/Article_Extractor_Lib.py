@@ -530,13 +530,19 @@ def clear_extraction_caches() -> None:
 
 
 def _schema_cache_key(html_text: str, url: str, schema_rules: dict[str, Any]) -> str:
-    html_hash = hashlib.sha1(html_text.encode("utf-8", errors="ignore")).hexdigest()
+    html_hash = hashlib.sha1(
+        html_text.encode("utf-8", errors="ignore"),
+        usedforsecurity=False
+    ).hexdigest()
     try:
         rules_repr = json.dumps(schema_rules, sort_keys=True, ensure_ascii=True)
     except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rules_repr = str(schema_rules)
     raw = f"{url}|{rules_repr}|{html_hash}"
-    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+    return hashlib.sha1(
+        raw.encode("utf-8", errors="ignore"),
+        usedforsecurity=False
+    ).hexdigest()
 
 
 def _schema_cache_get(key: str) -> Optional[dict[str, Any]]:
@@ -1242,14 +1248,20 @@ def _hash_embedding(text: str, dims: int) -> list[float]:
         return [0.0] * dims
     vec = [0.0] * dims
     for token in tokens:
-        token_hash = hashlib.md5(token.encode("utf-8", errors="ignore")).hexdigest()
+        token_hash = hashlib.md5(
+            token.encode("utf-8", errors="ignore"),
+            usedforsecurity=False
+        ).hexdigest()
         idx = int(token_hash, 16) % dims
         vec[idx] += 1.0
     return _normalize_vector(vec)
 
 
 def _cluster_embedding(text: str, dims: int) -> list[float]:
-    key = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+    key = hashlib.sha1(
+        text.encode("utf-8", errors="ignore"),
+        usedforsecurity=False
+    ).hexdigest()
     cached = _cluster_cache_get(key)
     if cached is not None:
         return cached

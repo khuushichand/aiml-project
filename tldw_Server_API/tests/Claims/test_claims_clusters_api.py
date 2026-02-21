@@ -71,7 +71,7 @@ def _principal_override():
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     return _override
@@ -101,7 +101,7 @@ def test_claims_clusters_endpoints():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
     fastapi_app.dependency_overrides[get_request_user] = _override_user

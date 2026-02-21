@@ -324,8 +324,8 @@ class BaseModule(ABC):
             for tool in self._tools_cache:
                 if isinstance(tool, dict) and tool.get("name") == tool_name:
                     return tool
-        except Exception:
-            pass
+        except Exception as tool_lookup_error:
+            logger.debug("MCP module tool cache lookup failed", exc_info=tool_lookup_error)
         return None
 
     def get_metrics(self) -> ModuleMetrics:

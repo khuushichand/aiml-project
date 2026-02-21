@@ -95,7 +95,7 @@ def test_chacha_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
     try:
         db.close()
     except:
-        pass
+        _ = None
 
 @pytest.fixture
 def populated_chacha_db(test_chacha_db) -> CharactersRAGDB:

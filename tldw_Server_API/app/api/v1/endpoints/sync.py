@@ -240,8 +240,8 @@ async def send_changes_to_client(
                   row_change_id = "N/A"
                   try:
                       row_change_id = dict(row_dict).get("change_id", "N/A")
-                  except Exception:
-                      pass
+                  except Exception as change_id_error:
+                      logger.debug("Failed to extract change_id from sync log row during validation error path", exc_info=change_id_error)
                   logger.error(
                       f"[{user_id.username}] Error validating sync log entry data "
                       f"(ID: {row_change_id}) against model: {pydantic_err}",
@@ -448,7 +448,7 @@ class ServerSyncProcessor:
 
         try:
             # --- Fetch current server state ---
-            cursor.execute(f"SELECT version, client_id, last_modified FROM `{entity}` WHERE uuid = ?", (entity_uuid,))
+            cursor.execute(f"SELECT version, client_id, last_modified FROM `{entity}` WHERE uuid = ?", (entity_uuid,))  # nosec B608
             server_record_info = cursor.fetchone() # Sync fetchone
             server_version = server_record_info[0] if server_record_info else 0
             server_client_id = server_record_info[1] if server_record_info else None
@@ -485,7 +485,7 @@ class ServerSyncProcessor:
             # Optimistic lock failed during direct apply
             logger.warning(f"[{self.user_id}] Optimistic lock failed applying change for {entity} {entity_uuid}. Attempting resolution.")
             # Fetch current state again for resolution
-            cursor.execute(f"SELECT version, client_id, last_modified FROM `{entity}` WHERE uuid = ?", (entity_uuid,))
+            cursor.execute(f"SELECT version, client_id, last_modified FROM `{entity}` WHERE uuid = ?", (entity_uuid,))  # nosec B608
             current_server_state = cursor.fetchone() # Sync fetchone
             resolved, error_msg = self._resolve_server_conflict_sync( # Call sync version
                  cursor, change, current_server_state, current_server_time_str
@@ -594,7 +594,7 @@ class ServerSyncProcessor:
 
         # --- Version Calculation (Server Side - Sync) ---
         current_server_version = 0
-        cursor.execute(f"SELECT version FROM `{entity}` WHERE uuid = ?", (uuid,))
+        cursor.execute(f"SELECT version FROM `{entity}` WHERE uuid = ?", (uuid,))  # nosec B608
         current_rec = cursor.fetchone()
         if current_rec:
             current_server_version = current_rec[0]

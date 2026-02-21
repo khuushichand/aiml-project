@@ -559,7 +559,7 @@ def test_add_email_mbox_large_container_persists_children(test_api_client, db_se
         try:
             _os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
     form_data = create_add_media_form_data(
         media_type="email",
@@ -636,7 +636,7 @@ def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session,
             try:
                 _os.unlink(tmp_path)
             except Exception:
-                pass
+                _ = None
         form_data = create_add_media_form_data(media_type="email", perform_chunking=False)
         form_data.update({'accept_mbox': 'true'})
         files = {'files': ('emails.mbox', mbox_bytes, 'application/mbox')}
@@ -683,7 +683,7 @@ def _build_mbox_two_emails_bytes() -> bytes:
         try:
             _os.unlink(tmp_path)
         except Exception:
-            pass
+            _ = None
 
 
 def test_add_email_mbox_persists_children(test_api_client, db_session, dummy_headers):
@@ -936,7 +936,7 @@ def test_add_media_single_url_success(test_api_client, db_session, media_type, v
                 )
         except Exception:
             # Fall through to normal assertions if we cannot interpret the error.
-            pass
+            _ = None
 
     expected_code = status.HTTP_200_OK
     if response.status_code != expected_code:  # Log if not expected
@@ -1243,7 +1243,7 @@ def test_add_media_multiple_failures_and_success_pdf(
         if invalid_pdf_path.exists():
             invalid_pdf_path.unlink()
     except Exception:
-        pass
+        _ = None
 
 # === Error Handling Tests ===
 

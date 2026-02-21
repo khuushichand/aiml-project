@@ -33,7 +33,7 @@ def test_results(request):
             import pytest as _pytest
             _pytest.config._test_results = results  # type: ignore[attr-defined]
         except Exception:
-            pass
+            _ = None
     return results
 
 

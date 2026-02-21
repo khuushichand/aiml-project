@@ -421,12 +421,12 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
                 self._tokenizer = enc
                 self._tokenizer_type = "tiktoken"
                 return self._tokenizer
-            except Exception:
-                pass
+            except Exception as tiktoken_error:
+                logger.debug("Semantic chunker tiktoken initialization failed; trying transformers fallback", exc_info=tiktoken_error)
             # Fallback to transformers (local-only)
             try:
                 from transformers import AutoTokenizer  # type: ignore
-                tok = AutoTokenizer.from_pretrained(name, local_files_only=True)
+                tok = AutoTokenizer.from_pretrained(name, local_files_only=True)  # nosec B615
                 self._tokenizer = tok
                 self._tokenizer_type = "transformers"
                 return self._tokenizer

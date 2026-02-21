@@ -62,7 +62,7 @@ class TestBillingWebhooksIntegration:
                     app.include_router(billing_webhooks_router, prefix="/api/v1")
             except Exception:
                 # If inspection fails, still fall back to the original client.
-                pass
+                _ = None
 
         self.client = client
 

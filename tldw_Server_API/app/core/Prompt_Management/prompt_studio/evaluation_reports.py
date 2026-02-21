@@ -598,8 +598,8 @@ class ReportManager:
             logger.bind(ps_component="ps_reports", evaluation_id=evaluation_id, project_id=project_id).info(
                 "PS report.start format={}", format
             )
-        except Exception:
-            pass
+        except Exception as report_log_error:
+            logger.debug("Prompt Studio report start logging failed", exc_info=report_log_error)
 
         # Generate report based on format
         if format == "text":

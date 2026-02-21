@@ -31,7 +31,7 @@ async def test_ws_pings_label_isolation_across_endpoints(monkeypatch):
         from tldw_Server_API.app.core.MCP_unified import get_mcp_server
         get_mcp_server().config.ws_ping_interval = 1
     except Exception:
-        pass
+        _ = None
 
     reg = get_metrics_registry()
     audio_labels = {"component": "audio", "endpoint": "audio_unified_ws", "transport": "ws"}
@@ -77,7 +77,7 @@ async def test_ws_pings_label_isolation_across_endpoints(monkeypatch):
                 )
                 _ = mcp_ws.receive_json()
             except Exception:
-                pass
+                _ = None
 
     after_audio = reg.get_metric_stats("ws_pings_total", labels=audio_labels).get("count", 0)
     after_mcp_latency = reg.get_metric_stats(

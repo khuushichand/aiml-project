@@ -134,7 +134,7 @@ def temp_media_db():
     try:
         db.close_connection()
     except:
-        pass
+        _ = None
     shutil.rmtree(db_dir, ignore_errors=True)
 
 @pytest.fixture
@@ -180,7 +180,7 @@ def chroma_client(temp_chroma_path):
                 if callable(stop_fn):
                     stop_fn()
         except Exception:
-            pass
+            _ = None
 
 @pytest.fixture
 def mock_chroma_client():
@@ -259,7 +259,7 @@ def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):
         try:
             manager.close()
         except Exception:
-            pass
+            _ = None
 
 # =====================================================================
 # Embedding Fixtures
@@ -335,7 +335,7 @@ def hf_or_deterministic_embeddings():
 
                 return _embed, True, dim
         except Exception:
-            pass  # Fall through to deterministic path
+            _ = None  # Fall through to deterministic path
 
     def _det_embed(texts: List[str], dim: int = 384) -> List[List[float]]:
         vecs: List[List[float]] = []
@@ -578,4 +578,4 @@ def test_session_cleanup():
         try:
             shutil.rmtree(temp_dir)
         except:
-            pass
+            _ = None

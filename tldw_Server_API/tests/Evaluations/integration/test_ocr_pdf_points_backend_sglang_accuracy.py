@@ -85,7 +85,7 @@ def test_points_sglang_accuracy():
                 if token:
                     headers["X-CSRF-Token"] = token
             except Exception:
-                pass
+                _ = None
 
             r = client.post("/api/v1/evaluations/ocr-pdf", files=files, data=data, headers=headers)
             assert r.status_code == 200, r.text

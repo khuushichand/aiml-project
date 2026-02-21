@@ -11,6 +11,7 @@ Supports loading from:
 import contextlib
 import csv
 import json
+import os
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any, Optional
@@ -94,7 +95,8 @@ class DatasetLoader:
 
     @staticmethod
     def load_huggingface(dataset_id: str, split: str = 'test',
-                        limit: Optional[int] = None) -> list[dict[str, Any]]:
+                        limit: Optional[int] = None,
+                        revision: Optional[str] = None) -> list[dict[str, Any]]:
         """Load dataset from HuggingFace.
 
         Note: This requires the 'datasets' library to be installed.
@@ -108,7 +110,8 @@ class DatasetLoader:
 
         try:
             # Load dataset
-            dataset = load_dataset(dataset_id, split=split)
+            resolved_revision = revision or os.getenv("HF_DATASETS_DEFAULT_REVISION")
+            dataset = load_dataset(dataset_id, split=split, revision=resolved_revision)  # nosec B615
 
             # Convert to list of dicts
             data = []

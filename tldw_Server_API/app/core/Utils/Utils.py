@@ -581,7 +581,7 @@ def generate_unique_identifier(file_path):
     timestamp = int(time.time())
 
     # Generate a hash of the file content
-    hasher = hashlib.md5()
+    hasher = hashlib.md5(usedforsecurity=False)
     with open(file_path, 'rb') as f:
         for block in iter(lambda: f.read(1024 * 1024), b''):
             hasher.update(block)

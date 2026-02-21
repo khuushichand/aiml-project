@@ -4,6 +4,8 @@ import os
 from typing import Any
 from urllib.parse import urlencode
 
+from loguru import logger
+
 from tldw_Server_API.app.core.http_client import afetch
 
 from .connector_base import BaseConnector
@@ -102,8 +104,8 @@ class NotionConnector(BaseConnector):
                             if arr:
                                 title = arr[0].get("plain_text")
                                 break
-                except Exception:
-                    pass
+                except Exception as title_extract_error:
+                    logger.debug("Notion connector failed to extract page title", exc_info=title_extract_error)
                 items.append({"id": pid, "name": title or pid, "type": "page", "last_edited_time": r.get("last_edited_time")})
             return items, data.get("next_cursor")
         else:
@@ -137,8 +139,8 @@ class NotionConnector(BaseConnector):
                             if arr:
                                 title = arr[0].get("plain_text")
                                 break
-                except Exception:
-                    pass
+                except Exception as title_extract_error:
+                    logger.debug("Notion connector failed to extract search result title", exc_info=title_extract_error)
                 items.append({"id": pid, "name": title or pid, "type": "page", "last_edited_time": r.get("last_edited_time")})
             elif obj == "database":
                 did = r.get("id")

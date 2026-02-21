@@ -12,9 +12,12 @@ from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 from loguru import logger
 
 from tldw_Server_API.app.core.Workflows.adapters._common import (
@@ -33,7 +36,12 @@ _PODCAST_RSS_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     UnicodeError,
     ValueError,
+    DefusedXmlException,
 )
+
+
+class _InvalidRemoteSeedUrl(ValueError):
+    """Raised when source_feed_url uses a disallowed scheme or form."""
 
 
 def _local_name(tag: str) -> str:
@@ -203,12 +211,15 @@ def _resolve_feed_path(feed_uri: str, context: dict[str, Any], config: dict[str,
 
 
 def _load_seed_xml(source_feed_url: str) -> ET.Element | None:
+    parsed = urlparse(source_feed_url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise _InvalidRemoteSeedUrl("source_feed_url must use http:// or https://")
     request = Request(source_feed_url, headers={"User-Agent": "tldw-workflows/0.2"})
-    with urlopen(request, timeout=15) as response:
+    with urlopen(request, timeout=15) as response:  # nosec B310
         payload = response.read()
     if not payload:
         return None
-    return ET.fromstring(payload)
+    return DET.fromstring(payload)
 
 
 @registry.register(
@@ -261,7 +272,7 @@ async def run_podcast_rss_publish_adapter(config: dict[str, Any], context: dict[
     root: ET.Element
     if feed_path.exists():
         try:
-            root = ET.parse(feed_path).getroot()
+            root = DET.parse(feed_path).getroot()
         except _PODCAST_RSS_NONCRITICAL_EXCEPTIONS:
             return {"error": "invalid_feed_xml", "published": False}
     elif source_feed_url:
@@ -269,6 +280,8 @@ async def run_podcast_rss_publish_adapter(config: dict[str, Any], context: dict[
             return {"error": "remote_fetch_disabled", "published": False}
         try:
             seeded = _load_seed_xml(source_feed_url)
+        except _InvalidRemoteSeedUrl:
+            return {"error": "invalid_remote_seed_url", "published": False}
         except (HTTPError, URLError, TimeoutError, OSError, ValueError):
             return {"error": "remote_seed_fetch_failed", "published": False}
         if seeded is None:

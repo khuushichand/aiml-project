@@ -752,9 +752,9 @@ class ChatMetricsCollector:
                 f"Fallback success: requested={requested_provider}, selected={selected_provider}, "
                 f"streaming={streaming}, queued={queued}"
             )
-        except Exception:
+        except Exception as metrics_error:
             # Metrics must never break the flow
-            pass
+            logger.debug("Fallback metrics emission failed", exc_info=metrics_error)
 
     # ---------------- Moderation helpers ----------------
     def track_moderation_input(self, user_id: str, action: str, category: str = "default"):

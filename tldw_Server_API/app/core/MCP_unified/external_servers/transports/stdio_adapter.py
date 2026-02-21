@@ -78,8 +78,8 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
         if client is not None:
             try:
                 await client.close()
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("MCP stdio transport client close failed", exc_info=close_error)
         self._connected = False
         self._initialized = False
 

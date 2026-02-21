@@ -28,7 +28,7 @@ async def real_redis():
         try:
             await client.close()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture
@@ -48,9 +48,9 @@ async def rg_unique_ns(real_redis):
             try:
                 await client.delete(k)
             except Exception:
-                pass
+                _ = None
     except Exception:
-        pass
+        _ = None
     try:
         yield ns
     finally:
@@ -61,6 +61,6 @@ async def rg_unique_ns(real_redis):
                 try:
                     await client.delete(k)
                 except Exception:
-                    pass
+                    _ = None
         except Exception:
-            pass
+            _ = None

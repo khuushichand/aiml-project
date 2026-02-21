@@ -77,7 +77,7 @@ def test_ocr_pdf_endpoint_with_dots_backend_integration(monkeypatch):
                 if token:
                     headers["X-CSRF-Token"] = token
             except Exception:
-                pass
+                _ = None
 
             r = client.post(
                 "/api/v1/evaluations/ocr-pdf",

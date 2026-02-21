@@ -41,7 +41,7 @@ class TestUserLifecycleModifications:
                 if r.status_code == 200 and r.json().get("has_embeddings"):
                     return True
             except Exception:
-                pass
+                _ = None
             time.sleep(0.5)
         return False
 
@@ -201,11 +201,11 @@ class TestMultiUserDataIsolation:
                 password=test_user_credentials["password"],
             )
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         try:
             api_client.login(test_user_credentials["username"], test_user_credentials["password"])  # sets headers
         except httpx.HTTPStatusError:
-            pass
+            _ = None
 
         # Upload media as user A
         token_a = "USERA_UNIQUE_TOKEN_X"
@@ -230,7 +230,7 @@ class TestMultiUserDataIsolation:
             try:
                 client_b.register(**creds_b)
             except httpx.HTTPStatusError:
-                pass
+                _ = None
             client_b.login(creds_b["username"], creds_b["password"])  # sets auth headers on client_b
 
             # User B: cannot fetch user A's media by ID

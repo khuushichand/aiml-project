@@ -598,7 +598,7 @@ class TestCircuitBreaker:
             try:
                 await cb.call(failing_func)
             except Exception:
-                pass  # Expected to fail
+                _ = None  # Expected to fail
 
         assert cb.state == CircuitState.OPEN
         assert not cb.is_available
@@ -625,7 +625,7 @@ class TestCircuitBreaker:
             try:
                 await cb.call(failing_func)
             except Exception:
-                pass
+                _ = None
         assert cb.state == CircuitState.OPEN
 
         # Wait for recovery timeout
@@ -654,7 +654,7 @@ class TestCircuitBreaker:
             try:
                 await cb.call(failing_func)
             except Exception:
-                pass
+                _ = None
 
         # Wait and transition to half-open
         await asyncio.sleep(0.2)
@@ -665,7 +665,7 @@ class TestCircuitBreaker:
         try:
             await cb.call(failing_func)
         except Exception:
-            pass  # Expected
+            _ = None  # Expected
         assert cb.state == CircuitState.OPEN
 
 

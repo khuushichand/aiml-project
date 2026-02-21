@@ -164,7 +164,7 @@ def test_demo_auth_requires_secret(monkeypatch):
     try:
         config_module.get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     with _build_mcp_client() as temp_client:
         resp = temp_client.post(
             "/api/v1/mcp/auth/token",
@@ -184,7 +184,7 @@ def test_demo_auth_issues_token_with_secret(monkeypatch):
         config_module.get_config.cache_clear()  # type: ignore[attr-defined]
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Treat the starlette test client host as loopback/private.
     real_ip_address = ipaddress.ip_address
@@ -234,7 +234,7 @@ def test_refresh_endpoint_rejects_query_token_and_accepts_body(monkeypatch):
         config_module.get_config.cache_clear()  # type: ignore[attr-defined]
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     mgr = get_jwt_manager()
     refresh, token_id = mgr.create_refresh_token(subject="1")
@@ -284,7 +284,7 @@ def test_request_guard_enforces_body_size_limit(monkeypatch):
     try:
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Treat test client peer as trusted proxy for header acceptance
     monkeypatch.setattr(
@@ -338,7 +338,7 @@ def test_request_guard_requires_client_certificate(monkeypatch):
     try:
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     payload = {"jsonrpc": "2.0", "method": "ping", "id": 1}
     with _build_mcp_client() as temp_client:

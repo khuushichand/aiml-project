@@ -407,7 +407,7 @@ async def test_mcp_single_user_api_key_flag_enabled_uses_compat_shim(monkeypatch
 
         app.dependency_overrides[_ehs] = lambda: None
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": "single-user-admin-key"}
     body = {"jsonrpc": "2.0", "method": "status", "id": 10}
@@ -486,7 +486,7 @@ async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkey
 
         app.dependency_overrides[_ehs] = lambda: None
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": "test-api-key-123"}
     body = {"jsonrpc": "2.0", "method": "status", "id": 11}

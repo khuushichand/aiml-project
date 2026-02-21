@@ -33,13 +33,13 @@ def _fresh_client() -> TestClient:
     try:
         AuthDatabaseConfig().reset()
     except Exception:
-        pass
+        _ = None
     # Reset DB pool (async); tests using TestClient will run lifespan and initialize anew
     try:
         import asyncio
         asyncio.run(reset_db_pool())
     except Exception:
-        pass
+        _ = None
 
     # Reload app module to ensure lifespan uses new env/settings
     from tldw_Server_API.app import main as app_main

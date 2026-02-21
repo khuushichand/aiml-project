@@ -43,9 +43,9 @@ try:
     for env_path in candidate_env_paths:
         if env_path.exists():
             load_dotenv(dotenv_path=str(env_path), override=False)
-except Exception:
+except Exception as dotenv_error:
     # Fall back silently if dotenv loading fails; environment may be pre-populated
-    pass
+    _ = dotenv_error
 
 # Use load_and_log_configs which returns a proper dict
 from tldw_Server_API.app.core.config import load_and_log_configs

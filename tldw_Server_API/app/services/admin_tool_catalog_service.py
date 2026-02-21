@@ -51,7 +51,7 @@ async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, lim
             rows = await db.fetch(q, *params, limit, offset)
             return [dict(r) for r in rows]
         cur = await db.execute(
-            f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",  # nosec B608
             [*params, limit, offset],
         )
         rows = await cur.fetchall()
@@ -165,7 +165,7 @@ async def list_visible_tool_catalogs(
                 placeholders, params = build_postgres_in_clause(sorted(org_ids))
                 rows = await db.fetch(
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",  # nosec B608
                     *params,
                 )
             else:
@@ -183,7 +183,7 @@ async def list_visible_tool_catalogs(
                 placeholders, params = build_postgres_in_clause(sorted(team_ids))
                 rows = await db.fetch(
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
-                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",  # nosec B608
                     *params,
                 )
             else:

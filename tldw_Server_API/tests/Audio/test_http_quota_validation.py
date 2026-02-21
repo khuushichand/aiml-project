@@ -27,7 +27,7 @@ def test_http_file_size_limit_exceeded(monkeypatch, bypass_api_limits):
         try:
             print("DEBUG audio.transcriptions status=", resp.status_code, "body=", resp.text)
         except Exception:
-            pass
+            _ = None
         if resp.status_code == 404:
             pytest.skip("audio/transcriptions endpoint not mounted in this build")
         assert resp.status_code == 413

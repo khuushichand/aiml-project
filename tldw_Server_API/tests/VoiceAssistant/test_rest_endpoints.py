@@ -98,7 +98,7 @@ def client_with_user(monkeypatch, mock_user, tmp_path):
 
         core_config._route_toggle_policy.cache_clear()
     except Exception:
-        pass
+        _ = None
     from tldw_Server_API.app import main as app_main
 
     importlib.reload(app_main)

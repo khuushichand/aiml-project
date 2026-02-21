@@ -33,7 +33,7 @@ def client_with_user(monkeypatch, tmp_path):
             if path.exists():
                 path.unlink()
     except Exception:
-        pass
+        _ = None
 
     # Build a minimal app including only the Watchlists router to avoid heavy imports
     from fastapi import FastAPI

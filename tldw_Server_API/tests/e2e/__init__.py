@@ -17,12 +17,12 @@ try:
         from . import test_data as _e2e_test_data  # type: ignore
         _sys.modules.setdefault("test_data", _e2e_test_data)  # type: ignore
     except Exception:
-        pass
+        _ = None
     try:
         from . import workflow_helpers as _e2e_workflow_helpers  # type: ignore
         _sys.modules.setdefault("workflow_helpers", _e2e_workflow_helpers)  # type: ignore
     except Exception:
-        pass
+        _ = None
 except Exception:
     # Never break test discovery on aliasing issues
-    pass
+    _ = None

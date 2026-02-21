@@ -43,7 +43,7 @@ def test_dlq_list_and_replay_simulated(monkeypatch, auth_headers):
                 request_id=None,
             )
         except Exception:
-            pass
+            _ = None
         return principal
     def override_db():
         return db_for_app

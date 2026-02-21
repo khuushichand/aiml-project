@@ -12,6 +12,8 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Optional
 
+from loguru import logger
+
 #
 ########################################################################################################################
 #
@@ -33,7 +35,7 @@ def _day_start_secs(dt: Optional[datetime] = None) -> int:
 
 def _sha1_8_int(s: str) -> int:
     import hashlib
-    h = hashlib.sha1(s.encode('utf-8')).hexdigest()
+    h = hashlib.sha1(s.encode('utf-8'), usedforsecurity=False).hexdigest()
     return int(h[:8], 16)
 
 
@@ -212,8 +214,8 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
             try:
                 due_dt = datetime.fromisoformat(due_at_iso.replace('Z', '+00:00'))
                 due_secs = int(due_dt.timestamp())
-            except Exception:
-                pass
+            except Exception as due_parse_error:
+                logger.debug("APKG exporter failed to parse due_at for new-card note", exc_info=due_parse_error)
         return (1, 1, due_secs, 0, factor, reps_val, lapses_val)
     # Review
     ivl_days = max(1, int(interval_days))
@@ -223,8 +225,8 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
         try:
             due_dt = datetime.fromisoformat(due_at_iso.replace('Z', '+00:00'))
             days_since_crt = max(1, int((due_dt.timestamp() - col_crt_secs) / 86400.0))
-        except Exception:
-            pass
+        except Exception as due_parse_error:
+            logger.debug("APKG exporter failed to parse due_at for review-card note", exc_info=due_parse_error)
     return (2, 2, days_since_crt, ivl_days, factor, reps_val, lapses_val)
 
 

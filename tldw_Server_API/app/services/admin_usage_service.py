@@ -163,7 +163,7 @@ async def fetch_usage_daily(
             or 0
         )
     else:
-        cur = await db.execute(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params)
+        cur = await db.execute(f"SELECT COUNT(*) FROM usage_daily{join_clause}{where_clause}", params)  # nosec B608
         total_row = await cur.fetchone()
         total = int(total_row[0] if total_row else 0)
     has_in = True
@@ -467,7 +467,7 @@ async def fetch_llm_usage(
         return [dict(r) for r in rows], int(total or 0)
 
     # SQLite
-    cur = await db.execute(f"SELECT COUNT(*) FROM llm_usage_log{join_clause}{where_clause}", params)
+    cur = await db.execute(f"SELECT COUNT(*) FROM llm_usage_log{join_clause}{where_clause}", params)  # nosec B608
     total_row = await cur.fetchone()
     total = int(total_row[0] if total_row else 0)
     data_sql = (

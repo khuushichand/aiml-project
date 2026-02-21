@@ -6,6 +6,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+from loguru import logger
+
 
 def _blocks_to_text(blocks: list[dict[str, Any]]) -> str:
     parts: list[str] = []
@@ -365,8 +367,8 @@ async def _maybe_close_stream(stream: Any) -> None:
             result = close_fn()
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            pass
+        except Exception as stream_close_error:
+            logger.debug("Anthropic stream aclose failed", exc_info=stream_close_error)
         return
     close_fn = getattr(stream, "close", None)
     if callable(close_fn):
@@ -374,8 +376,8 @@ async def _maybe_close_stream(stream: Any) -> None:
             result = close_fn()
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            pass
+        except Exception as stream_close_error:
+            logger.debug("Anthropic stream close failed", exc_info=stream_close_error)
 
 
 def _extract_choice(data: dict[str, Any]) -> dict[str, Any]:

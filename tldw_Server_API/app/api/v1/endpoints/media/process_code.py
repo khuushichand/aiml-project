@@ -90,8 +90,8 @@ async def process_code_endpoint(
             try:
                 if is_test_mode() and upload_errors:
                     logger.warning(f"TEST_MODE: process-code upload_errors={upload_errors}")
-            except Exception:
-                pass
+            except Exception as test_mode_log_error:
+                logger.debug("Failed to emit TEST_MODE upload diagnostics", exc_info=test_mode_log_error)
 
             for err in upload_errors:
                 batch["results"].append(
@@ -216,8 +216,8 @@ async def process_code_endpoint(
                                 "TEST_MODE: process-code read-error "
                                 f"file='{filename}' path='{local_path}': {type(exc).__name__}: {exc}"
                             )
-                    except Exception:
-                        pass
+                    except Exception as test_mode_log_error:
+                        logger.debug("Failed to emit TEST_MODE read-error diagnostics", exc_info=test_mode_log_error)
                     results.append(
                         {
                             "status": "Error",
@@ -296,8 +296,8 @@ async def process_code_endpoint(
                                             md["start_line"] = int(min(starts))
                                         if ends:
                                             md["end_line"] = int(max(ends))
-                                    except Exception:
-                                        pass
+                                    except Exception as metadata_bounds_error:
+                                        logger.debug("Failed to derive code chunk line bounds", exc_info=metadata_bounds_error)
                                 md["chunk_index"] = idx + 1
                                 md["total_chunks"] = total
                                 chunks.append({"text": cr.text, "metadata": md})

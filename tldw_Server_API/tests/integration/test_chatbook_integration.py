@@ -251,7 +251,7 @@ class TestExportWorkflow:
                 assert status["status"] in ["pending", "in_progress", "completed"]
             except Exception:
                 # Job system may not be fully implemented
-                pass
+                _ = None
 
 
 class TestImportWorkflow:

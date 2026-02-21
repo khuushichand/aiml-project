@@ -16,6 +16,7 @@
 ####################
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -320,11 +321,13 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
 
             if not model_dir.exists():
                 # Limit download to ONNX files only to avoid fetching entire repositories
+                revision = os.getenv("PARAKEET_ONNX_REVISION")
                 snapshot_download(
                     repo_id=model_path,
                     local_dir=str(model_dir),
+                    revision=revision,
                     allow_patterns=["*.onnx", "**/*.onnx"],
-                )
+                )  # nosec B615
 
         # Find ONNX files
         onnx_files = list(model_dir.glob("*.onnx"))

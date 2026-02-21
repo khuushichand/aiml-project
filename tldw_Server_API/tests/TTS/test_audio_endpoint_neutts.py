@@ -24,7 +24,7 @@ def client(monkeypatch):
         mgr = get_tts_config_manager()
         mgr._config_cache = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     app = FastAPI()
     app.include_router(audio_router, prefix="/api/v1/audio")
     with TestClient(app) as c:

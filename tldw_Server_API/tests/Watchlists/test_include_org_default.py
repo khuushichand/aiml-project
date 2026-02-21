@@ -48,14 +48,14 @@ def _test_env(monkeypatch, tmp_path):
             try:
                 await p.execute("DELETE FROM organizations WHERE slug = ?", ("orga",))
             except Exception:
-                pass
+                _ = None
         if loop.is_running():
             # In pytest-asyncio, we might already be in an event loop; best-effort
             loop.run_until_complete(_cleanup())
         else:
             loop.run_until_complete(_cleanup())
     except Exception:
-        pass
+        _ = None
     yield
 
 

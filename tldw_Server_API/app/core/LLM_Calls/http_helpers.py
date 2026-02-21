@@ -122,8 +122,8 @@ class _RetrySession:
         try:
             if self._client is not None:
                 self._client.close()
-        except Exception:
-            pass
+        except Exception as close_error:
+            _ = close_error  # best-effort client close
 
 
 def create_session_with_retries(

@@ -44,8 +44,8 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
             items = raw.get("embeddings", [])
             for i, it in enumerate(items):
                 data.append({"index": i, "embedding": (it.get("values") or [])})
-        except Exception:
-            pass
+        except Exception as parse_error:
+            logger.debug("Google embeddings adapter failed to normalize response payload", exc_info=parse_error)
         return {"data": data, "object": "list", "model": None}
 
     def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:

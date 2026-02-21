@@ -94,9 +94,9 @@ async def process_pdfs_endpoint(
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("PDF process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
@@ -422,9 +422,9 @@ async def process_pdfs_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception:
+    except Exception as rechunk_error:
         # Never fail the endpoint due to re-chunking issues.
-        pass
+        logger.debug("PDF process endpoint rechunking failed; returning original result", exc_info=rechunk_error)
 
     return JSONResponse(status_code=final_status_code, content=batch)
 

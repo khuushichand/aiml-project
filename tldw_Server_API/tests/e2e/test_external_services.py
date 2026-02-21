@@ -181,7 +181,7 @@ class TestLLMProviderResilience:
                 temperature=0.7
             )
         except:
-            pass
+            _ = None
 
         # Test with alternative provider
         alternative_response = None
@@ -192,7 +192,7 @@ class TestLLMProviderResilience:
                 temperature=0.7
             )
         except:
-            pass
+            _ = None
 
         # At least one should work if properly configured
         if primary_response or alternative_response:
@@ -265,7 +265,7 @@ class TestEmbeddingServiceResilience:
                         media_ids.append(media_id)
                         data_tracker.add_media(media_id)
                 except:
-                    pass  # Some might fail under load
+                    _ = None  # Some might fail under load
 
             # Should handle bulk load gracefully
             assert len(media_ids) >= 5, \
@@ -285,7 +285,7 @@ class TestEmbeddingServiceResilience:
                     )
                 except Exception:
                     # Non-fatal in resilience test
-                    pass
+                    _ = None
 
         finally:
             for file_path in documents:

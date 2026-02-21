@@ -31,8 +31,9 @@ DEFAULT_SECRET_DENYLIST: set[str] = {
     "anthropic_api_key",
 }
 
+# Wildcard bind sentinels used only for client-host normalization logic.
 WILDCARD_HOSTS: set[str] = {
-    "0.0.0.0",
+    "0.0.0.0",  # nosec B104
     "::",
     "0:0:0:0:0:0:0:0",
 }
@@ -273,9 +274,9 @@ def safe_log(
         log_fn = getattr(log, level, None)
         if callable(log_fn):
             log_fn(msg, *args)
-    except Exception:
+    except Exception as log_error:
         # Swallow logging errors on interpreter shutdown / closed sinks
-        pass
+        _ = log_error
 
 
 def apply_env_overrides(config: Any) -> None:

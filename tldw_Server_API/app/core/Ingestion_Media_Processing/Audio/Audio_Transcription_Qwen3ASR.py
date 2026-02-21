@@ -119,6 +119,7 @@ def _resolve_settings() -> dict[str, Any]:
     settings = {
         "enabled": _as_bool(stt_cfg.get("qwen3_asr_enabled"), False),
         "model_path": _as_str(stt_cfg.get("qwen3_asr_model_path"), default_model_path),
+        "model_revision": _as_str(stt_cfg.get("qwen3_asr_model_revision"), ""),
         "device": _as_str(stt_cfg.get("qwen3_asr_device"), "cuda"),
         "dtype": _as_str(stt_cfg.get("qwen3_asr_dtype"), "bfloat16"),
         "max_batch_size": _as_int(stt_cfg.get("qwen3_asr_max_batch_size"), 32),
@@ -128,6 +129,7 @@ def _resolve_settings() -> dict[str, Any]:
         # Forced aligner settings
         "aligner_enabled": _as_bool(stt_cfg.get("qwen3_asr_aligner_enabled"), False),
         "aligner_path": _as_str(stt_cfg.get("qwen3_asr_aligner_path"), "./models/qwen3_asr/aligner"),
+        "aligner_revision": _as_str(stt_cfg.get("qwen3_asr_aligner_revision"), ""),
         # Backend selection
         "backend": _as_str(stt_cfg.get("qwen3_asr_backend"), "transformers"),
         "vllm_gpu_memory_utilization": _as_float(stt_cfg.get("qwen3_asr_vllm_gpu_memory_utilization"), 0.7),
@@ -245,6 +247,7 @@ def _load_qwen3_asr_model(settings: dict[str, Any]) -> tuple[Any, Any, str]:
     device = _resolve_device(str(settings["device"]))
     dtype_name = str(settings["dtype"])
     allow_download = bool(settings["allow_download"])
+    model_revision = str(settings.get("model_revision") or "").strip() or None
 
     cache_key = f"qwen3_asr|{model_path}|{device}|{dtype_name}"
     with _MODEL_LOCK:
@@ -270,18 +273,20 @@ def _load_qwen3_asr_model(settings: dict[str, Any]) -> tuple[Any, Any, str]:
 
         processor = AutoProcessor.from_pretrained(
             str(validated_path),
+            revision=model_revision,
             trust_remote_code=True,
             local_files_only=local_only,
-        )
+        )  # nosec B615
 
         device_map = "auto" if device != "cpu" else None
         model = AutoModelForCausalLM.from_pretrained(
             str(validated_path),
+            revision=model_revision,
             trust_remote_code=True,
             local_files_only=local_only,
             torch_dtype=torch_dtype,
             device_map=device_map,
-        )
+        )  # nosec B615
 
         if device_map is None:
             model = model.to(device)
@@ -296,6 +301,7 @@ def _load_forced_aligner(settings: dict[str, Any]) -> tuple[Any, Any]:
     """Load Qwen3-ForcedAligner model with caching."""
     aligner_path = str(settings["aligner_path"])
     allow_download = bool(settings["allow_download"])
+    aligner_revision = str(settings.get("aligner_revision") or "").strip() or None
 
     cache_key = f"qwen3_aligner|{aligner_path}"
     with _ALIGNER_LOCK:
@@ -325,17 +331,19 @@ def _load_forced_aligner(settings: dict[str, Any]) -> tuple[Any, Any]:
 
         processor = AutoProcessor.from_pretrained(
             str(path),
+            revision=aligner_revision,
             trust_remote_code=True,
             local_files_only=not allow_download,
-        )
+        )  # nosec B615
 
         model = AutoModelForCausalLM.from_pretrained(
             str(path),
+            revision=aligner_revision,
             trust_remote_code=True,
             local_files_only=not allow_download,
             torch_dtype=torch.bfloat16,
             device_map="auto",
-        )
+        )  # nosec B615
         model.eval()
 
         _ALIGNER_CACHE[cache_key] = (processor, model)

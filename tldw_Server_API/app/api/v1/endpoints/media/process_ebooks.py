@@ -144,9 +144,9 @@ async def process_ebooks_endpoint(
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("Ebook process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Legacy endpoint treats urls=[""] as "no URLs".
     if form_data.urls and form_data.urls == [""]:

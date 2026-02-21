@@ -31,7 +31,7 @@ def test_postgres_store_adds_missing_columns(monkeypatch):
                 try:
                     cur.execute(f"DROP TABLE IF EXISTS {tbl}")
                 except Exception:
-                    pass
+                    _ = None
             # Old sandbox_runs schema (no runtime_version/resource_usage)
             cur.execute(
                 """

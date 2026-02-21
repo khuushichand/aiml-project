@@ -342,7 +342,8 @@ class DockerRunner:
             cmd += ["--mount", f"type=bind,src={session_workspace},dst=/workspace"]
         else:
             cmd += ["--tmpfs", f"/workspace:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size={ws_cap}m"]
-        cmd += ["--tmpfs", f"/tmp:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size=64m"]
+        # Container-scoped tmpfs mount path, not host temp-dir creation.
+        cmd += ["--tmpfs", f"/tmp:rw,noexec,nodev,nosuid,uid={uid},gid={gid},size=64m"]  # nosec B108
         # Working dir
         cmd += ["-w", "/workspace"]
 

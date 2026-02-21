@@ -1713,6 +1713,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       previous.includes(id) ? previous : [...previous, id]
     )
   }, [])
+  const openModelApiSelector = React.useCallback(() => {
+    setModelDropdownOpen(true)
+  }, [setModelDropdownOpen])
   const getModelRecommendationActionLabel = React.useCallback(
     (action: ModelRecommendationAction) => {
       if (action === "enable_json_mode") {
@@ -5560,7 +5563,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       label: t("playground:composer.context.model", "Model"),
       value: selectedModel ? modelSummaryLabel : t("common:none", "None"),
       tone: selectedModel ? "active" : "warning",
-      onClick: () => setModelDropdownOpen(true)
+      onClick: openModelApiSelector
     })
     const capabilityLabels: string[] = []
     if (modelCapabilities.includes("vision")) {
@@ -5853,6 +5856,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     modelCapabilities,
     modelContextLength,
     modelSummaryLabel,
+    openModelApiSelector,
     openKnowledgePanel,
     openContextWindowModal,
     nonMessageContextPercent,
@@ -5875,7 +5879,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     messages.length,
     setContextToolsOpen,
     setOpenModelSettings,
-    setModelDropdownOpen,
     showTokenBudgetWarning,
     projectedBudget.utilizationPercent,
     showNonMessageContextWarning,
@@ -6058,7 +6061,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             "playground:composer.conflict.reviewModels",
             "Review models"
           ),
-          onAction: () => setModelDropdownOpen(true)
+          onAction: openModelApiSelector
         })
       }
 
@@ -6131,9 +6134,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       selectedCharacter?.name,
       selectedQuickPrompt,
       selectedSystemPrompt,
+      openModelApiSelector,
       setOpenModelSettings,
       setModeLauncherOpen,
-      setModelDropdownOpen,
       showNonMessageContextWarning,
       summaryCheckpointSuggestion.reason,
       summaryCheckpointSuggestion.shouldSuggest,
@@ -7623,7 +7626,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => setModelDropdownOpen(true)}
+                              onClick={openModelApiSelector}
                               className="rounded border border-warn/40 bg-surface px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/10"
                             >
                               {t(

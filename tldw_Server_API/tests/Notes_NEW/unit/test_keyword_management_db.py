@@ -14,7 +14,7 @@ def keyword_db(tmp_path):
     try:
         db.close()
     except Exception:
-        pass
+        _ = None
 
 
 def test_rename_keyword_updates_text_and_conflicts_on_duplicate(keyword_db: CharactersRAGDB):

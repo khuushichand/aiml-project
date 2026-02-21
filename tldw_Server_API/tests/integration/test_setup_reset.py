@@ -34,7 +34,7 @@ def test_admin_reset_calls_reset_flags(mocker):
                 request_id=None,
             )
         except Exception:
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal

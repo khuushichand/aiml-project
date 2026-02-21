@@ -366,8 +366,8 @@ async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, m
         reset_val = int(meta.get("reset_seconds") or 60) if isinstance(meta, dict) else 60
         response.headers["RateLimit-Reset"] = str(reset_val)
         response.headers["X-RateLimit-Reset"] = str(reset_val)
-    except Exception:
-        pass
+    except Exception as rate_limit_header_error:
+        logger.debug("Failed to populate rate limit response headers", exc_info=rate_limit_header_error)
 
 
 def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:

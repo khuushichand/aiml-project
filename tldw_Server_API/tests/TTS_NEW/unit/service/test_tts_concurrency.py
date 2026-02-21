@@ -74,7 +74,7 @@ async def test_concurrency_respects_config_limit():
             async for _ in agen:
                 break
         except Exception:
-            pass
+            _ = None
 
     tasks = [asyncio.create_task(run_one()) for _ in range(5)]
     # Allow tasks to start and contend for the semaphore
@@ -110,7 +110,7 @@ async def test_provider_concurrency_respects_provider_limit():
             async for _ in agen:
                 break
         except Exception:
-            pass
+            _ = None
 
     tasks = [asyncio.create_task(run_one()) for _ in range(3)]
     await asyncio.sleep(0.1)

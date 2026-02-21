@@ -318,7 +318,7 @@ class TelemetryConfig:
 
         # Prometheus Configuration
         self.prometheus_port = _env_int("PROMETHEUS_PORT", 9090, minimum=1, maximum=65535)
-        self.prometheus_host = os.getenv("PROMETHEUS_HOST", "0.0.0.0")
+        self.prometheus_host = os.getenv("PROMETHEUS_HOST", "127.0.0.1")
 
         # Feature flags
         self.enable_metrics = os.getenv("ENABLE_METRICS", "true").lower() == "true"

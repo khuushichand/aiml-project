@@ -86,7 +86,7 @@ def _sum_audiobook_output_bytes_for_ids(cdb, user_id: int, ids: list[int]) -> in
     total_bytes = 0
     try:
         rows = cdb.backend.execute(
-            f"SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+            f"SELECT id, type, metadata_json, storage_path, deleted FROM outputs WHERE user_id = ? AND id IN ({placeholders})",  # nosec B608
             tuple([user_id] + list(ids)),
         ).rows
     except _OUTPUTS_DB_FALLBACK_EXCEPTIONS as exc:
@@ -509,7 +509,7 @@ def delete_outputs_by_ids(cdb, user_id: int, ids: list[int]) -> int:
     audiobook_bytes = _sum_audiobook_output_bytes_for_ids(cdb, user_id, ids)
     try:
         cdb.backend.execute(
-            f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+            f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",  # nosec B608
             tuple([user_id] + list(ids)),
         )
         if audiobook_bytes:

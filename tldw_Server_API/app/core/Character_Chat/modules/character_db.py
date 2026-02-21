@@ -392,8 +392,8 @@ def load_character_and_image(
             try:
                 image_field = image_field.tobytes()  # type: ignore[attr-defined]
                 char_data["image"] = image_field
-            except Exception:
-                pass
+            except Exception as image_bytes_error:
+                logger.debug("Character DB failed to normalize image field bytes", exc_info=image_bytes_error)
 
         if isinstance(image_field, bytes) and image_field:
             try:

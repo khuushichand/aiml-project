@@ -79,16 +79,16 @@ def _metrics_increment(name: str, labels: dict[str, str] | None = None, value: i
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
         increment_counter(name, value, labels)
-    except Exception:
-        pass
+    except Exception as metrics_error:
+        logger.debug("Notes graph counter metric emission failed", exc_info=metrics_error)
 
 
 def _metrics_observe(name: str, value: float, labels: dict[str, str] | None = None) -> None:
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
         observe_histogram(name, value, labels)
-    except Exception:
-        pass
+    except Exception as metrics_error:
+        logger.debug("Notes graph histogram metric emission failed", exc_info=metrics_error)
 
 
 # ---------------------------------------------------------------------------

@@ -86,7 +86,7 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
     try:
         _svc_module._service_instance = service
     except Exception:
-        pass
+        _ = None
 
     try:
         cache = getattr(_svc_module, "_service_instances_by_user")
@@ -122,11 +122,11 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
             cache = getattr(_svc_module, "_service_instances_by_user")
             cache.pop(user_id, None)
         except Exception:
-            pass
+            _ = None
         try:
             _svc_module._service_instance = None
         except Exception:
-            pass
+            _ = None
         event_loop.run_until_complete(service.shutdown())
         app.dependency_overrides.pop(get_unified_evaluation_service, None)
 

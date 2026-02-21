@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Annotated, Any
@@ -245,7 +246,7 @@ async def submit_audio_job(
         job_type = "audio_download" if (req.url and req.url.strip()) else "audio_convert"
         if job_type == "audio_download":
             payload["url"] = req.url.strip()
-            payload["temp_dir"] = os.getenv("AUDIO_JOBS_TEMP", "/tmp")
+            payload["temp_dir"] = os.getenv("AUDIO_JOBS_TEMP", tempfile.gettempdir())
         else:
             payload["local_path"] = req.local_path.strip()
 

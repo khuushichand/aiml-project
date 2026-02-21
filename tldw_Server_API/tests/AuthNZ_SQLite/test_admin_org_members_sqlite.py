@@ -71,7 +71,7 @@ async def test_admin_org_members_endpoints_sqlite(tmp_path):
             )
         except Exception:
             # Best-effort only; do not fail test setup on state assignment issues
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

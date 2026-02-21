@@ -106,7 +106,7 @@ def _build_references_cache_key(
     page_flag = f":offset:{offset}:limit:{limit}:cap:{parse_cap if parse_cap is not None else 'all'}"
     normalized_query = re.sub(r"\s+", " ", (search_query or "").strip().lower())
     query_flag = (
-        f":q:{hashlib.md5(normalized_query.encode('utf-8')).hexdigest()[:12]}"
+        f":q:{hashlib.md5(normalized_query.encode('utf-8'), usedforsecurity=False).hexdigest()[:12]}"
         if normalized_query
         else ":q:none"
     )
@@ -140,7 +140,7 @@ def _is_rate_limited(err: str | None) -> bool:
 
 def _make_external_cache_key(provider: str, lookup: str) -> str:
     normalized = re.sub(r"\s+", " ", lookup).strip().lower()
-    digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()
     return f"cache:/references/enrich:{provider}:{digest}"
 
 

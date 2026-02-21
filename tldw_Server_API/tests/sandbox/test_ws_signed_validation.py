@@ -72,7 +72,7 @@ def test_ws_signed_valid_token_connects() -> None:
             try:
                 _ = ws.receive_json()
             except Exception:
-                pass
+                _ = None
             ws.close()
 
 

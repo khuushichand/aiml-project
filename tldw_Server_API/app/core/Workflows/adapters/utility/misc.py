@@ -11,6 +11,7 @@ import datetime
 import difflib
 import json
 import os
+import tempfile
 import time
 from typing import Any
 
@@ -625,7 +626,7 @@ async def run_screenshot_capture_adapter(config: dict[str, Any], context: dict[s
         if not url:
             return {"error": "missing_url", "simulated": True}
         return {
-            "screenshot_path": "/tmp/simulated_screenshot.png",
+            "screenshot_path": os.path.join(tempfile.gettempdir(), "simulated_screenshot.png"),
             "url": url,
             "simulated": True,
         }

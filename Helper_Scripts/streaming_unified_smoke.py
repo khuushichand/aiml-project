@@ -52,10 +52,13 @@ from common.repo_utils import configure_local_egress, ensure_repo_root
 def _status_from_exc(exc: Exception) -> int:
     resp = getattr(exc, "response", None)
     if resp is not None:
+        status_code = getattr(resp, "status_code", 0)
         try:
-            return int(getattr(resp, "status_code", 0) or 0)
-        except Exception:
-            pass
+            parsed_status = int(status_code or 0)
+        except (TypeError, ValueError):
+            parsed_status = 0
+        if parsed_status > 0:
+            return parsed_status
     msg = str(exc)
     for token in msg.split():
         if token.isdigit() and len(token) == 3:
@@ -400,8 +403,8 @@ def main() -> int:
     finally:
         try:
             asyncio.run(http_client.shutdown_http_client())
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"HTTP client shutdown warning: {exc}", file=sys.stderr)
 
     if rc == 0:
         print("\nAll selected unified streaming smoke checks completed successfully.")

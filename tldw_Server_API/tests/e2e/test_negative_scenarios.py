@@ -513,7 +513,7 @@ class TestDataValidationNegative:
             try:
                 authenticated_client.delete_note(note_id)
             except:
-                pass
+                _ = None
 
         # At least one protection method should be active
         assert blocked_count > 0 or sanitized_count > 0, "No XSS protection detected!"

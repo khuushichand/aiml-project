@@ -17,6 +17,7 @@ from loguru import logger
 from ..base.exceptions import PayloadError
 from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig
+from tldw_Server_API.app.core.Security.safe_pickle import safe_pickle_loads
 
 
 class PayloadService:
@@ -160,7 +161,7 @@ class PayloadService:
                         "Set SCHEDULER_ALLOW_LEGACY_PICKLE_PAYLOADS=true "
                         "to enable compatibility mode."
                     )
-                return pickle.loads(data)
+                return safe_pickle_loads(data)
             else:
                 raise PayloadError(f"Unknown payload format: {header['format']}")
 

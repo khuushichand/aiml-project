@@ -98,7 +98,7 @@ def _detect_auth_mode() -> str:
             if response.status_code == 200:
                 return response.json().get("auth_mode", "multi_user")
     except:
-        pass
+        _ = None
     return "multi_user"  # Default
 
 
@@ -261,4 +261,4 @@ def _cleanup_open_httpx_clients():
         from tldw_Server_API.tests.e2e.fixtures import APIClient
         APIClient.close_open_clients()
     except Exception:
-        pass
+        _ = None

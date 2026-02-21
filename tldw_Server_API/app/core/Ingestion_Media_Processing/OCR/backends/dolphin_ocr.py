@@ -365,6 +365,7 @@ def _load_transformers():
         from transformers import AutoProcessor, VisionEncoderDecoderModel
 
         model_path = os.getenv("DOLPHIN_MODEL_PATH", "ByteDance/Dolphin-v2")
+        model_revision = (os.getenv("DOLPHIN_MODEL_REVISION") or "").strip() or None
         device_env = os.getenv("DOLPHIN_DEVICE")
         device = device_env or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -372,15 +373,24 @@ def _load_transformers():
 
         _TF_MODEL = VisionEncoderDecoderModel.from_pretrained(
             model_path,
+            revision=model_revision,
             trust_remote_code=True,
             torch_dtype=dtype,
+        )  # nosec B615
+        _TF_PROCESSOR = AutoProcessor.from_pretrained(  # nosec B615
+            model_path,
+            revision=model_revision,
+            trust_remote_code=True,
         )
-        _TF_PROCESSOR = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
         _TF_TOKENIZER = getattr(_TF_PROCESSOR, "tokenizer", None)
         if _TF_TOKENIZER is None:
             from transformers import AutoTokenizer
 
-            _TF_TOKENIZER = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            _TF_TOKENIZER = AutoTokenizer.from_pretrained(  # nosec B615
+                model_path,
+                revision=model_revision,
+                trust_remote_code=True,
+            )
         _TF_MODEL.to(device)
         _TF_MODEL.eval()
 

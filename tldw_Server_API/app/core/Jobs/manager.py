@@ -976,7 +976,7 @@ class JobManager:
     def _pg_advisory_key(self, *parts: str) -> int:
         """Compute a signed 64-bit advisory lock key from parts."""
         s = (":".join(["jobs"] + [p or "" for p in parts])).encode("utf-8", "ignore")
-        h = int.from_bytes(hashlib.sha1(s).digest()[:8], "big", signed=False)
+        h = int.from_bytes(hashlib.sha1(s, usedforsecurity=False).digest()[:8], "big", signed=False)
         # Fit into signed BIGINT range used by pg advisory locks
         if h >= 2**63:
             h = h - 2**63

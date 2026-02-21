@@ -463,8 +463,8 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         if hasattr(obj, key):
             try:
                 return getattr(obj, key)
-            except Exception:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
-                pass
+            except Exception as accessor_error:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
+                logger.debug(f"RAG attribute access failed for key '{key}'; continuing fallback", exc_info=accessor_error)
         # Nested `.document` attribute that may itself be an object
         if hasattr(obj, 'document'):
             doc_obj = obj.document
@@ -475,8 +475,8 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
                 if hasattr(doc_obj, key):
                     try:
                         return getattr(doc_obj, key)
-                    except Exception:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
-                        pass
+                    except Exception as accessor_error:  # noqa: BLE001 - accessor may raise; ignore to continue fallbacks
+                        logger.debug(f"RAG nested attribute access failed for key '{key}'; continuing fallback", exc_info=accessor_error)
         # Dict access (obj may be a dict)
         if isinstance(obj, dict):
             # Direct
@@ -1129,8 +1129,8 @@ async def unified_search_endpoint(
                 if hasattr(request_raw, 'state'):
                     team_ids = getattr(request_raw.state, 'team_ids', None)
                     org_ids = getattr(request_raw.state, 'org_ids', None)
-            except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-                pass
+            except Exception as topic_context_error:  # noqa: BLE001 - topic monitoring should not break requests
+                logger.debug("Topic monitoring request-state extraction failed; continuing", exc_info=topic_context_error)
             if request.query:
                 mon.schedule_evaluate_and_alert(
                     user_id=str(uid) if uid else None,
@@ -1141,8 +1141,8 @@ async def unified_search_endpoint(
                     team_ids=team_ids,
                     org_ids=org_ids,
                 )
-        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-            pass
+        except Exception as topic_schedule_error:  # noqa: BLE001 - topic monitoring should not break requests
+            logger.debug("Topic monitoring scheduling failed; continuing", exc_info=topic_schedule_error)
 
         # Set up database paths
         db_paths = {
@@ -1577,7 +1577,7 @@ async def simple_search_endpoint(
     """
     try:
         try:
-            _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
+            _qh = hashlib.md5((query or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
             logger.info(f"Simple search: query_hash={_qh} len={len(query or '')}")
         except (AttributeError, TypeError, ValueError):
             logger.info("Simple search request received")
@@ -1593,8 +1593,8 @@ async def simple_search_endpoint(
                 scope_type="user",
                 scope_id=uid,
             )
-        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-            pass
+        except Exception as topic_monitoring_error:  # noqa: BLE001 - topic monitoring should not break requests
+            logger.debug("Topic monitoring in simple search failed; continuing", exc_info=topic_monitoring_error)
 
         # Use the simple_search wrapper
         effective_sources = sources or ["media_db", "notes", "characters"]
@@ -2025,8 +2025,8 @@ async def unified_search_stream_endpoint(
                         yield json.dumps({"type": "spans", "count": len(prov), "provenance": prov[:50]}) + "\n"
                     # Use synthetic chunk as the sole document for streaming generation
                     docs = _normalize_documents_for_generation(ares.documents)
-                except Exception:  # noqa: BLE001 - agentic streaming should be best-effort
-                    pass
+                except Exception as agentic_stream_error:  # noqa: BLE001 - agentic streaming should be best-effort
+                    logger.debug("Agentic streaming prefetch failed; continuing standard stream", exc_info=agentic_stream_error)
 
             # Emit initial contexts (top-k with minimal fields) + a safe rationale plan (standard path)
             try:
@@ -2067,8 +2067,8 @@ async def unified_search_stream_endpoint(
                     ]
                 }
                 yield json.dumps({"type": "reasoning", **rationale}) + "\n"
-            except Exception:  # noqa: BLE001 - safe rationale should never break stream
-                pass
+            except Exception as rationale_error:  # noqa: BLE001 - safe rationale should never break stream
+                logger.debug("Streaming rationale payload failed; continuing without rationale", exc_info=rationale_error)
 
             # Minimal context for generation
             try:
@@ -2192,8 +2192,8 @@ async def advanced_search_endpoint(
                 scope_type="user",
                 scope_id=uid,
             )
-        except Exception:  # noqa: BLE001 - topic monitoring should not break requests
-            pass
+        except Exception as topic_monitoring_error:  # noqa: BLE001 - topic monitoring should not break requests
+            logger.debug("Topic monitoring in advanced search failed; continuing", exc_info=topic_monitoring_error)
 
         # Set up database paths
         db_paths = {

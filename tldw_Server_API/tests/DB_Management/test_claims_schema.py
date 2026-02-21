@@ -19,7 +19,7 @@ def temp_media_db_path():
 
             shutil.rmtree(d, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
 
 
 def _mk_db(path: str) -> MediaDatabase:

@@ -80,7 +80,7 @@ def test_ledger_status_requires_key_and_admin(disable_heavy_startup, monkeypatch
                 request_id=None,
             )
         except Exception:
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _non_admin_principal
@@ -118,7 +118,7 @@ def test_ledger_status_requires_key_and_admin(disable_heavy_startup, monkeypatch
                 request_id=None,
             )
         except Exception:
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _admin_principal

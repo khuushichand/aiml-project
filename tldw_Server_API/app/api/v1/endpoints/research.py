@@ -391,9 +391,9 @@ async def websearch_endpoint(
                             # If the underlying server doesn't support disconnect checks, stop monitoring
                             break
                         await asyncio.sleep(0.5)
-                except Exception:
+                except Exception as monitor_error:
                     # Never let the monitor crash the endpoint
-                    pass
+                    logger.debug("Research request disconnect monitor failed; stopping monitor task", exc_info=monitor_error)
 
             monitor = asyncio.create_task(_watch_disconnect())
             aggregated = await analyze_and_aggregate(

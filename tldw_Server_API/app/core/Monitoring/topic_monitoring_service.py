@@ -646,7 +646,7 @@ class TopicMonitoringService:
             grams = [text]
         weights = [0] * 64
         for gram in grams:
-            digest = hashlib.sha1(gram.encode("utf-8")).digest()
+            digest = hashlib.sha1(gram.encode("utf-8"), usedforsecurity=False).digest()
             h = int.from_bytes(digest[:8], "big")
             for i in range(64):
                 if h & (1 << i):

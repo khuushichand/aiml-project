@@ -110,9 +110,9 @@ def apply_tool_choice(payload: dict[str, Any], tools: list | None, tool_choice: 
             payload["tool_choice"] = "none"
         elif tool_choice is not None and tools:
             payload["tool_choice"] = tool_choice
-    except Exception:
+    except Exception as payload_error:
         # Never fail due to helper
-        pass
+        logger.debug("Provider payload helper failed while attaching tool metadata", exc_info=payload_error)
 
 
 class EmbeddingsProvider(ABC):

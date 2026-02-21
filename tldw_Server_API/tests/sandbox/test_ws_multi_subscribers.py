@@ -130,7 +130,7 @@ def test_ws_multi_subs_live_stream(monkeypatch) -> None:
                     time.sleep(0.02)
                     hub.publish_event(run_id, "end", {})
                 except Exception:
-                    pass
+                    _ = None
 
             t = threading.Thread(target=_publisher, daemon=True)
             t.start()

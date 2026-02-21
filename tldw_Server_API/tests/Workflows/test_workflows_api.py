@@ -349,7 +349,7 @@ def test_artifact_download_per_run_non_block(monkeypatch, client_with_workflows_
             try:
                 setattr(run, 'validation_mode', 'non-block')
             except Exception:
-                pass
+                _ = None
         return run
     monkeypatch.setattr(db, 'get_run', _patched_get_run, raising=False)
 

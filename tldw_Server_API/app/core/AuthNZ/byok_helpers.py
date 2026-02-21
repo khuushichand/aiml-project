@@ -183,8 +183,8 @@ def resolve_server_default_key(provider: str) -> str | None:
         override = get_llm_provider_override(provider_norm)
         if override and override.api_key:
             return override.api_key
-    except Exception:
-        pass
+    except Exception as override_error:
+        _ = override_error  # fallback to env/default key lookup
     env_key = _provider_env_key(provider_norm)
     env_val = os.getenv(env_key)
     if env_val is not None and env_val.strip():

@@ -11,6 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, Optional, Union
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 try:
@@ -50,8 +51,8 @@ def sanitize_html_text(value: Optional[str]) -> Optional[str]:
                 if decoded == v:
                     break
                 v = decoded
-        except Exception:
-            pass
+        except Exception as decode_error:
+            logger.debug("Evaluation HTML sanitization decode fallback failed", exc_info=decode_error)
 
         # Remove all HTML tags and dangerous patterns more thoroughly
         # Remove script tags and their content (case insensitive, handles broken tags)
@@ -208,11 +209,8 @@ class EvaluationSpec(BaseModel):
     @model_validator(mode="after")
     def _validate_rag_pipeline(self) -> "EvaluationSpec":  # type: ignore[name-defined]
         """Ensure nested rag_pipeline spec exists when subtype requires it."""
-        try:
-            if self.sub_type == 'rag_pipeline' and self.rag_pipeline is None:
-                raise ValueError("rag_pipeline subtype requires eval_spec.rag_pipeline configuration")
-        except Exception:
-            pass
+        if self.sub_type == 'rag_pipeline' and self.rag_pipeline is None:
+            raise ValueError("rag_pipeline subtype requires eval_spec.rag_pipeline configuration")
         return self
 
 

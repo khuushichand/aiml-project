@@ -194,7 +194,7 @@ def dual_backend_env(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator
             try:
                 _drop_postgres_database(config)  # type: ignore[name-defined]
             except Exception:
-                pass
+                _ = None
 
 
 @pytest.fixture

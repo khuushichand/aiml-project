@@ -77,4 +77,4 @@ def test_ws_stdin_idle_timeout_emits_truncated_and_closes(ws_flush, monkeypatch)
             try:
                 ws.close()
             except Exception:
-                pass
+                _ = None

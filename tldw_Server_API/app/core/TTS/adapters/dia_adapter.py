@@ -138,6 +138,7 @@ class DiaAdapter(TTSAdapter):
 
         # Model configuration
         self.model_path = self.config.get("dia_model_path", "nari-labs/dia")
+        self.model_revision = self.config.get("dia_model_revision") or os.getenv("DIA_MODEL_REVISION")
         # Device selection: prefer explicit; fallback to CUDA if available else CPU
         preferred = self.config.get("dia_device")
         if preferred:
@@ -244,9 +245,10 @@ class DiaAdapter(TTSAdapter):
         logger.info(f"{self.provider_name}: Loading processor from {self.model_path}")
         self.processor = AutoProcessor.from_pretrained(
             self.model_path,
+            revision=self.model_revision,
             trust_remote_code=True,
             local_files_only=(not self.auto_download)
-        )
+        )  # nosec B615
 
         # Load model with appropriate dtype
         logger.info(f"{self.provider_name}: Loading model from {self.model_path}")
@@ -266,9 +268,10 @@ class DiaAdapter(TTSAdapter):
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_path,
+            revision=self.model_revision,
             local_files_only=(not self.auto_download),
             **model_kwargs,
-        )
+        )  # nosec B615
         self.model = self.model.to(self.device)
         self.model.eval()
         return True

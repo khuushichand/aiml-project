@@ -87,7 +87,7 @@ def test_concurrent_renew_extends_lease_dual_backend(prompt_studio_dual_backend_
         try:
             db.renew_job_lease(job["id"], seconds=seconds)
         except Exception:
-            pass
+            _ = None
 
     threads = [threading.Thread(target=renew, args=(s,)) for s in (5, 7, 9)]
     for t in threads:

@@ -37,6 +37,6 @@ async def test_claims_retriever_fts_search_returns_documents(tmp_path):
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None
     assert docs, "Claims retriever should return at least one matching document"
     assert any("programming language" in doc.content for doc in docs), "Expected retrieved content to include the claim text"

@@ -73,7 +73,7 @@ async def test_audio_worker_pipeline_smoke_skip_if_missing():
             try:
                 os.remove(tmp_path)
             except Exception:
-                pass
+                _ = None
 
 
 @pytest.mark.asyncio

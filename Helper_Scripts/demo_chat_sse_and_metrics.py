@@ -163,8 +163,8 @@ def print_unified_sse_metrics(metrics_text: str) -> None:
         if g and _labels_match(g.group(1)):
             try:
                 hwm_val = float(g.group(2))
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                continue
 
     if hist_lines:
         print("\nSSE enqueue→yield histogram (chat):")
@@ -207,8 +207,8 @@ def main() -> int:
     finally:
         try:
             asyncio.run(http_client.shutdown_http_client())
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"HTTP client shutdown warning: {exc}", file=sys.stderr)
 
     return rc
 

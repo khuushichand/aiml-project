@@ -161,7 +161,7 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ async def test_message_placeholders_and_length_guard(monkeypatch):
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
 
 
 # --- Unit Tests for Helper Functions (Regression Tests) ---

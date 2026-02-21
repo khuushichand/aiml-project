@@ -64,7 +64,7 @@ def test_chatbooks_export_import_two_users_subset_scoping_counts(api_client):
         try:
             c.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         c.login(creds["username"], creds["password"])  # sets bearer
 
     # Baseline counts for A and B
@@ -225,7 +225,7 @@ def test_chatbooks_export_import_two_users_async_jobs(api_client):
         try:
             c.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         c.login(creds["username"], creds["password"])  # sets bearer
 
     # Baseline counts
@@ -404,7 +404,7 @@ def test_chatbooks_export_cancel_midflight_if_possible(api_client):
     try:
         client_a.register(**ua)
     except httpx.HTTPStatusError:
-        pass
+        _ = None
     client_a.login(ua["username"], ua["password"])  # sets bearer
 
     note = client_a.create_note(title="Cancel Export Note", content="content for cancel export test")
@@ -477,7 +477,7 @@ def test_chatbooks_import_cancel_midflight_if_possible(api_client):
         try:
             c.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         c.login(creds["username"], creds["password"])  # sets bearer
 
     # Prepare a small sync export as A
@@ -606,7 +606,7 @@ def test_chatbooks_export_cancel_reflected_in_job_list(api_client):
     try:
         c.register(**ua)
     except httpx.HTTPStatusError:
-        pass
+        _ = None
     c.login(ua["username"], ua["password"])  # bearer
 
     # Make async export to have a job
@@ -667,7 +667,7 @@ def test_chatbooks_admin_cannot_cancel_other_users_jobs(api_client):
     try:
         ua_client.register(**ua)
     except httpx.HTTPStatusError:
-        pass
+        _ = None
     ua_client.login(ua["username"], ua["password"])  # bearer for user A
 
     # Start async export for user A
@@ -700,7 +700,7 @@ def test_chatbooks_admin_cannot_cancel_other_users_jobs(api_client):
     try:
         ua_client.client.delete(f"/api/v1/chatbooks/export/jobs/{job_id}")
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.mark.critical
@@ -721,7 +721,7 @@ def test_chatbooks_import_cancel_reflected_in_job_list(api_client):
     try:
         c.register(**u)
     except httpx.HTTPStatusError:
-        pass
+        _ = None
     c.login(u["username"], u["password"])  # bearer
 
     # Prepare export

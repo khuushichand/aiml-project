@@ -408,6 +408,7 @@ def _load_transformers():
         from transformers import AutoModel, AutoProcessor
 
         model_path = os.getenv("NEMOTRON_MODEL_PATH", "nvidia/NVIDIA-Nemotron-Parse-v1.1")
+        model_revision = (os.getenv("NEMOTRON_MODEL_REVISION") or "").strip() or None
         device_env = os.getenv("NEMOTRON_DEVICE")
         device_map = device_env or "auto"
 
@@ -423,11 +424,16 @@ def _load_transformers():
 
         _TF_MODEL = AutoModel.from_pretrained(
             model_path,
+            revision=model_revision,
             trust_remote_code=True,
             torch_dtype=dtype,
             device_map=device_map,
+        )  # nosec B615
+        _TF_PROCESSOR = AutoProcessor.from_pretrained(  # nosec B615
+            model_path,
+            revision=model_revision,
+            trust_remote_code=True,
         )
-        _TF_PROCESSOR = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
         return _TF_MODEL, _TF_PROCESSOR
 
 

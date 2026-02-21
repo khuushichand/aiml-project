@@ -32,8 +32,8 @@ def bench_curl(url: str, headers: Dict[str, str], runs: int, timeout: float) -> 
         t0 = time.time()
         try:
             http_fetch(url, method="GET", headers=headers, backend="curl", http2=True, timeout=timeout, allow_redirects=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] curl fetch failed for {url}: {exc}", file=sys.stderr)
         lat.append(max(0.0, time.time() - t0))
     return lat
 

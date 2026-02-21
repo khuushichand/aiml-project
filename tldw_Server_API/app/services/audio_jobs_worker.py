@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import tempfile
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -281,7 +282,7 @@ async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None
                 if jtype == "audio_download":
                     # Download to temp path
                     url = payload.get("url")
-                    temp_dir = payload.get("temp_dir") or os.getenv("AUDIO_JOBS_TEMP", "/tmp")
+                    temp_dir = payload.get("temp_dir") or os.getenv("AUDIO_JOBS_TEMP", tempfile.gettempdir())
                     if not url:
                         raise ValueError("missing url in payload")
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (

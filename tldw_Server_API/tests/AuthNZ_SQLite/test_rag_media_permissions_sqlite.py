@@ -141,7 +141,7 @@ async def test_rag_search_claims_with_api_key_sqlite(tmp_path, monkeypatch):
         try:
             await pool.close()
         except Exception:
-            pass
+            _ = None
         await reset_db_pool()
         reset_settings()
 
@@ -206,6 +206,6 @@ async def test_media_process_videos_requires_permission_sqlite(tmp_path):
         try:
             await pool.close()
         except Exception:
-            pass
+            _ = None
         await reset_db_pool()
         reset_settings()

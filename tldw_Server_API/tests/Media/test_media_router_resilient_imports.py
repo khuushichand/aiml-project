@@ -11,7 +11,23 @@ from fastapi import APIRouter
 @pytest.mark.unit
 def test_media_router_keeps_core_routes_when_optional_module_import_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     module_name = "tldw_Server_API.app.api.v1.endpoints.media"
-    sys.modules.pop(module_name, None)
+    parent_package_name = "tldw_Server_API.app.api.v1.endpoints"
+    module_prefix = f"{module_name}."
+    original_media_modules = {
+        name: module
+        for name, module in list(sys.modules.items())
+        if name == module_name or name.startswith(module_prefix)
+    }
+    parent_package = sys.modules.get(parent_package_name)
+    had_parent_media_attr = bool(parent_package and hasattr(parent_package, "media"))
+    original_parent_media_attr = (
+        getattr(parent_package, "media")
+        if had_parent_media_attr and parent_package is not None
+        else None
+    )
+    for name in list(sys.modules):
+        if name == module_name or name.startswith(module_prefix):
+            sys.modules.pop(name, None)
     original_import_module = importlib.import_module
 
     listing_router = APIRouter()
@@ -44,10 +60,24 @@ def test_media_router_keeps_core_routes_when_optional_module_import_fails(monkey
             raise ImportError(f"simulated heavy-import block for {name}")
         return original_import_module(name, package)
 
-    monkeypatch.setattr(importlib, "import_module", _patched_import_module)
-    media_module = importlib.import_module(module_name)
-    route_paths = {route.path for route in media_module.router.routes}
+    try:
+        monkeypatch.setattr(importlib, "import_module", _patched_import_module)
+        media_module = importlib.import_module(module_name)
+        route_paths = {route.path for route in media_module.router.routes}
 
-    assert "/" in route_paths
-    assert "/{media_id}" in route_paths
-    assert "/process-audios" not in route_paths
+        assert "/" in route_paths
+        assert "/{media_id}" in route_paths
+        assert "/process-audios" not in route_paths
+    finally:
+        for name in list(sys.modules):
+            if name == module_name or name.startswith(module_prefix):
+                sys.modules.pop(name, None)
+        sys.modules.update(original_media_modules)
+        if parent_package is not None:
+            if had_parent_media_attr:
+                setattr(parent_package, "media", original_parent_media_attr)
+            else:
+                try:
+                    delattr(parent_package, "media")
+                except AttributeError:
+                    pass

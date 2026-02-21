@@ -80,7 +80,7 @@ async def test_max_messages_per_chat_limit():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.asyncio
@@ -140,7 +140,7 @@ async def test_max_chats_per_user_limit():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.asyncio
@@ -208,12 +208,12 @@ async def test_soft_message_limit_blocks_non_persisted_completion():
             if crl is not None:
                 crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None
         try:
             if cl is not None:
                 cl._limits = None
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.asyncio
@@ -281,4 +281,4 @@ async def test_chat_completion_per_minute_rate_limit():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None

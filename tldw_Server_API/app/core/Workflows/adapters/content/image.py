@@ -98,8 +98,8 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 prompt = str(last.get("text") or last.get("prompt") or "")
-        except Exception:
-            pass
+        except Exception as prompt_context_error:
+            logger.debug("Image adapter failed to read prompt from context fallback", exc_info=prompt_context_error)
     prompt = prompt or ""
 
     if not prompt.strip():

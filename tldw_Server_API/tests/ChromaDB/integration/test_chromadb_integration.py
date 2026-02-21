@@ -56,7 +56,7 @@ class TestChromaDBSetup:
                     if callable(stop_fn):
                         stop_fn()
             except Exception:
-                pass
+                _ = None
 
     def test_chromadb_persistence(self, temp_chroma_path):
 
@@ -85,7 +85,7 @@ class TestChromaDBSetup:
                     if callable(stop1):
                         stop1()
             except Exception:
-                pass
+                _ = None
 
         # Create new client and verify data persists
         try:
@@ -107,7 +107,7 @@ class TestChromaDBSetup:
                     if callable(stop2):
                         stop2()
             except Exception:
-                pass
+                _ = None
 
     def test_multiple_collections(self, chroma_client):
 
@@ -637,7 +637,7 @@ class TestErrorRecovery:
             try:
                 manager.close()
             except Exception:
-                pass
+                _ = None
 
 
 if __name__ == "__main__":

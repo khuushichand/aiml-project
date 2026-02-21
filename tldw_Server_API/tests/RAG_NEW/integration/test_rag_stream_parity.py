@@ -44,7 +44,7 @@ def client_with_stream_overrides(monkeypatch, auth_headers):
         fastapi_app.dependency_overrides[_get_media_db] = _stub_media_db
         fastapi_app.dependency_overrides[_get_chacha_db] = _stub_chacha_db
     except Exception:
-        pass
+        _ = None
 
     with TestClient(fastapi_app, headers=auth_headers) as client:
         yield client

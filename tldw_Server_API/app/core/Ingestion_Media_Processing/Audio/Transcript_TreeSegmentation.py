@@ -356,8 +356,8 @@ class TreeSegmenter:
                     try:
                         asyncio.set_event_loop(None)
                         loop.close()
-                    except Exception:
-                        pass
+                    except Exception as loop_close_error:
+                        logger.debug("Transcript segmentation loop close failed", exc_info=loop_close_error)
 
     def segment_meeting(self, K: int) -> list[int]:
         """Segment the meeting into up to K segments.

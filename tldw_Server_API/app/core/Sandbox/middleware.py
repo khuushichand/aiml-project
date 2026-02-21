@@ -34,7 +34,7 @@ class SandboxArtifactTraversalGuardMiddleware(BaseHTTPMiddleware):
             for p in (raw_path, path):
                 if p and _is_sandbox_runs(p) and _has_traversal(p):
                     return JSONResponse({"detail": "Path traversal detected"}, status_code=400)
-        except Exception:
+        except Exception as guard_error:
             # Never fail a request due to guard errors
-            pass
+            _ = guard_error
         return await call_next(request)

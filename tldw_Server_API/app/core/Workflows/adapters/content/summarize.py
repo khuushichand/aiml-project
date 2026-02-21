@@ -54,8 +54,8 @@ async def run_summarize_adapter(config: dict[str, Any], context: dict[str, Any])
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 text = str(last.get("text") or last.get("content") or last.get("summary") or "")
-        except Exception:
-            pass
+        except Exception as text_context_error:
+            logger.debug("Summarize adapter failed to read text from context fallback", exc_info=text_context_error)
     text = text or ""
 
     if not text.strip():

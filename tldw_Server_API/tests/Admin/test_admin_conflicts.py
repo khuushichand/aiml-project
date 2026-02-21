@@ -54,7 +54,7 @@ def _admin_app():
             )
         except Exception:
             # Best-effort; not all test paths require request.state.auth
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

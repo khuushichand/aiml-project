@@ -62,7 +62,7 @@ def test_db(test_db_path):
             VALUES (?, ?, ?, ?, ?)
         """, ("conv1", "Test Conversation", datetime.now().isoformat(), datetime.now().isoformat(), "test_user"))
     except:
-        pass  # Table might not exist or have different schema
+        _ = None  # Table might not exist or have different schema
 
     try:
         # Try to add note data if table exists
@@ -71,7 +71,7 @@ def test_db(test_db_path):
             VALUES (?, ?, ?, ?, ?, ?)
         """, ("note1", "Test Note", "Note content", datetime.now().isoformat(), datetime.now().isoformat(), "test_user"))
     except:
-        pass  # Table might not exist or have different schema
+        _ = None  # Table might not exist or have different schema
 
     yield db
 

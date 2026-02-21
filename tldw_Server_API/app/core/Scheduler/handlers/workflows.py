@@ -102,8 +102,8 @@ async def workflow_run(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         if isinstance(secrets, dict):
             WorkflowEngine.set_run_secrets(run_id, secrets)  # ephemeral; cleared on terminal state
-    except Exception:
-        pass
+    except Exception as secrets_error:
+        logger.debug("Workflow scheduler failed to cache run secrets", exc_info=secrets_error)
 
     # Submit to engine (respect internal concurrency scheduler)
     engine = WorkflowEngine(db=db)

@@ -30,7 +30,7 @@ def sandbox_auth_defaults(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixtu
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +54,7 @@ def sandbox_testclient_auth_headers(monkeypatch: pytest.MonkeyPatch, request: py
             if "X-API-KEY" not in self.headers and "Authorization" not in self.headers:
                 self.headers["X-API-KEY"] = test_key
         except Exception:
-            pass
+            _ = None
 
     def _ws(self, url, *args, **kwargs):  # type: ignore[no-redef]
         headers = dict(kwargs.get("headers") or {})
@@ -80,7 +80,7 @@ def sandbox_testclient_auth_headers(monkeypatch: pytest.MonkeyPatch, request: py
         monkeypatch.setattr(FastAPITestClient, "websocket_connect", _ws, raising=True)
         monkeypatch.setattr(FastAPITestClient, "request", _request, raising=True)
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture(autouse=True)
@@ -114,7 +114,7 @@ def sandbox_redis_factory_shim(monkeypatch: pytest.MonkeyPatch):
                     try:
                         return cls()
                     except Exception:
-                        pass
+                        _ = None
             if orig_redis is not None and hasattr(orig_redis, "from_url"):
                 return orig_redis.from_url(url, **kwargs)
             # Fallback to in-memory stub for tests
@@ -170,7 +170,7 @@ def patch_sandbox_heartbeat_sleep(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(sb.asyncio, "sleep", _fast_sleep, raising=True)
     except Exception:
         # If import fails in a non-WS test, ignore
-        pass
+        _ = None
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -213,7 +213,7 @@ def bypass_sandbox_ws_auth(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixt
             return int(os.getenv("SINGLE_USER_FIXED_ID", "1"))
         monkeypatch.setattr(sb, "_resolve_sandbox_ws_user_id", _fake_resolver, raising=True)
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture()
@@ -229,7 +229,7 @@ def ws_flush():
             hub.publish_heartbeat(run_id)
         except Exception:
             # Best-effort helper; ignore if hub not available
-            pass
+            _ = None
     return _flush
 
 @pytest.fixture(autouse=True, scope="session")

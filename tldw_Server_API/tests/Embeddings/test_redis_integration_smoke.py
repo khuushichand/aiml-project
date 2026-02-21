@@ -40,7 +40,7 @@ async def test_redis_streams_roundtrip_smoke():
         try:
             await client.xgroup_create(stream, "g", id="$", mkstream=True)
         except Exception:
-            pass
+            _ = None
         msgs = await client.xreadgroup("g", "c1", {stream: ">"}, count=1, block=100)
         if msgs:
             s, arr = msgs[0]

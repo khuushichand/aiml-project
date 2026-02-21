@@ -176,9 +176,9 @@ class CompositeScorer(URLScorer):
         for s in self.scorers:
             try:
                 total += float(s.score(url))
-            except Exception:
+            except Exception as scorer_error:
                 # Robust to any single scorer failure
-                pass
+                _ = scorer_error
         if self.normalize and self.scorers:
             total /= float(len(self.scorers))
         self._cache[url] = total

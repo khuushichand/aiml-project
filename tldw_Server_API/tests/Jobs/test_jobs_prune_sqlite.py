@@ -32,7 +32,7 @@ def _backdate_sqlite(job_id: int, days: int = 2):
         try:
             conn.close()
         except Exception:
-            pass
+            _ = None
 
 
 def test_jobs_prune_dry_run_and_filters_sqlite(monkeypatch, tmp_path):
@@ -50,7 +50,7 @@ def test_jobs_prune_dry_run_and_filters_sqlite(monkeypatch, tmp_path):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     jm = JobManager()
     # Seed: 2 completed + 1 failed (old), 1 failed (recent)
@@ -110,7 +110,7 @@ def test_jobs_prune_filters_scope_sqlite(monkeypatch, tmp_path):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     jm = JobManager()
     # Seed one job in a different domain/queue

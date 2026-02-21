@@ -74,6 +74,7 @@ from tldw_Server_API.app.core.Web_Scraping.scoring import (
 from tldw_Server_API.app.core.Web_Scraping.scraper_router import DEFAULT_HANDLER, ScraperRouter
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import build_browser_headers, profile_to_impersonate
 from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
+from tldw_Server_API.app.core.Security.safe_pickle import safe_pickle_loads
 
 _WEBSCRAPE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -475,10 +476,8 @@ class ContentDeduplicator:
                 return
 
             try:
-                import pickle
-
                 with open(self._legacy_storage_path, 'rb') as f:
-                    loaded = pickle.load(f)
+                    loaded = safe_pickle_loads(f.read())
                 self._hashes = self._normalize_hash_data(loaded)
                 self._save_hashes()
                 logger.info(

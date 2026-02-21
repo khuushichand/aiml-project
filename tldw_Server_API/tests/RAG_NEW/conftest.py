@@ -147,7 +147,7 @@ def media_database(temp_db_path) -> Generator[MediaDatabase, None, None]:
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None
 
 @pytest.fixture
 def populated_media_db(media_database) -> MediaDatabase:

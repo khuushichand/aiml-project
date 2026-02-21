@@ -95,8 +95,8 @@ async def get_media_item(
                 bool(headers.get("X-API-KEY")),
                 bool(headers.get("authorization")),
             )
-    except Exception:
-        pass
+    except Exception as auth_header_log_error:
+        logger.debug("Failed to emit media item auth header diagnostics", exc_info=auth_header_log_error)
 
     try:
         details = get_full_media_details_rich2(

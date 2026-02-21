@@ -54,7 +54,7 @@ def _isolate_user_profile_authnz_db(
         _run_async(ensure_authnz_schema_ready_once())
     except Exception:
         # Best-effort fixture; endpoint tests assert behavior directly.
-        pass
+        _ = None
 
     yield
 
@@ -67,4 +67,4 @@ def _isolate_user_profile_authnz_db(
         reset_settings()
         clear_config_cache()
     except Exception:
-        pass
+        _ = None

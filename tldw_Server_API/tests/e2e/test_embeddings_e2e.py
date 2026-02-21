@@ -156,7 +156,7 @@ async def _resolve_embedding_request(api_client, async_client) -> dict:
                     "embedding_model": str(model),
                 }
     except Exception:
-        pass
+        _ = None
     return {
         "embedding_provider": "huggingface",
         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",

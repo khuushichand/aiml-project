@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from defusedxml import ElementTree as DET
 
 @dataclass
 class OPMLSource:
@@ -35,7 +36,7 @@ def parse_opml(opml_bytes: bytes) -> list[OPMLSource]:
     """Parse OPML content and return a flat list of OPMLSource entries."""
     sources: list[OPMLSource] = []
     try:
-        root = ET.fromstring(opml_bytes)
+        root = DET.fromstring(opml_bytes)
     except Exception:
         return sources
     # Standard path: opml -> body

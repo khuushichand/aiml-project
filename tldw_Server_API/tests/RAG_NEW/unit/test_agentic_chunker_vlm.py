@@ -83,4 +83,4 @@ async def test_agentic_vlm_late_chunking_smoke(monkeypatch):
         try:
             os.remove(pdf_path)
         except Exception:
-            pass
+            _ = None

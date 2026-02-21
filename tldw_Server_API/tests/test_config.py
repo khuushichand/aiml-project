@@ -50,21 +50,21 @@ class TestConfig:
                 enable_parts.append("evaluations")
             os.environ["ROUTES_ENABLE"] = ",".join(dict.fromkeys(enable_parts))
         except Exception:
-            pass
+            _ = None
         try:
             existing_disable = os.getenv("ROUTES_DISABLE", "")
             disable_parts = [p for p in existing_disable.replace(" ", ",").split(",") if p]
             disable_parts = [p for p in disable_parts if p.lower() != "evaluations"]
             os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(disable_parts))
         except Exception:
-            pass
+            _ = None
 
         # Disable CSRF for testing
         try:
             from tldw_Server_API.app.core.AuthNZ.csrf_protection import global_settings
             global_settings['CSRF_ENABLED'] = cls.CSRF_ENABLED
         except ImportError:
-            pass
+            _ = None
 
     @classmethod
     def get_auth_headers(cls) -> Dict[str, str]:
@@ -83,7 +83,7 @@ class TestConfig:
             from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
             reset_settings()
         except ImportError:
-            pass
+            _ = None
 
 
 # Singleton instance

@@ -330,8 +330,8 @@ async def update_retention_policy(policy_key: str, days: int) -> dict[str, Any]:
             primary = int(getattr(settings, RETENTION_POLICIES["privilege_snapshots"]["attr"]))
             if effective_days < primary:
                 effective_days = primary
-        except Exception:
-            pass
+        except Exception as retention_floor_error:
+            logger.debug("Failed to apply privilege snapshot retention floor", exc_info=retention_floor_error)
     await upsert_retention_override(policy_key, effective_days)
     setattr(settings, meta["attr"], effective_days)
 

@@ -128,7 +128,7 @@ class AuthNZBackendTests:
                     self.user_db.backend.execute("DELETE FROM users WHERE username LIKE 'test_%'")
                 print("✓ Cleaned up PostgreSQL test data")
             except:
-                pass
+                _ = None
 
         if self.temp_dir:
             import shutil
@@ -219,7 +219,7 @@ class AuthNZBackendTests:
                 self.user_db.create_user(username, email, password_hash)
                 assert False, "Should have raised DuplicateUserError"
             except DuplicateUserError:
-                pass  # Expected
+                _ = None  # Expected
 
         self.run_test("Prevent duplicates", test_duplicate)
 

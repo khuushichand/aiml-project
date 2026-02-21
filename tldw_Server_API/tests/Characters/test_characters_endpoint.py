@@ -76,7 +76,7 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
 
         reset_settings()
     except Exception:
-        pass
+        _ = None
 
     def override_get_db_for_test():
         logger.info("<<<<< OVERRIDE override_get_db_for_test CALLED >>>>>")
@@ -100,7 +100,7 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
     try:
         TestConfig.reset_settings()
     except Exception:
-        pass
+        _ = None
     if original_csrf_setting is None:
         global_settings.pop("CSRF_ENABLED", None)
     else:

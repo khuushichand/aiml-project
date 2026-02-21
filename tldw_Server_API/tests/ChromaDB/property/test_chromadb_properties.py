@@ -59,14 +59,14 @@ def _state_mgr_cleanup():
             try:
                 mgr.close()
             except Exception:
-                pass
+                _ = None
     finally:
         base_dir = globals().get("_state_mgr_base_dir")
         if base_dir:
             try:
                 shutil.rmtree(base_dir, ignore_errors=True)
             except Exception:
-                pass
+                _ = None
         globals()["_state_mgr_singleton"] = None
         globals()["_state_mgr_base_dir"] = None
 
@@ -585,7 +585,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
                 try:
                     self.manager.delete_collection(collection)
                 except Exception:
-                    pass
+                    _ = None
         finally:
             self.collections.clear()
 

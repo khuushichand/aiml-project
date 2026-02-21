@@ -43,7 +43,7 @@ def _test_db():
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
 
 
 def _auth_headers(client: TestClient):

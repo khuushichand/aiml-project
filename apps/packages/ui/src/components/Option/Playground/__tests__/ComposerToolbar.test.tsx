@@ -128,10 +128,12 @@ describe("ComposerToolbar web search", () => {
       screen.getByRole("button", { name: "Advanced controls" })
     ).toBeInTheDocument()
     expect(screen.getByText("Send")).toBeInTheDocument()
-    expect(screen.queryByText("Model selector")).toBeNull()
+    expect(screen.getByText("Model selector")).toBeInTheDocument()
     expect(screen.queryByText("Provider")).toBeNull()
     expect(screen.queryByText("Routing")).toBeNull()
-    expect(screen.getByText("Model")).toBeInTheDocument()
+    expect(
+      screen.getByTestId("composer-casual-model-selector-chip")
+    ).toBeInTheDocument()
     expect(screen.getByTestId("composer-casual-runtime-context-chip")).toHaveTextContent(
       "Runtime"
     )
@@ -347,6 +349,7 @@ describe("ComposerToolbar web search", () => {
     render(
       <ComposerToolbar
         {...createProps({
+          modelSelectButton: null,
           modeLauncherButton: <button type="button">Modes</button>,
           compareControl: <button type="button">Compare</button>,
           contextItems: [

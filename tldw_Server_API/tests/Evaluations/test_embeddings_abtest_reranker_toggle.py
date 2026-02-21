@@ -107,7 +107,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
                 if scores:
                     return True
             except Exception:
-                pass
+                _ = None
         return False
 
     assert not _has_rerank(baseline), "Baseline without reranker should not have rerank_scores"

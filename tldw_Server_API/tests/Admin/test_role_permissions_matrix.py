@@ -28,7 +28,7 @@ def _fresh_client() -> TestClient:
         import asyncio
         asyncio.run(reset_db_pool())
     except Exception:
-        pass
+        _ = None
 
     from tldw_Server_API.app import main as app_main
     importlib.reload(app_main)

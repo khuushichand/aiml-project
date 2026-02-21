@@ -38,7 +38,7 @@ async def test_requests_sliding_window_with_stub_redis():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
     e = "user:1"
     req = RGRequest(entity=e, categories={"requests": {"units": 1}}, tags={"policy_id": "p"})
 
@@ -73,7 +73,7 @@ async def test_tokens_lua_script_retry_after():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
     e = "user:tok"
     req = RGRequest(entity=e, categories={"tokens": {"units": 1}}, tags={"policy_id": "ptok"})
 
@@ -112,7 +112,7 @@ async def test_tokens_per_min_zero_is_unbounded_in_reserve():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
 
     req = RGRequest(entity="user:unb", categories={"tokens": {"units": 50}}, tags={"policy_id": "punb"})
     for i in range(3):
@@ -131,17 +131,17 @@ async def test_tokens_daily_cap_denial_short_circuits_reserve(monkeypatch, tmp_p
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
     try:
         import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
         _dc._daily_ledger = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     ledger = ResourceDailyLedger()
     await ledger.initialize()
@@ -184,7 +184,7 @@ async def test_concurrency_leases_with_zrem_capability():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
     if not hasattr(client, "zrem"):
         pytest.skip("Redis client lacks zrem; skipping precise lease deletion test")
 
@@ -214,7 +214,7 @@ async def test_concurrency_streams_units_enforced():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
 
     req_two = RGRequest(entity="user:9", categories={"streams": {"units": 2}}, tags={"policy_id": "punit"})
     req_one = RGRequest(entity="user:9", categories={"streams": {"units": 1}}, tags={"policy_id": "punit"})
@@ -253,7 +253,7 @@ async def test_per_category_fail_mode_override_on_error(monkeypatch):
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
 
     # Force client methods to raise to trigger fail_mode path
     class _Broken:
@@ -290,7 +290,7 @@ async def test_requests_burst_and_retry_after_behavior():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
     e = "user:burst"
     req = RGRequest(entity=e, categories={"requests": {"units": 1}}, tags={"policy_id": "pburst"})
 
@@ -333,7 +333,7 @@ async def test_requests_steady_rate_no_denials():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
     e = "user:steady"
     req = RGRequest(entity=e, categories={"requests": {"units": 1}}, tags={"policy_id": "psteady"})
 
@@ -367,7 +367,7 @@ async def test_partial_add_rollback_yields_denial_and_cleans_up_members():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
 
     e = "user:partial"
     # Pre-fill tokens to capacity to force token add failure, while requests is empty
@@ -378,7 +378,7 @@ async def test_partial_add_rollback_yields_denial_and_cleans_up_members():
         await client.zadd(tok_key_global, {"prefill": now})
         await client.zadd(tok_key_entity, {"prefill": now})
     except Exception:
-        pass
+        _ = None
 
     req = RGRequest(entity=e, categories={"requests": {"units": 1}, "tokens": {"units": 1}}, tags={"policy_id": "ppartial"})
     d, h = await rg.reserve(req)
@@ -393,7 +393,7 @@ async def test_partial_add_rollback_yields_denial_and_cleans_up_members():
             assert (await client.zcard(kk)) == 0
     except Exception:
         # If scan unsupported, skip strict assertion
-        pass
+        _ = None
 
 
 @pytest.mark.asyncio
@@ -413,7 +413,7 @@ async def test_tokens_refund_allows_additional_within_window():
             for k in keys:
                 await client.delete(k)
     except Exception:
-        pass
+        _ = None
     e = "user:tokref"
     # Reserve 3 tokens at once
     req = RGRequest(entity=e, categories={"tokens": {"units": 3}}, tags={"policy_id": "pref"})

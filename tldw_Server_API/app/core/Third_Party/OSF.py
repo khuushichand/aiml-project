@@ -110,8 +110,8 @@ def get_preprint_by_id(osf_id: str) -> tuple[dict[str, Any] | None, str | None]:
         try:
             if r is not None:
                 r.close()
-        except Exception:
-            pass
+        except Exception as close_error:
+            _ = close_error  # best-effort response close
 
 
 def get_preprint_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:

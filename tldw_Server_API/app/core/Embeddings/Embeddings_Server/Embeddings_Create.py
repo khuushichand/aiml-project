@@ -200,7 +200,7 @@ def _model_cache_subdir_name(model_id: str) -> str:
         sanitized = sanitized[:80].rstrip("._-")
         if not sanitized:
             sanitized = "model"
-    digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(model_id.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
     return f"{sanitized}-{digest}"
 
 
@@ -1216,7 +1216,7 @@ class HuggingFaceEmbedder:
                 # Ensure AutoTokenizer and AutoModel are the classes from transformers (lazy import)
                 AutoModel, AutoTokenizer = _import_transformers()
                 # These lines assign INSTANCES to self.tokenizer and self.model
-                self.tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
                     self.config.model_name_or_path,
                     cache_dir=self.hf_cache_dir,
                     revision=self.revision,
@@ -1224,7 +1224,7 @@ class HuggingFaceEmbedder:
                 )
                 # AutoModel.from_pretrained returns an instance of a model class (e.g., BertModel, RobertaModel)
                 # which is a subclass of PreTrainedModel, which is a torch.nn.Module.
-                loaded_model = AutoModel.from_pretrained(
+                loaded_model = AutoModel.from_pretrained(  # nosec B615
                     self.config.model_name_or_path,
                     cache_dir=self.hf_cache_dir,
                     revision=self.revision,
@@ -1486,7 +1486,7 @@ class ONNXEmbedder:
 
         # Tokenizer is usually stored with the ONNX model by optimum (lazy import)
         _, AutoTokenizer = _import_transformers()
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
             config.model_name_or_path,  # Original HF name for tokenizer
             cache_dir=self.model_specific_onnx_dir,  # Store/load tokenizer from the model's ONNX directory
             revision=self.revision,

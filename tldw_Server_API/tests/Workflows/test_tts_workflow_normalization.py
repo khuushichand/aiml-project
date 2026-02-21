@@ -47,7 +47,7 @@ async def test_run_tts_adapter_post_process_normalization(monkeypatch, tmp_path)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 out_path.write_bytes(b"normalized-audio")
             except Exception:
-                pass
+                _ = None
 
         class _FakeProc:
             def __init__(self):

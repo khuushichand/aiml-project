@@ -13,6 +13,8 @@ import json
 import os
 from typing import Any
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
@@ -542,7 +544,6 @@ async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any])
     if not urls:
         return {"results": [], "count": 0}
     try:
-        import xml.etree.ElementTree as ET
         from urllib.parse import urlparse
         for u in urls:
             try:
@@ -565,8 +566,8 @@ async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any])
                     text = resp.text
                 # Parse as XML (RSS or Atom)
                 try:
-                    root = ET.fromstring(text)
-                except (ET.ParseError, TypeError, ValueError):
+                    root = DET.fromstring(text)
+                except (DefusedXmlException, TypeError, ValueError):
                     continue
                 # Heuristic: RSS <item> or Atom <entry>
                 items = root.findall('.//item')

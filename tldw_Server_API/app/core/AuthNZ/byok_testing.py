@@ -47,8 +47,8 @@ def resolve_default_model_for_provider(provider: str) -> str | None:
         override = get_llm_provider_override(provider)
         if override and override.allowed_models:
             return override.allowed_models[0]
-    except Exception:
-        pass
+    except Exception as override_error:
+        _ = override_error  # continue with default model fallback
 
     normalized = (provider or "").replace(".", "_").replace("-", "_")
     env_key = f"DEFAULT_MODEL_{normalized.upper()}"

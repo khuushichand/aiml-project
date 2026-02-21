@@ -141,3 +141,15 @@ def test_process_audio_wrapper_drops_unsupported_kwargs(
     assert result == {"status": "ok"}
     assert called["inputs"] == ["/tmp/audio.wav"]
     assert called["perform_chunking"] is False
+
+
+def test_keyword_probe_uses_core_for_media_shim_wrapper() -> None:
+    def fake_core_video(*, inputs: list[str]) -> dict[str, Any]:
+        return {"status": "ok", "inputs": inputs}
+
+    selected = core_persistence._callable_for_keyword_probe(
+        candidate_callable=media_mod.process_videos,
+        core_fallback=fake_core_video,
+    )
+
+    assert selected is fake_core_video

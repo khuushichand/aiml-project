@@ -72,9 +72,9 @@ async def process_audios_endpoint(
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("Audio process endpoint usage logging failed", exc_info=usage_log_error)
 
     # Normalize the "urls=['']" sentinel used by some clients.
     if form_data.urls and form_data.urls == [""]:
@@ -246,9 +246,9 @@ async def process_audios_endpoint(
                         "download/egress error: {}",
                         errors_joined,
                     )
-            except Exception:
+            except Exception as endpoint_log_error:
                 # Logging must never affect endpoint behavior.
-                pass
+                logger.debug("Audio process endpoint warning log formatting failed", exc_info=endpoint_log_error)
 
     # Optional template/hierarchical re-chunking of transcripts (best-effort).
     try:

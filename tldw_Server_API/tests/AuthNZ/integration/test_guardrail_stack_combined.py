@@ -121,6 +121,6 @@ async def test_guardrail_stack_login_lockout_and_chat_budget(tmp_path):
         try:
             await pool.close()
         except Exception:
-            pass
+            _ = None
         await reset_db_pool()
         reset_settings()

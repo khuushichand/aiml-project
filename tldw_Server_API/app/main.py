@@ -980,22 +980,15 @@ else:
         logger.warning(f"Reading highlights endpoints unavailable; skipping import: {_rh_err}")
         _HAS_READING_HIGHLIGHTS = False
     # Media Endpoints
-    _full_media_import_enabled = True
-    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_MEDIA"):
-        _full_media_import_enabled = False
-        logger.info("Skipping media endpoint imports in pytest full startup (set MINIMAL_TEST_INCLUDE_MEDIA=1 to enable)")
-    if _full_media_import_enabled:
-        try:
-            from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
-            from tldw_Server_API.app.api.v1.endpoints.web_scraping import (
-                router as web_scraping_router,
-            )
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+        from tldw_Server_API.app.api.v1.endpoints.web_scraping import (
+            router as web_scraping_router,
+        )
 
-            _HAS_MEDIA = True
-        except _IMPORT_EXCEPTIONS as _media_import_err:
-            logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
-            _HAS_MEDIA = False
-    else:
+        _HAS_MEDIA = True
+    except _IMPORT_EXCEPTIONS as _media_import_err:
+        logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
         _HAS_MEDIA = False
     from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
 
@@ -5017,9 +5010,6 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping health router in minimal test app: {_health_min_err}")
     # Media endpoints (permission enforcement tests call /api/v1/media/add)
     _minimal_media_enabled = route_enabled("media")
-    if _in_pytest_cmd and not _env_flag_enabled("MINIMAL_TEST_INCLUDE_MEDIA"):
-        _minimal_media_enabled = False
-        logger.info("Skipping media router in minimal test app (set MINIMAL_TEST_INCLUDE_MEDIA=1 to enable)")
 
     if _minimal_media_enabled:
         try:

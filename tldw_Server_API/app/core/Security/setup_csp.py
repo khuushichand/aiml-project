@@ -103,9 +103,9 @@ class SetupCSPMiddleware(BaseHTTPMiddleware):
                 "Content-Security-Policy",
                 _build_setup_csp(nonce, allow_inline_scripts=allow_inline_scripts, allow_eval=allow_eval),
             )
-        except Exception:
+        except Exception as csp_header_error:
             # Best-effort header set; return original response
-            pass
+            logger.debug("Setup CSP middleware failed to attach CSP header", exc_info=csp_header_error)
         return response
 
 

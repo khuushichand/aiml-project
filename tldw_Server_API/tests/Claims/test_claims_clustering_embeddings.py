@@ -134,7 +134,7 @@ def test_rebuild_claim_clusters_embeddings(monkeypatch):
             try:
                 db.close_connection()
             except Exception:
-                pass
+                _ = None
         if orig_user_db is not None:
             app_settings["USER_DB_BASE_DIR"] = orig_user_db
         if orig_embedding_cfg is not None:
@@ -142,11 +142,11 @@ def test_rebuild_claim_clusters_embeddings(monkeypatch):
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
         try:
             shutil.rmtree(base_dir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
 
 
 def test_rebuild_claim_clusters_embeddings_without_embeddings(monkeypatch):
@@ -185,7 +185,7 @@ def test_rebuild_claim_clusters_embeddings_without_embeddings(monkeypatch):
             try:
                 db.close_connection()
             except Exception:
-                pass
+                _ = None
         if orig_user_db is not None:
             app_settings["USER_DB_BASE_DIR"] = orig_user_db
         if orig_embedding_cfg is not None:
@@ -193,8 +193,8 @@ def test_rebuild_claim_clusters_embeddings_without_embeddings(monkeypatch):
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
         try:
             shutil.rmtree(base_dir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None

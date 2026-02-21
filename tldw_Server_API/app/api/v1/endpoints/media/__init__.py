@@ -231,7 +231,7 @@ def cache_response(key: str, response: dict) -> None:
         import json as _json
 
         content = _json.dumps(response)
-        etag = _hashlib.md5(content.encode()).hexdigest()
+        etag = _hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
         cache.setex(key, 300, f"{etag}|{content}")
         parts = key.split(":", 2)
         if len(parts) >= 3:

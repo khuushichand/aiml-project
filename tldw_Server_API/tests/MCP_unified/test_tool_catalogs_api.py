@@ -95,7 +95,7 @@ def test_tool_catalogs_flow():
         from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller
         get_ip_access_controller.cache_clear()
     except Exception:
-        pass
+        _ = None
 
     # Start app
     from fastapi.testclient import TestClient
@@ -106,7 +106,7 @@ def test_tool_catalogs_flow():
         from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security as _ehs
         app.dependency_overrides[_ehs] = lambda: None
     except Exception:
-        pass
+        _ = None
     client = TestClient(app)
 
     # Prepare single-user row so role assignments don't fail silently
@@ -259,7 +259,7 @@ async def test_org_team_scoped_catalog_management():
         from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller
         get_ip_access_controller.cache_clear()
     except Exception:
-        pass
+        _ = None
 
     # Start app
     from fastapi.testclient import TestClient

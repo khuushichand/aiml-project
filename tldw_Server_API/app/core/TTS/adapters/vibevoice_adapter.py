@@ -164,6 +164,7 @@ class VibeVoiceAdapter(TTSAdapter):
         # Model configuration
         variant_config = self.MODEL_VARIANTS[self.variant]
         self.model_path = self.config.get("vibevoice_model_path", variant_config["path"])
+        self.model_revision = self.config.get("vibevoice_model_revision") or os.getenv("VIBEVOICE_MODEL_REVISION")
         self.context_length = variant_config["context"]
         self.frame_rate = variant_config["frame_rate"]
 
@@ -607,11 +608,12 @@ class VibeVoiceAdapter(TTSAdapter):
 
             local_dir = snapshot_download(
                 repo_id=self.model_path,
+                revision=self.model_revision,
                 local_dir=str(self.model_dir),
                 cache_dir=str(self.cache_dir),
                 resume_download=True,
                 # No symlinks parameter needed in recent huggingface_hub
-            )
+            )  # nosec B615
             if progress.pbar:
                 progress.pbar.close()
             logger.info(f"{self.provider_name}: Model download complete at {local_dir}")

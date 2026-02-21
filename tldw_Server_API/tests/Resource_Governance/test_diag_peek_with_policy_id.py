@@ -20,13 +20,13 @@ async def test_diag_peek_with_policy_id(monkeypatch, tmp_path):
             await reset_db_pool()
             reset_settings()
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
             await ensure_authnz_schema_ready_once()
         except Exception:
-            pass
+            _ = None
 
     async def _create_admin_user_and_key(*, username: str, email: str) -> str:
         from uuid import uuid4

@@ -105,10 +105,10 @@ def test_watchlist_cluster_notifications():
             try:
                 db.close_connection()
             except Exception:
-                pass
+                _ = None
         if orig_user_db is not None:
             app_settings["USER_DB_BASE_DIR"] = orig_user_db
         try:
             shutil.rmtree(base_dir, ignore_errors=True)
         except Exception:
-            pass
+            _ = None

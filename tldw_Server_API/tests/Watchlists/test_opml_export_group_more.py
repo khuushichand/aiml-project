@@ -41,7 +41,7 @@ def _extract_opml_urls(xml_text: str) -> list[str]:
             if url:
                 urls.append(url)
     except Exception:
-        pass
+        _ = None
     return urls
 
 

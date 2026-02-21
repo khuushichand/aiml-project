@@ -73,7 +73,7 @@ def test_jobs_prune_dry_run_and_filters_postgres(monkeypatch, jobs_pg_dsn):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
@@ -121,7 +121,7 @@ def test_jobs_prune_filters_scope_postgres(monkeypatch, jobs_pg_dsn):
     try:
         app.dependency_overrides.clear()
     except Exception:
-        pass
+        _ = None
 
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:

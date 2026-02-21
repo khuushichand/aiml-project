@@ -53,7 +53,7 @@ async def process_podcast_task(
         #     )
         # or code your steps inline. Below is a placeholder:
         result_dict = {
-            "audio_file_path": "/tmp/some_downloaded_audio.mp3",
+            "audio_file_path": "some_downloaded_audio.mp3",
             "segments": [{"Text": "Sample line 1", "Time_Start": 0, "Time_End": 5}],
             "metadata": {"podcast_title": "Fake Show", "podcast_author": "Jane Host"},
             "transcript": "Sample line 1 ... (full transcript)"

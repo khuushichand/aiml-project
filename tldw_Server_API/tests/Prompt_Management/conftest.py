@@ -112,7 +112,7 @@ def prompt_studio_db(tmp_path: Path) -> PromptStudioDatabase:
             if hasattr(db, "close"):
                 db.close()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture

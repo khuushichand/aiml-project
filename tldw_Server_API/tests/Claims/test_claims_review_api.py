@@ -73,7 +73,7 @@ def _principal_override():
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     return _override
@@ -103,7 +103,7 @@ def test_claims_review_flow():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
     fastapi_app.dependency_overrides[get_request_user] = _override_user
@@ -184,7 +184,7 @@ def test_claims_review_corrected_text_updates_span():
         try:
             seed_db.close_connection()
         except Exception:
-            pass
+            _ = None
 
     async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
         override_db = MediaDatabase(db_path=db_path, client_id="1")
@@ -194,7 +194,7 @@ def test_claims_review_corrected_text_updates_span():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
     fastapi_app.dependency_overrides[get_request_user] = _override_user

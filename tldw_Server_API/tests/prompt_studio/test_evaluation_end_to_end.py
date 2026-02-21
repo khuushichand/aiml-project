@@ -34,7 +34,7 @@ def test_db():
         try:
             os.unlink(db_path)
         except:
-            pass
+            _ = None
 
 @pytest.fixture
 def mock_llm_responses():

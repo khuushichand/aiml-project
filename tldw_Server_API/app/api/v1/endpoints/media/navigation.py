@@ -392,6 +392,7 @@ def _build_navigation_cache_key(
     }
     params_sig = hashlib.md5(
         json.dumps(params_payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()
     media_version = _to_int(media.get("version")) or 0
     media_last_modified = str(media.get("last_modified") or "")
@@ -441,6 +442,7 @@ def _compute_navigation_version(
     }
     digest = hashlib.sha1(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()[:10]
     return f"media_{media_id}:v{media_version}:{digest}"
 
@@ -869,7 +871,7 @@ def _extract_transcript_segment_nodes(
 
 def _chunk_path_to_node_id(path_parts: tuple[str, ...]) -> str:
     joined = " > ".join(path_parts)
-    digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(joined.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return f"chunk_meta:{digest}"
 
 

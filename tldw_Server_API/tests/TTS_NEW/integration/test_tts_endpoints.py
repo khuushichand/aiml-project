@@ -421,9 +421,9 @@ class TestTTSStreamingEndpoint:
                 try:
                     list(response.iter_bytes())
                 except Exception:
-                    pass
+                    _ = None
             except Exception:
-                pass
+                _ = None
 
         db_path = DatabasePaths.get_media_db_path(1)
         db = MediaDatabase(db_path=str(db_path), client_id="history_test")

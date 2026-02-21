@@ -5937,7 +5937,7 @@ async def unified_rag_pipeline(
         # Debug output if requested
         if debug_mode:
             try:
-                _qh = hashlib.md5((query or "").encode("utf-8")).hexdigest()[:8]
+                _qh = hashlib.md5((query or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
                 logger.debug(f"Query hash={_qh} len={len(query or '')}")
             except (AttributeError, TypeError, ValueError):
                 logger.debug("Received query (hash unavailable)")

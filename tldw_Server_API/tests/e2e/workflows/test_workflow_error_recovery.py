@@ -506,7 +506,7 @@ class TestStateConsistency(WorkflowTestBase):
             try:
                 self.wait_for_indexing(api_client, media_id, timeout=15)
             except Exception:
-                pass
+                _ = None
 
         # Verify all are searchable
         try:
@@ -540,7 +540,7 @@ class TestStateConsistency(WorkflowTestBase):
                 api_client.delete_media(media_id)
                 deleted_count += 1
             except httpx.HTTPStatusError:
-                pass
+                _ = None
 
         print(f"  Deleted {deleted_count} items")
 
@@ -1049,16 +1049,16 @@ class TestCrossUserDataIsolation(WorkflowTestBase):
                 try:
                     api_client.delete_media(user_a_media_id)
                 except Exception:
-                    pass
+                    _ = None
 
             if user_b_media_id:
                 try:
                     client_b.delete_media(user_b_media_id)
                 except Exception:
-                    pass
+                    _ = None
 
             # Close client B
             try:
                 client_b.close()
             except Exception:
-                pass
+                _ = None

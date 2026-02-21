@@ -424,7 +424,7 @@ class TestHybridSearch:
             response = api_client.search_media(query, limit=5)
             regular_results = self._extract_results(response)
         except:
-            pass
+            _ = None
 
         rag_results = []
         try:
@@ -437,7 +437,7 @@ class TestHybridSearch:
             if response.get("success"):
                 rag_results = response.get("results", [])
         except:
-            pass
+            _ = None
 
         # Check if hybrid search improves relevance
         if rag_results:
@@ -496,7 +496,7 @@ class TestHybridSearch:
             if response.get("success"):
                 results_no_rerank = response.get("results", [])
         except:
-            pass
+            _ = None
 
         # Search with reranking
         results_with_rerank = []
@@ -510,7 +510,7 @@ class TestHybridSearch:
             if response.get("success"):
                 results_with_rerank = response.get("results", [])
         except:
-            pass
+            _ = None
 
         if results_with_rerank and results_no_rerank:
             # Reranked results should better prioritize ML content

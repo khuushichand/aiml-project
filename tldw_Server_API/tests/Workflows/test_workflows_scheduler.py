@@ -41,7 +41,7 @@ def client_admin(monkeypatch, auth_headers):
     try:
         asyncio.run(svc.stop())
     except Exception:
-        pass
+        _ = None
     fastapi_app.dependency_overrides.clear()
 
 

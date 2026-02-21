@@ -101,8 +101,8 @@ def _get_bulk_confirm_threshold() -> int:
                 raw_cfg = config_parser.get(section, "bulkUpdateConfirmThreshold", fallback="").strip()
                 if raw_cfg:
                     return max(1, int(raw_cfg))
-    except Exception:
-        pass
+    except Exception as threshold_error:
+        logger.debug("Failed to load bulk-update threshold from config; using default", exc_info=threshold_error)
     return 1000
 
 
@@ -591,8 +591,8 @@ async def list_user_profiles(
                     page_size,
                     timeout_ms,
                 )
-    except Exception:
-        pass
+    except Exception as telemetry_error:
+        logger.debug("Bulk profile update telemetry failed; continuing", exc_info=telemetry_error)
 
     audit_metadata = {
         "filters": {
@@ -980,8 +980,8 @@ async def bulk_update_user_profiles(
                 total_targets,
                 labels={"dry_run": str(payload.dry_run).lower()},
             )
-    except Exception:
-        pass
+    except Exception as metrics_error:
+        logger.debug("Bulk profile update metrics emission failed; continuing", exc_info=metrics_error)
 
     response = UserProfileBulkUpdateResponse(
         total_targets=total_targets,

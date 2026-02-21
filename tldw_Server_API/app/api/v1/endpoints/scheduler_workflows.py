@@ -182,8 +182,8 @@ async def admin_rescan(
     jobs = 0
     try:
         jobs = len(svc._aps.get_jobs()) if getattr(svc, "_aps", None) else 0  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    except Exception as jobs_count_error:
+        logger.debug("Failed to collect APScheduler job count after admin rescan", exc_info=jobs_count_error)
     return {"ok": True, "jobs": jobs}
 
 
@@ -270,12 +270,12 @@ async def get_schedule(
             if nxt is not None:
                 try:
                     svc._get_db(int(s.user_id)).set_history(s.id, next_run_at=nxt.isoformat())  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+                except Exception as persist_next_run_error:
+                    logger.debug("Failed to persist computed next_run_at for schedule {}", s.id, exc_info=persist_next_run_error)
                 # Refresh s to reflect persisted value
                 s = svc.get(schedule_id) or s
-        except Exception:
-            pass
+        except Exception as cron_parse_error:
+            logger.debug("Failed to compute next_run_at from crontab for schedule {}", s.id, exc_info=cron_parse_error)
     try:
         inputs = json.loads(s.inputs_json or "{}")
     except Exception:

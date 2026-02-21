@@ -73,11 +73,8 @@ class UnifiedRAGRequest(BaseModel):
     if model_validator is not None:
         @model_validator(mode="before")
         def _map_legacy_min_relevance(cls, values):  # type: ignore
-            try:
-                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
-                    values["min_score"] = values.get("min_relevance_score")
-            except Exception:
-                pass
+            if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                values["min_score"] = values.get("min_relevance_score")
             return values
 
     # Optional corpus/namespace for per-corpus indexing and synonyms
@@ -115,14 +112,11 @@ class UnifiedRAGRequest(BaseModel):
     if model_validator is not None:
         @model_validator(mode="before")
         def _alias_corpus_namespace(cls, values):  # type: ignore
-            try:
-                if isinstance(values, dict):
-                    v = values.get("index_namespace")
-                    corpus = values.get("corpus")
-                    if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
-                        values["index_namespace"] = corpus.strip() or v
-            except Exception:
-                pass
+            if isinstance(values, dict):
+                v = values.get("index_namespace")
+                corpus = values.get("corpus")
+                if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
+                    values["index_namespace"] = corpus.strip() or v
             return values
 
     # ========== SEARCH CONFIGURATION ==========
@@ -172,15 +166,7 @@ class UnifiedRAGRequest(BaseModel):
     @field_validator("min_score", mode="before")
     @classmethod
     def _alias_min_relevance_score(cls, v):
-        # Accept legacy field name 'min_relevance_score' as an alias
-        try:
-            if v is None:
-                # In Pydantic v1 pre-validator, original input present in values under '__fields_set__' isn't accessible.
-                # Use a best-effort approach: values may contain raw dict in context if model_dump_compat was used.
-                # Safer: map from a possible shadowed key placed by request parsing layer; fallback no-op.
-                pass
-        except Exception:
-            pass
+        # Field-level aliasing handled by model-level pre-validators.
         return v
 
     # ========== QUERY EXPANSION ==========
@@ -1944,24 +1930,18 @@ class UnifiedBatchRequest(BaseModel):
     if model_validator is not None:
         @model_validator(mode="before")
         def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
-            try:
-                if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
-                    values["min_score"] = values.get("min_relevance_score")
-            except Exception:
-                pass
+            if isinstance(values, dict) and "min_relevance_score" in values and "min_score" not in values:
+                values["min_score"] = values.get("min_relevance_score")
             return values
     # Batch: Map corpus -> index_namespace at model-level
     if model_validator is not None:
         @model_validator(mode="before")
         def _alias_corpus_namespace_batch(cls, values):  # type: ignore
-            try:
-                if isinstance(values, dict):
-                    v = values.get("index_namespace")
-                    corpus = values.get("corpus")
-                    if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
-                        values["index_namespace"] = corpus.strip() or v
-            except Exception:
-                pass
+            if isinstance(values, dict):
+                v = values.get("index_namespace")
+                corpus = values.get("corpus")
+                if (v is None or (isinstance(v, str) and not v.strip())) and isinstance(corpus, str):
+                    values["index_namespace"] = corpus.strip() or v
             return values
 
     model_config = ConfigDict(json_schema_extra={

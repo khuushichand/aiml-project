@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import string
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -33,6 +34,8 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, ge
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.testing import is_test_mode
+
+_OWNER_ONLY_DIR_MODE = stat.S_IRWXU
 
 #######################################################################################################################
 #
@@ -125,9 +128,9 @@ class RegistrationService:
 
             # Set permissions on Unix-like systems
             if os.name != 'nt':
-                os.chmod(user_dir, 0o750)
+                os.chmod(user_dir, _OWNER_ONLY_DIR_MODE)
                 for subdir in subdirs:
-                    os.chmod(user_dir / subdir, 0o750)
+                    os.chmod(user_dir / subdir, _OWNER_ONLY_DIR_MODE)
 
             logger.debug(f"Created directories for user {user_id}")
             return True

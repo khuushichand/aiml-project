@@ -137,7 +137,7 @@ def test_whisper_streaming_initial_prompt_injection(monkeypatch):
         import torch
         monkeypatch.setattr(torch, 'cuda', SimpleNamespace(is_available=lambda: False), raising=True)
     except Exception:
-        pass
+        _ = None
 
     # Initial prompt provider
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Custom_Vocabulary as cv

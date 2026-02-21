@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,8 @@ _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS = (
     TimeoutError,
     subprocess.SubprocessError,
 )
+
+_OWNER_EXEC_ONLY_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
 
 
 def _truthy(v: str | None) -> bool:
@@ -171,10 +174,10 @@ cat > {status_path} <<EOF_STATUS
 EOF_STATUS
 sync {status_path} 2>/dev/null || true
 exit $exit_code
-"""
+    """
     entry = Path(workspace) / "entry.sh"
     entry.write_text(script, encoding="utf-8")
-    os.chmod(entry, 0o755)
+    os.chmod(entry, _OWNER_EXEC_ONLY_FILE_MODE)
 
 
 def _write_env_file(workspace: str, env: dict[str, str]) -> None:

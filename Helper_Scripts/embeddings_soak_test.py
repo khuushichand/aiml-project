@@ -128,8 +128,8 @@ async def main_async(args):
         import inspect as _inspect
         if _inspect.isawaitable(conn):
             conn = await conn
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[WARN] Unable to inspect/await redis connection object; continuing as-is. ({exc})", file=sys.stderr)
     redis = conn
     stop_ts = time.time() + args.duration
 

@@ -290,8 +290,8 @@ async def get_add_media_form(
                 try:
                     parsed = json.loads(first)
                     urls = parsed if isinstance(parsed, list) else [parsed]
-                except Exception:
-                    pass
+                except Exception as url_parse_error:
+                    logger.debug("Failed to parse JSON list for 'urls' form field; using raw fallback", exc_info=url_parse_error)
 
         # Normalize common boolean/integer coercions for robust form handling
         if isinstance(enable_contextual_chunking, str):
@@ -316,8 +316,8 @@ async def get_add_media_form(
         try:
             if isinstance(context_window_size, str):
                 context_window_size = int(context_window_size)
-        except Exception:
-            pass
+        except Exception as context_window_error:
+            logger.debug("Failed to coerce context_window_size from form data", exc_info=context_window_error)
         if isinstance(context_strategy, str):
             context_strategy = context_strategy.strip().lower() or None
         try:

@@ -73,13 +73,13 @@ def _override_character_chat_rate_limits_for_chat_new(monkeypatch):
         from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as _crl
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     yield
     try:
         from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as _crl
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 # Note: FastAPI TestClient already triggers application lifespan shutdown
 # which calls shutdown_all_audit_services() and performs DB cleanup.
@@ -179,7 +179,7 @@ def _reset_chat_rate_limiter_between_tests(monkeypatch):
             rl.global_bucket.tokens = rl.global_bucket.capacity
     except Exception:
         # Best effort; tests that validate 429s will still function
-        pass
+        _ = None
     yield
 
 # =====================================================================

@@ -36,7 +36,7 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
         from tldw_Server_API.app.core.config import API_V1_PREFIX
         app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])  # idempotent include for tests
     except Exception:
-        pass
+        _ = None
 
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u1")
@@ -78,7 +78,7 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
                             ok = True
                             break
                     except Exception:
-                        pass
+                        _ = None
                 if time.time() > deadline:
                     break
             assert ok
@@ -129,7 +129,7 @@ def test_outbox_after_id_and_filters_postgres(monkeypatch, jobs_pg_dsn, route_de
         from tldw_Server_API.app.core.config import API_V1_PREFIX
         app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])  # idempotent include for tests
     except Exception:
-        pass
+        _ = None
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
         r = client.get("/api/v1/jobs/events", params={"after_id": 0, "domain": "chatbooks"})

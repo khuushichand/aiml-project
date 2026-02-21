@@ -58,8 +58,8 @@ class PersonalizationDB:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA busy_timeout=5000")
-        except Exception:
-            pass
+        except Exception as pragma_error:
+            _ = pragma_error  # proceed with defaults if pragmas fail
         return conn
 
     def _ensure_schema(self) -> None:

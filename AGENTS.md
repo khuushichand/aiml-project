@@ -520,9 +520,18 @@ When multiple valid approaches exist, choose based on:
 - [ ] Tests written and passing
 - [ ] Code follows project conventions
 - [ ] No linter/formatter warnings
+- [ ] No new security findings introduced in touched code
 - [ ] Commit messages are clear
 - [ ] Implementation matches plan
 - [ ] No TODOs without issue numbers
+
+### Security Validation
+
+- Run Bandit on the touched scope before considering work complete.
+- Use the project virtual environment when running Bandit.
+- Fix new findings in changed code before finishing; do not defer silently.
+- Recommended command pattern:
+  `source .venv/bin/activate && python -m bandit -r <touched_paths> -f json -o /tmp/bandit_<task>.json`
 
 ### Test Guidelines
 

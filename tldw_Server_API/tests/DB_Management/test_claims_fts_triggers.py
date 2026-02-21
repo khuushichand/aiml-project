@@ -55,4 +55,4 @@ def test_claims_fts_triggers_insert_update_delete():
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None

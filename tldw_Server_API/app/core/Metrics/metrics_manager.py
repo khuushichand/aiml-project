@@ -1635,8 +1635,8 @@ class MetricsRegistry:
                 try:
                     if definition.buckets:
                         self.telemetry.register_histogram_view(definition.name, definition.buckets)
-                except Exception:
-                    pass
+                except Exception as view_error:
+                    logger.debug("Metrics manager failed to register histogram view", exc_info=view_error)
                 return self.meter.create_histogram(
                     name=definition.name,
                     description=definition.description,

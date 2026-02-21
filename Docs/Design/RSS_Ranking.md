@@ -16,6 +16,8 @@ https://9to5google.com/2025/01/08/google-discover-daily-listen/
 https://gist.github.com/emschwartz/e6d2bf860ccc367fe37ff953ba6de66b
 https://talkback.sh/
 https://github.com/Olshansk/rss-feeds
+https://themeisle.com/blog/rss-feeds-list/
+
 
 https://www.dogesec.com/blog/full_text_rss_atom_blog_feeds/
 https://engineering.fyi/?utm_source=www.hivefive.community&utm_medium=newsletter&utm_campaign=hive-five-237-different-kinds-of-smart

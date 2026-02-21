@@ -2429,7 +2429,15 @@ async def create_chat_completion(
                     _uid_int = int(current_user.id)
                 except Exception:
                     import hashlib as _hashlib
-                    _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()
+                    # Deterministic non-crypto ID derivation for non-integer test/single-user IDs.
+                    # `usedforsecurity=False` keeps behavior while making intent explicit.
+                    try:
+                        _digest = _hashlib.sha1(
+                            str(current_user.id).encode("utf-8"),
+                            usedforsecurity=False,
+                        ).digest()
+                    except TypeError:  # pragma: no cover - compatibility fallback
+                        _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()  # nosec B324
                     _uid_int = int.from_bytes(_digest[:4], byteorder="big", signed=False)
                 _guardian_db_path = DatabasePaths.get_guardian_db_path(_uid_int)
 

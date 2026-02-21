@@ -260,7 +260,7 @@ def _hash_embed(text: str, dim: int = 2048) -> np.ndarray:
     if not text:
         return v
     for tok in re.findall(r"[A-Za-z0-9_-]{2,}", text.lower()):
-        h = int(hashlib.md5(tok.encode('utf-8')).hexdigest(), 16)
+        h = int(hashlib.md5(tok.encode('utf-8'), usedforsecurity=False).hexdigest(), 16)
         idx = h % dim
         v[idx] += 1.0
     # L2 normalize

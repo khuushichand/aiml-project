@@ -66,7 +66,7 @@ def db_instance(db_path, client_id):  # Add db_path and tmp_path back
                     try:
                         p.unlink(missing_ok=True)
                     except Exception:
-                        pass
+                        _ = None
 
 
 @pytest.fixture

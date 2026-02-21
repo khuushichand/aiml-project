@@ -98,7 +98,7 @@ async def test_world_book_entries_and_attach_flow():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.asyncio
@@ -176,4 +176,4 @@ async def test_legacy_complete_endpoint_rate_limit():
         try:
             crl._rate_limiter = None
         except Exception:
-            pass
+            _ = None

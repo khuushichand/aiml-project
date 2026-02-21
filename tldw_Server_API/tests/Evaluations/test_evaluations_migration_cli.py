@@ -126,4 +126,4 @@ def test_evaluations_migration_cli_row_counts(tmp_path, pg_eval_params):
         try:
             backend.get_pool().close_all()
         except Exception:
-            pass
+            _ = None

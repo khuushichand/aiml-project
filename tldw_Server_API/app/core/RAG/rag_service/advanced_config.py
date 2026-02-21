@@ -375,9 +375,13 @@ class ConfigManager:
                 # A/B testing logic
                 if context and "user_id" in context:
                     # Deterministic assignment based on user ID
-                    user_hash = int(hashlib.md5(
-                        str(context["user_id"]).encode()
-                    ).hexdigest(), 16)
+                    user_hash = int(
+                        hashlib.md5(
+                            str(context["user_id"]).encode(),
+                            usedforsecurity=False
+                        ).hexdigest(),
+                        16
+                    )
 
                     if (user_hash % 100) < flag.rollout_percentage:
                         # User is in experiment group

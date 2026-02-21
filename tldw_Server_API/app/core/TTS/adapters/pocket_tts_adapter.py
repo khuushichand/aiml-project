@@ -178,8 +178,8 @@ class PocketTTSOnnxAdapter(TTSAdapter):
             )
             if asyncio.iscoroutine(register_result):
                 await register_result
-        except Exception:
-            pass
+        except Exception as registration_error:
+            logger.debug("PocketTTS provider registration failed; continuing", exc_info=registration_error)
         try:
             self.sample_rate = int(getattr(engine, "SAMPLE_RATE", self.sample_rate))
         except Exception:

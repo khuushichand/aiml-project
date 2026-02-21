@@ -138,7 +138,7 @@ class TestCriticalSecurity:
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
             return principal
 
         app.dependency_overrides[get_request_user] = override_regular_user
@@ -178,7 +178,7 @@ class TestCriticalSecurity:
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
             return principal
 
         app.dependency_overrides[get_request_user] = override_admin_user

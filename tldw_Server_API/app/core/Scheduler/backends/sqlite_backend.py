@@ -679,9 +679,9 @@ class SQLiteBackend(QueueBackend):
                 task_timeout = int(task_timeout)
                 if task_timeout > 0:
                     duration_seconds = task_timeout
-        except Exception:
+        except Exception as timeout_lookup_error:
             # Fall back to config duration if lookup fails or value invalid
-            pass
+            logger.debug("Scheduler sqlite backend failed to resolve task timeout override", exc_info=timeout_lookup_error)
 
         new_expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=duration_seconds)
 
@@ -784,7 +784,7 @@ class SQLiteBackend(QueueBackend):
 
                 # Reset tasks to queued status
                 placeholders = ','.join(['?' for _ in task_ids])
-                await self._connection.execute(f"""
+                await self._connection.execute(f"""  # nosec B608
                     UPDATE tasks
                     SET status = 'queued',
                         worker_id = NULL,
@@ -796,7 +796,7 @@ class SQLiteBackend(QueueBackend):
                 """, task_ids)
 
                 # Delete expired leases
-                await self._connection.execute(f"""
+                await self._connection.execute(f"""  # nosec B608
                     DELETE FROM task_leases
                     WHERE task_id IN ({placeholders})
                 """, task_ids)

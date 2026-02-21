@@ -31,7 +31,7 @@ def mcp_ws_client(monkeypatch):
         server.config.blocked_client_ips = []
     except Exception:
         # If server not yet initialized in tests, proceed; WS paths may init lazily
-        pass
+        _ = None
 
     client = TestClient(app)
     try:

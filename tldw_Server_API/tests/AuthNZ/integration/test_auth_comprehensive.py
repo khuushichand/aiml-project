@@ -45,7 +45,7 @@ def _db_params():
                 password = p.password or "TestPassword123!"
                 return host, port, user, password
         except Exception:
-            pass
+            _ = None
     host = os.getenv("TEST_DB_HOST", "localhost")
     port = int(os.getenv("TEST_DB_PORT", "5432"))
     user = os.getenv("TEST_DB_USER", "tldw_user")

@@ -192,8 +192,8 @@ def _get_app_version() -> str | None:
     try:
         from importlib.metadata import version
         return version("tldw_Server_API")
-    except Exception:
-        pass
+    except Exception as metadata_error:
+        logger.debug("Failed to resolve app version from package metadata", exc_info=metadata_error)
     try:
         import tomllib
         pyproject = os.path.join(
@@ -204,8 +204,8 @@ def _get_app_version() -> str | None:
             with open(pyproject, "rb") as f:
                 data = tomllib.load(f)
             return data.get("project", {}).get("version")
-    except Exception:
-        pass
+    except Exception as pyproject_error:
+        logger.debug("Failed to resolve app version from pyproject", exc_info=pyproject_error)
     return None
 
 
@@ -216,8 +216,8 @@ def _estimate_total_db_size(datasets: list[str], user_id: int | None) -> int:
             db_path, _ = _resolve_dataset_db_path(ds, user_id)
             if os.path.isfile(db_path):
                 total += os.path.getsize(db_path)
-        except Exception:
-            pass
+        except Exception as size_error:
+            logger.debug("Failed to estimate dataset DB size for {}", ds, exc_info=size_error)
     return max(total, 1024)  # at least 1 KB estimate
 
 
@@ -289,8 +289,8 @@ def _read_manifest_cached(zip_path: str) -> dict[str, Any]:
         try:
             with open(sc, encoding="utf-8") as f:
                 return json.loads(f.read())
-        except Exception:
-            pass  # fall through to ZIP
+        except Exception as sidecar_error:
+            logger.debug("Failed to read bundle sidecar manifest; falling back to ZIP", exc_info=sidecar_error)
     return _read_manifest_from_zip(zip_path)
 
 

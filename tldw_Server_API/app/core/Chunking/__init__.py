@@ -196,8 +196,8 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
         except (AttributeError, TypeError, ValueError):
             end_c = None
         txt = chunk.text
-        content_sig = _hashlib.sha1((txt or '').encode('utf-8')).hexdigest()[:12]
-        file_sig = _hashlib.md5((file_name or '').encode('utf-8')).hexdigest()[:8]
+        content_sig = _hashlib.sha1((txt or '').encode('utf-8'), usedforsecurity=False).hexdigest()[:12]
+        file_sig = _hashlib.md5((file_name or '').encode('utf-8'), usedforsecurity=False).hexdigest()[:8]
         chunk_uid = f"ck_{file_sig}_{start_c if start_c is not None else 's'}_{end_c if end_c is not None else 'e'}_{content_sig}"
         # Fielded metadata
         try:

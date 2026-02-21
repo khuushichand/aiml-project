@@ -12,6 +12,8 @@ import tempfile
 import xml.etree.ElementTree as ET
 from typing import Optional
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 from fastapi import HTTPException
 
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
@@ -48,9 +50,9 @@ async def process_xml_task(
 
         # 2) Parse the XML with built-in logic
         try:
-            tree = ET.parse(tmp_path)
+            tree = DET.parse(tmp_path)
             root = tree.getroot()
-        except ET.ParseError as e:
+        except (ET.ParseError, DefusedXmlException) as e:
             raise HTTPException(status_code=400, detail=f"Invalid XML: {str(e)}") from e
 
         # 3) Chunk the XML. For instance:

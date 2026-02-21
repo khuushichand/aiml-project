@@ -52,6 +52,6 @@ def test_pgvector_live_smoke(pgvector_dsn):
         try:
             await adapter.rebuild_index('it_store', index_type='ivfflat', lists=10)
         except Exception:
-            pass
+            _ = None
 
     asyncio.run(run())

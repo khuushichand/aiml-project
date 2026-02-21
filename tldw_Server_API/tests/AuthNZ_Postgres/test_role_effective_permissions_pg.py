@@ -92,7 +92,7 @@ async def test_role_effective_permissions_postgres(test_db_pool):
             )
         except Exception:
             # Best-effort; not all code paths require request.state.auth
-            pass
+            _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

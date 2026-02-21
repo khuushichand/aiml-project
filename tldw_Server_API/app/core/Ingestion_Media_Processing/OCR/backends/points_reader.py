@@ -189,6 +189,7 @@ def _load_transformers():
         from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2VLImageProcessor
 
         model_path = os.getenv("POINTS_MODEL_PATH", "tencent/POINTS-Reader")
+        model_revision = (os.getenv("POINTS_MODEL_REVISION") or "").strip() or None
         # device and dtype selection
         device_env = os.getenv("POINTS_DEVICE")
         device_map = device_env or "auto"
@@ -196,12 +197,20 @@ def _load_transformers():
 
         _TF_MODEL = AutoModelForCausalLM.from_pretrained(
             model_path,
+            revision=model_revision,
             trust_remote_code=True,
             torch_dtype=dtype,
             device_map=device_map,
+        )  # nosec B615
+        _TF_TOKENIZER = AutoTokenizer.from_pretrained(  # nosec B615
+            model_path,
+            revision=model_revision,
+            trust_remote_code=True,
         )
-        _TF_TOKENIZER = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        _TF_IMAGE_PROCESSOR = Qwen2VLImageProcessor.from_pretrained(model_path)
+        _TF_IMAGE_PROCESSOR = Qwen2VLImageProcessor.from_pretrained(  # nosec B615
+            model_path,
+            revision=model_revision,
+        )
         return _TF_MODEL, _TF_TOKENIZER, _TF_IMAGE_PROCESSOR
 
 

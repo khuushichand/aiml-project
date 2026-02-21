@@ -385,8 +385,8 @@ def _snapshot_epoch(path: Path, meta: Optional[SnapshotMeta]) -> int:
     if meta and meta.captured_at_unix:
         try:
             return int(meta.captured_at_unix)
-        except Exception:
-            pass
+        except (TypeError, ValueError):
+            meta = None
     try:
         return int(path.stat().st_mtime)
     except Exception:

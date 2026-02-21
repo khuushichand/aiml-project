@@ -148,7 +148,7 @@ class DummyReadModuleWithSchema(BaseModule):
         try:
             tool["inputSchema"]["additionalProperties"] = False
         except Exception:
-            pass
+            _ = None
         return [tool]
 
     async def execute_tool(self, tool_name: str, arguments: dict, context=None):
@@ -161,7 +161,7 @@ async def test_schema_validation_required_type_and_unknown():
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     registry = get_module_registry()
     await registry.register_module("dummy_read_schema", DummyReadModuleWithSchema, ModuleConfig(name="dummy_read_schema"))
@@ -198,7 +198,7 @@ async def test_disable_write_tools_gate(monkeypatch):
         cfg = get_config()
         setattr(cfg, "disable_write_tools", True)
     except Exception:
-        pass
+        _ = None
 
     registry = get_module_registry()
     await registry.register_module("dummy_write_disabled", DummyWriteModuleWithValidator, ModuleConfig(name="dummy_write_disabled"))

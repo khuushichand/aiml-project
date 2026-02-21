@@ -36,12 +36,12 @@ async def test_persona_ws_emits_ws_latency_metrics(monkeypatch):
             try:
                 _ = ws.receive_json()
             except Exception:
-                pass
+                _ = None
             ws.send_text(json.dumps({"type": "user_message", "text": "hello"}))
             try:
                 _ = ws.receive_json()
             except Exception:
-                pass
+                _ = None
 
     after = reg.get_metric_stats(
         "ws_send_latency_ms",

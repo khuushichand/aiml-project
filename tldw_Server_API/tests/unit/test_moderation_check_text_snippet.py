@@ -42,7 +42,7 @@ def test_check_text_returns_sanitized_snippet_not_pattern():
         try:
             os.unlink(path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -75,7 +75,7 @@ def test_check_text_respects_phase_enablement():
         try:
             os.unlink(path)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -109,4 +109,4 @@ def test_check_text_detects_long_match_across_window():
         try:
             os.unlink(path)
         except Exception:
-            pass
+            _ = None

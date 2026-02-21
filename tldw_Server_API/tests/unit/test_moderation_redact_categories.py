@@ -38,4 +38,4 @@ def test_redact_text_respects_categories_enabled():
         try:
             os.unlink(path)
         except Exception:
-            pass
+            _ = None

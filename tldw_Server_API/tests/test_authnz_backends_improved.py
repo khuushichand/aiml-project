@@ -115,7 +115,7 @@ class AuthNZTestBase(unittest.TestCase):
                                     (user_id,)
                                 )
                         except Exception:
-                            pass  # User might already be deleted
+                            _ = None  # User might already be deleted
             except Exception as e:
                 print(f"Warning: Failed to clean up test users: {e}")
 

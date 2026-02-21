@@ -74,7 +74,7 @@ def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
         try:
             db.close()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.integration
@@ -127,7 +127,7 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(
                     try:
                         p.join(2)
                     except Exception:
-                        pass
+                        _ = None
                 raise
             # Ensure processes are terminated if hanging
             for p in procs:
@@ -143,9 +143,9 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(
             try:
                 mp_db.close()
             except Exception:
-                pass
+                _ = None
         if backend is not None:
             try:
                 backend.get_pool().close_all()
             except Exception:
-                pass
+                _ = None

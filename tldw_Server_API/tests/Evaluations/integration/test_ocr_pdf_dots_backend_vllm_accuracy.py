@@ -98,7 +98,7 @@ def test_ocr_pdf_with_dots_and_vllm_text_accuracy():
                 if token:
                     headers["X-CSRF-Token"] = token
             except Exception:
-                pass
+                _ = None
 
             r = client.post(
                 "/api/v1/evaluations/ocr-pdf",

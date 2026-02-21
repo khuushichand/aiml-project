@@ -46,4 +46,4 @@ def test_claims_analytics_exports_cleanup_and_list(monkeypatch, tmp_path):
         try:
             db.close_connection()
         except Exception:
-            pass
+            _ = None

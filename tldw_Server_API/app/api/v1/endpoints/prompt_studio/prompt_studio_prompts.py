@@ -190,8 +190,8 @@ async def create_prompt(
                             user_id_str,
                             prompt_data.project_id,
                         )
-            except Exception:
-                pass
+            except Exception as checkpoint_error:
+                logger.debug("Prompt Studio checkpoint sync failed after prompt create", exc_info=checkpoint_error)
 
         prompt_record = db.create_prompt(
             project_id=prompt_data.project_id,

@@ -24,7 +24,7 @@ try:
             os.environ.setdefault("DEFAULT_LLM_PROVIDER", "openai")
 except Exception:
     # Never fail collection due to dotenv issues
-    pass
+    _ = None
 # Force test-friendly env knobs
 os.environ["MPLBACKEND"] = "Agg"
 # Provide an explicit, deterministic API key for tests that rely on single-user/test-mode shortcuts.
@@ -63,7 +63,7 @@ try:
     _auth_sched.stop_authnz_scheduler = _noop  # type: ignore[assignment]
     _auth_sched.reset_authnz_scheduler = _noop  # type: ignore[assignment]
 except Exception:
-    pass
+    _ = None
 import logging
 import weakref
 # Dump lingering non-daemon threads at exit to avoid silent hangs
@@ -78,7 +78,7 @@ try:
         faulthandler.register(signal.SIGUSR2, file=_sys.stderr, all_threads=True)
 except Exception:
     # Best-effort; tracing is optional
-    pass
+    _ = None
 import pytest
 
 
@@ -101,7 +101,7 @@ def _install_aiosqlite_tracking() -> None:
         try:
             _AIOSQLITE_CONNECTIONS.add(conn)
         except Exception:
-            pass
+            _ = None
         return conn
 
     try:
@@ -132,7 +132,7 @@ async def _close_tracked_aiosqlite_connections() -> None:
                     await asyncio.wrap_future(future)
                     continue
                 except Exception:
-                    pass
+                    _ = None
             await conn.close()
         except Exception:
             try:
@@ -140,7 +140,7 @@ async def _close_tracked_aiosqlite_connections() -> None:
                 if stop_future is not None:
                     await asyncio.wrap_future(stop_future)
             except Exception:
-                pass
+                _ = None
 
 
 def _run_coro_sync_best_effort(coro):
@@ -277,7 +277,7 @@ def _restore_auth_env_and_singletons():
 
         reset_jwt_service()
     except Exception:
-        pass
+        _ = None
 
     yield
 
@@ -293,13 +293,13 @@ def _restore_auth_env_and_singletons():
 
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
 
         reset_jwt_service()
     except Exception:
-        pass
+        _ = None
 
     # Avoid leaking the process-wide jobs acquisition gate across tests.
     try:
@@ -307,7 +307,7 @@ def _restore_auth_env_and_singletons():
 
         JobManager.set_acquire_gate(False)
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture(autouse=True)
@@ -328,13 +328,13 @@ def _restore_user_db_env_and_chacha_cache():
 
         clear_config_cache()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
         reset_settings()
     except Exception:
-        pass
+        _ = None
 
     # Drain ChaCha background tasks/futures before closing DB handles to avoid
     # races where sqlite connections are closed during active executor queries.
@@ -347,7 +347,7 @@ def _restore_user_db_env_and_chacha_cache():
         _run_coro_sync_best_effort(shutdown_chacha_resources(wait_timeout=5.0))
         reset_chacha_shutdown_state()
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture(autouse=True)
@@ -358,14 +358,14 @@ def _reset_character_chat_complete_windows():
 
         _chat_sessions.reset_complete_windows()
     except Exception:
-        pass
+        _ = None
     yield
     try:
         from tldw_Server_API.app.api.v1.endpoints import character_chat_sessions as _chat_sessions
 
         _chat_sessions.reset_complete_windows()
     except Exception:
-        pass
+        _ = None
 
 
 def _log_lingering_threads():
@@ -389,11 +389,11 @@ def _log_lingering_threads():
                     # Best-effort shutdown to avoid interpreter hang
                     t.join(timeout=1.0)
                 except Exception:
-                    pass
+                    _ = None
                 try:
                     t.daemon = True  # allow interpreter shutdown even if still alive
                 except Exception:
-                    pass
+                    _ = None
             summary = [(d[0], d[1]) for d in details]
             print(f"Non-daemon threads still running at exit: {summary}", file=sys.stderr)
             _log.warning("Non-daemon threads still running at exit: %s", summary)
@@ -407,7 +407,7 @@ def _log_lingering_threads():
                         file=sys.stderr,
                     )
     except Exception:
-        pass
+        _ = None
 
 
 def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -> None:
@@ -431,10 +431,10 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
                     try:
                         t.cancel()
                     except Exception:
-                        pass
+                        _ = None
                 t.join(timeout=1.0)
             except Exception:
-                pass
+                _ = None
 
         # Second pass: log any remaining threads and mark them daemon
         for t in threading.enumerate():
@@ -452,17 +452,17 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
             try:
                 log.warning("%s stack=%s", msg, stack)
             except Exception:
-                pass
+                _ = None
             try:
                 if isinstance(t, threading.Timer):
                     t.cancel()
                     t.join(timeout=1.0)
             except Exception:
-                pass
+                _ = None
             try:
                 t.daemon = True  # allow interpreter shutdown to proceed
             except Exception:
-                pass
+                _ = None
     except Exception as e:
         try:
             import sys as _local_sys
@@ -472,7 +472,7 @@ def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -
                 file=_local_sys.stderr,
             )
         except Exception:
-            pass
+            _ = None
 
 
 atexit.register(_log_lingering_threads)
@@ -496,7 +496,7 @@ try:
                 parts.append(k)
         os.environ["ROUTES_ENABLE"] = ",".join(dict.fromkeys(parts))
     except Exception:
-        pass
+        _ = None
     # Ensure notes endpoints stay enabled for health tests even if ROUTES_DISABLE includes them
     try:
         _rd = os.getenv("ROUTES_DISABLE", "")
@@ -504,7 +504,7 @@ try:
         parts = [p for p in parts if p.lower() != "notes"]
         os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(parts))
     except Exception:
-        pass
+        _ = None
     # Enable deterministic test behaviors across subsystems
     os.environ.setdefault("TEST_MODE", "1")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
@@ -534,7 +534,7 @@ try:
         if _pg_dsn and _pg_dsn.lower().startswith("postgres"):
             os.environ["TEST_DATABASE_URL"] = _pg_dsn
     except Exception:
-        pass
+        _ = None
 except Exception as e:
     # Surface environment setup failures in test output
     _log.exception("Failed to apply test environment setup in conftest.py")
@@ -570,14 +570,14 @@ def pytest_collection_modifyitems(config, items):  # pragma: no cover - collecti
                 item.add_marker(skip_evals)
         except Exception:
             # Never break collection on marker inspection
-            pass
+            _ = None
 
 def pytest_configure(config):  # pragma: no cover - registration only
     try:
         config.addinivalue_line("markers", "evaluations: heavy Evaluations tests (opt-in via RUN_EVALUATIONS=1)")
         config.addinivalue_line("markers", "stt_golden: real-audio STT adapter golden tests (opt-in via TLDW_STT_GOLDEN_ENABLE=1)")
     except Exception:
-        pass
+        _ = None
     _install_aiosqlite_tracking()
 
 
@@ -590,11 +590,11 @@ def event_loop():
         if hasattr(loop, "shutdown_default_executor"):
             loop.run_until_complete(loop.shutdown_default_executor())
     except Exception:
-        pass
+        _ = None
     try:
         loop.close()
     except Exception:
-        pass
+        _ = None
 
 
 def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics/cleanup
@@ -606,40 +606,40 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
             from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
             _run_coro_sync_best_effort(shutdown_all_audit_services())
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
             _run_coro_sync_best_effort(_reset_db_pool())
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.core.Scheduler import stop_global_scheduler as _stop_global_scheduler
             _run_coro_sync_best_effort(_stop_global_scheduler())
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler as _get_wf_scheduler
             _run_coro_sync_best_effort(_get_wf_scheduler().stop())
         except Exception:
-            pass
+            _ = None
         try:
             _run_coro_sync_best_effort(_close_tracked_aiosqlite_connections())
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
                 shutdown_chacha_resources,
             )
             _run_coro_sync_best_effort(shutdown_chacha_resources(wait_timeout=5.0))
         except Exception:
-            pass
+            _ = None
         try:
             from tldw_Server_API.app.api.v1.endpoints.research import (
                 shutdown_websearch_executor,
             )
             shutdown_websearch_executor(wait=True, cancel_futures=True)
         except Exception:
-            pass
+            _ = None
         try:
             loop = asyncio.get_event_loop_policy().get_event_loop()
         except Exception:
@@ -649,11 +649,11 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                 if hasattr(loop, "shutdown_default_executor"):
                     loop.run_until_complete(loop.shutdown_default_executor())
             except Exception:
-                pass
+                _ = None
             try:
                 loop.close()
             except Exception:
-                pass
+                _ = None
         # Best-effort cleanup for lingering ThreadPoolExecutor workers (e.g., asyncio.to_thread)
         try:
             import concurrent.futures.thread as _cf_thread
@@ -669,14 +669,14 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                     try:
                         queue.put(None)
                     except Exception:
-                        pass
+                        _ = None
             for worker_thread, _queue in worker_items:
                 try:
                     worker_thread.join(timeout=2.0)
                 except Exception:
-                    pass
+                    _ = None
         except Exception:
-            pass
+            _ = None
         current = threading.current_thread()
         threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
         if threads:
@@ -688,19 +688,19 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                         try:
                             t._stop_running()  # type: ignore[attr-defined]
                         except Exception:
-                            pass
+                            _ = None
                         try:
                             t.join(timeout=2.0)
                         except Exception:
-                            pass
+                            _ = None
                 except Exception:
-                    pass
+                    _ = None
                 try:
                     if isinstance(t, threading.Timer):
                         t.cancel()
                         t.join(timeout=1.0)
                 except Exception:
-                    pass
+                    _ = None
             # Re-check after stopping attempts; only log remaining threads
             threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
             if threads:
@@ -717,10 +717,10 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                     try:
                         t.daemon = True
                     except Exception:
-                        pass
+                        _ = None
     except Exception:
         # Do not interfere with pytest shutdown on logging failures
-        pass
+        _ = None
 
 
 # Bump file-descriptor limit for macOS/Linux test runs to avoid spurious
@@ -739,7 +739,7 @@ def _raise_fd_limit():  # pragma: no cover - platform-dependent behavior
     except Exception:
         # On platforms without 'resource' (e.g., Windows) or when permissions
         # disallow raising limits, silently continue.
-        pass
+        _ = None
 
 class _TestUsageLogger:
     def __init__(self):
@@ -906,13 +906,13 @@ def _shutdown_executors_and_evaluations_pool():
         )
         shutdown_all_registered_executors_sync(wait=True, cancel_futures=True)
     except Exception:
-        pass
+        _ = None
     # Explicit CPU pools cleanup (idempotent)
     try:
         from tldw_Server_API.app.core.Utils.cpu_bound_handler import cleanup_pools
         cleanup_pools()
     except Exception:
-        pass
+        _ = None
     # Proactively join/mark any lingering non-daemon threads so interpreter shutdown won't hang
     _cleanup_lingering_threads(_log, context="teardown")
 
@@ -924,13 +924,13 @@ def _reset_workflow_scheduler():
         from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler
         WorkflowScheduler._inst = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     yield
     try:
         from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler
         WorkflowScheduler._inst = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Ensure ChaCha executor threads are not reported as lingering non-daemon
     # workers by the per-test scheduler reset diagnostics.
@@ -943,7 +943,7 @@ def _reset_workflow_scheduler():
         _run_coro_sync_best_effort(shutdown_chacha_resources(wait_timeout=5.0))
         reset_chacha_shutdown_state()
     except Exception:
-        pass
+        _ = None
 
 
     # Log any lingering non-daemon threads with their stack frames to aid debugging hangs
@@ -982,7 +982,7 @@ def bypass_api_limits(monkeypatch):
             ]
             app.middleware_stack = app.build_middleware_stack()
         except Exception:
-            pass
+            _ = None
 
         # Disable provided legacy limiter(s)
         limiter_states = []
@@ -1002,12 +1002,12 @@ def bypass_api_limits(monkeypatch):
                     try:
                         lim.enabled = prev
                     except Exception:
-                        pass
+                        _ = None
             # Restore middleware stack
             try:
                 app.user_middleware = original_user_middleware
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
 
     return _bypass

@@ -766,14 +766,17 @@ async def spell_check_query(context: Any, **kwargs) -> Any:
                 metadata = {}
                 try:
                     setattr(context, "metadata", metadata)
-                except Exception:
-                    pass
+                except Exception as metadata_attach_error:
+                    logger.debug("Quick wins failed to attach metadata mapping to context", exc_info=metadata_attach_error)
             metadata["original_query_before_correction"] = query_text
             context.query = result["corrected"]
             metadata["spell_corrections"] = result["corrections"]
             try:
                 import hashlib as _hl
-                _qh = _hl.md5((getattr(context, 'query', '') or '').encode('utf-8')).hexdigest()[:8]
+                _qh = _hl.md5(
+                    (getattr(context, 'query', '') or '').encode('utf-8'),
+                    usedforsecurity=False,
+                ).hexdigest()[:8]
                 logger.info(f"Auto-corrected query hash={_qh}")
             except Exception:
                 logger.info("Auto-corrected query")

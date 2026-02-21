@@ -12,6 +12,7 @@ This module includes adapters for academic search operations:
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -172,7 +173,7 @@ async def run_arxiv_download_adapter(config: dict[str, Any], context: dict[str, 
     # TEST_MODE: return simulated result without actual download
     if _is_test_mode():
         return {
-            "pdf_path": f"/tmp/simulated_{arxiv_id or 'paper'}.pdf",
+            "pdf_path": str(Path(tempfile.gettempdir()) / f"simulated_{arxiv_id or 'paper'}.pdf"),
             "downloaded": True,
             "arxiv_id": arxiv_id,
             "simulated": True,

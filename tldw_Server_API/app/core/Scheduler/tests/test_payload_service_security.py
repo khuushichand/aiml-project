@@ -111,3 +111,31 @@ async def test_legacy_pickle_payload_can_be_loaded_when_compat_enabled(tmp_path)
 
     loaded = await service.load_payload(payload_ref)
     assert loaded == legacy_payload
+
+
+@pytest.mark.asyncio
+async def test_legacy_pickle_payload_rejects_disallowed_global(tmp_path):
+    config = SchedulerConfig(
+        database_url=f"sqlite:///{tmp_path}/test.db",
+        base_path=tmp_path,
+        payload_threshold_bytes=1024,
+        allow_legacy_pickle_payloads=True,
+    )
+    service = PayloadService(backend=MagicMock(), config=config)
+
+    class _Evil:
+        def __reduce__(self):
+            return (eval, ("1+1",))
+
+    payload_ref = "99aabbccddeeff00"
+    header = {
+        "task_id": "task-legacy-bad",
+        "format": "pickle",
+        "compressed": False,
+        "size": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_payload_file(service, payload_ref, header, pickle.dumps(_Evil()))
+
+    with pytest.raises(PayloadError, match="Payload load failed"):
+        await service.load_payload(payload_ref)

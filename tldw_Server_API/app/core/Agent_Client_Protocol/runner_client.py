@@ -274,8 +274,8 @@ class ACPRunnerClient:
                 policy_tier = _store.resolve_permission_tier(tool_name)
                 if policy_tier is not None:
                     return policy_tier
-        except Exception:
-            pass
+        except Exception as policy_error:
+            logger.debug("Runner client failed to resolve ACP policy tier from store", exc_info=policy_error)
 
         tool_lower = tool_name.lower()
 

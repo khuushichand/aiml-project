@@ -32,8 +32,8 @@ def resolve_handler(handler_path: str) -> HandlerFunc:
         func = getattr(module, func_name, None)
         if callable(func):
             return func
-    except Exception:
-        pass
+    except Exception as resolver_error:
+        _ = resolver_error  # fallback to generic handler
     return handle_generic_html
 
 

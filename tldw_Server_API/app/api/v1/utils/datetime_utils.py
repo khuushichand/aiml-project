@@ -42,8 +42,8 @@ def coerce_datetime(value: Any) -> _dt.datetime:
                 continue
         try:
             return _dt.datetime.fromisoformat(value)
-        except Exception:
-            pass
+        except Exception as parse_error:
+            _ = parse_error  # continue trying fallback datetime parsing
     return _dt.datetime.now(_dt.timezone.utc)
 
 

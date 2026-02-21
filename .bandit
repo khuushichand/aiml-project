@@ -1,0 +1,4 @@
+[bandit]
+# Keep project-scoped scans focused on repository code by excluding local envs.
+# Includes Bandit defaults plus explicit virtualenv/node_modules variants.
+exclude = .svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg,.venv,./.venv,*/.venv/*,node_modules,./node_modules,*/node_modules/*

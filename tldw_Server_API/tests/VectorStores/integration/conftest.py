@@ -32,14 +32,14 @@ def vectorstores_isolated_env():
 
             reset_media_db_cache()
         except Exception:
-            pass
+            _ = None
         # Ensure vector batches DB is initialized for the default user
         try:
             from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import init_db as _init_batches
             uid = str(settings.get("SINGLE_USER_FIXED_ID", "1"))
             _init_batches(uid)
         except Exception:
-            pass
+            _ = None
         yield
     finally:
         # Restore TEST_MODE env
@@ -55,7 +55,7 @@ def vectorstores_isolated_env():
         try:
             shutil.rmtree(tmp_base, ignore_errors=True)
         except Exception:
-            pass
+            _ = None
 
 
 # Local admin_user fixture (avoid importing other conftests that override pgvector_dsn)

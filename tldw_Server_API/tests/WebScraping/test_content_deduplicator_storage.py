@@ -63,3 +63,20 @@ def test_legacy_pickle_hashes_migrate_when_enabled(tmp_path, monkeypatch):
     with open(json_path, "r", encoding="utf-8") as f:
         migrated = json.load(f)
     assert migrated == expected
+
+
+def test_legacy_pickle_hashes_reject_disallowed_globals(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEBSCRAPER_ALLOW_LEGACY_PICKLE_HASHES", "true")
+    json_path = tmp_path / "content_hashes.json"
+    legacy_pickle_path = tmp_path / "content_hashes.pkl"
+
+    class _Evil:
+        def __reduce__(self):
+            return (eval, ("1+1",))
+
+    with open(legacy_pickle_path, "wb") as f:
+        pickle.dump(_Evil(), f)
+
+    deduplicator = ContentDeduplicator(storage_path=json_path)
+    assert deduplicator._hashes == {}
+    assert not json_path.exists()

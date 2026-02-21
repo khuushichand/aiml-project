@@ -250,10 +250,15 @@ def _load_transformers():
         from transformers import AutoModel, AutoTokenizer
 
         model_id = os.getenv("DEEPSEEK_OCR_MODEL_ID", "deepseek-ai/DeepSeek-OCR")
+        model_revision = (os.getenv("DEEPSEEK_OCR_MODEL_REVISION") or "").strip() or None
         device = _resolve_device()
         attn_impl = _resolve_attn_impl(device)
 
-        _TF_TOKENIZER = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        _TF_TOKENIZER = AutoTokenizer.from_pretrained(  # nosec B615
+            model_id,
+            revision=model_revision,
+            trust_remote_code=True,
+        )
         dtype = _resolve_dtype()
         model_kwargs = {
             "trust_remote_code": True,
@@ -263,12 +268,22 @@ def _load_transformers():
             model_kwargs["torch_dtype"] = dtype
 
         try:
-            _TF_MODEL = AutoModel.from_pretrained(model_id, use_safetensors=True, **model_kwargs)
+            _TF_MODEL = AutoModel.from_pretrained(  # nosec B615
+                model_id,
+                revision=model_revision,
+                use_safetensors=True,
+                **model_kwargs,
+            )
         except _DEEPSEEK_NONCRITICAL_EXCEPTIONS as exc:
             logging.warning(
                 f"DeepSeek OCR: safetensors load failed ({exc}); retrying with use_safetensors=False."
             )
-            _TF_MODEL = AutoModel.from_pretrained(model_id, use_safetensors=False, **model_kwargs)
+            _TF_MODEL = AutoModel.from_pretrained(  # nosec B615
+                model_id,
+                revision=model_revision,
+                use_safetensors=False,
+                **model_kwargs,
+            )
 
         try:
             if device.startswith("cuda"):

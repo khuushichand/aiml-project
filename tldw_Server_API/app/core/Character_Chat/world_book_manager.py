@@ -773,7 +773,7 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE world_books SET {set_clause} WHERE {where_clause}",
+                    f"UPDATE world_books SET {set_clause} WHERE {where_clause}",  # nosec B608
                     tuple(params)
                 )
                 conn.commit()
@@ -1131,7 +1131,7 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",
+                    f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",  # nosec B608
                     tuple(params)
                 )
                 conn.commit()
@@ -1894,7 +1894,7 @@ class WorldBookService:
 
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"""
+                    f"""  # nosec B608
                     UPDATE world_book_entries
                     SET {set_clause}
                     WHERE id IN ({placeholders})

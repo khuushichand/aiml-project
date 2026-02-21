@@ -1890,14 +1890,16 @@ def load_qwen2audio():
             raise RuntimeError("[Transcription error] Qwen2Audio is disabled or not configured")
 
         model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        revision = stt_cfg.get("qwen2audio_revision") or os.getenv("QWEN2AUDIO_REVISION")
         logging.info(f"Loading Qwen2Audio model: {model_id}")
 
-        qwen_processor = AutoProcessor.from_pretrained(model_id)
+        qwen_processor = AutoProcessor.from_pretrained(model_id, revision=revision)  # nosec B615
         qwen_model = Qwen2AudioForConditionalGeneration.from_pretrained(
             model_id,
+            revision=revision,
             torch_dtype=torch_mod.float16,
             device_map="auto"
-        )
+        )  # nosec B615
     return qwen_processor, qwen_model
 
 def transcribe_with_qwen2audio(audio: np.ndarray, sample_rate: int = 16000) -> str:

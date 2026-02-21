@@ -768,7 +768,7 @@ class TestAdapterErrorHandling:
                 try:
                     await adapter.generate(TTSRequest(text="Test"))
                 except:
-                    pass
+                    _ = None
             # Note: close may not be called automatically on error
 
                 # Verify cleanup was called

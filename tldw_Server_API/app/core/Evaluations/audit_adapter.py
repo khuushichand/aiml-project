@@ -123,8 +123,8 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("Failed to close coroutine while handling missing event loop", exc_info=close_error)
         raise RuntimeError("Evaluations audit adapter unavailable: no event loop")
 
     try:
@@ -134,8 +134,8 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("Failed to close coroutine while handling scheduling failure", exc_info=close_error)
         raise RuntimeError("Evaluations audit adapter failed to schedule") from exc
 
     try:

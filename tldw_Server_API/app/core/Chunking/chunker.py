@@ -2747,7 +2747,7 @@ class Chunker:
 
             # Content hash
             with suppress(_CHUNKER_NONCRITICAL_EXCEPTIONS):
-                md.setdefault('chunk_content_hash', hashlib.md5(txt.encode('utf-8')).hexdigest())
+                md.setdefault('chunk_content_hash', hashlib.md5(txt.encode('utf-8'), usedforsecurity=False).hexdigest())
 
             # Mark origin
             md.setdefault('origin', 'unified_chunker')

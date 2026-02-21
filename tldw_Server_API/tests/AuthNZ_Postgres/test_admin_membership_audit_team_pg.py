@@ -104,7 +104,7 @@ async def test_team_membership_audit_events_postgres(tmp_path, real_audit_servic
                 request.state.user_id = admin_id
             except Exception:
                 # Best-effort; do not fail tests if state attachment fails
-                pass
+                _ = None
         return principal
 
     app.dependency_overrides[get_auth_principal] = _principal_override

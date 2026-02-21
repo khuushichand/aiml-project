@@ -304,14 +304,14 @@ class AuthnzOrgInvitesRepo:
                 if self._is_postgres(conn):
                     # Get total count
                     count_row = await conn.fetchrow(
-                        f"SELECT COUNT(*) FROM org_invites i WHERE {where_clause}",
+                        f"SELECT COUNT(*) FROM org_invites i WHERE {where_clause}",  # nosec B608
                         *params
                     )
                     total = count_row[0] if count_row else 0
 
                     # Get paginated results
                     rows = await conn.fetch(
-                        f"""
+                        f"""  # nosec B608
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
                                i.description, i.allowed_email_domain, t.name as team_name

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -37,6 +38,8 @@ _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS = (
     json.JSONDecodeError,
     subprocess.SubprocessError,
 )
+
+_OWNER_EXEC_ONLY_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
 
 
 def _truthy(v: str | None) -> bool:
@@ -558,10 +561,10 @@ cat > {status_path} <<EOF_STATUS
 EOF_STATUS
 sync {status_path} 2>/dev/null || true
 exit $exit_code
-"""
+        """
         entry = Path(workspace) / "entry.sh"
         entry.write_text(script, encoding="utf-8")
-        os.chmod(entry, 0o755)
+        os.chmod(entry, _OWNER_EXEC_ONLY_FILE_MODE)
 
     @staticmethod
     def _write_env_file(workspace: str, env: dict[str, str]) -> None:

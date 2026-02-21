@@ -54,7 +54,7 @@ async def test_audit_pii_overrides_and_scan_fields(monkeypatch):
             try:
                 flags = json.loads(flags)
             except Exception:
-                pass
+                _ = None
         assert isinstance(flags, (list, tuple)) and ("pii_detected" in flags)
 
         # Metadata should be redacted
@@ -72,8 +72,8 @@ async def test_audit_pii_overrides_and_scan_fields(monkeypatch):
         try:
             await svc.stop()
         except Exception:
-            pass
+            _ = None
         try:
             Path(db_path).unlink(missing_ok=True)
         except Exception:
-            pass
+            _ = None

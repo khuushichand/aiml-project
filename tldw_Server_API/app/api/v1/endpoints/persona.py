@@ -440,9 +440,9 @@ def _should_treat_bearer_as_api_key(
         settings = get_settings()
         if getattr(settings, "AUTH_MODE", None) == "single_user":
             return True
-    except Exception:
+    except Exception as settings_error:
         # Fall through to token-shape heuristics when settings resolution fails.
-        pass
+        logger.debug("Failed to resolve auth settings for WS bearer handling", exc_info=settings_error)
 
     return not _looks_like_jwt(token)
 
@@ -460,15 +460,15 @@ def _extract_auth_credentials(
         authz = ws.headers.get("authorization") or ws.headers.get("Authorization")
         if authz and authz.lower().startswith("bearer "):
             auth_token = authz.split(" ", 1)[1].strip()
-    except Exception:
-        pass
+    except Exception as authz_header_error:
+        logger.debug("Failed to parse websocket authorization header", exc_info=authz_header_error)
 
     try:
         header_key = ws.headers.get("x-api-key") or ws.headers.get("X-API-KEY")
         if header_key:
             resolved_api_key = header_key.strip()
-    except Exception:
-        pass
+    except Exception as api_key_header_error:
+        logger.debug("Failed to parse websocket x-api-key header", exc_info=api_key_header_error)
 
     try:
         proto = ws.headers.get("sec-websocket-protocol") or ws.headers.get("Sec-WebSocket-Protocol")
@@ -476,8 +476,8 @@ def _extract_auth_credentials(
             parts = [p.strip() for p in proto.split(",")]
             if len(parts) >= 2 and parts[0].lower() == "bearer" and parts[1]:
                 auth_token = parts[1]
-    except Exception:
-        pass
+    except Exception as protocol_header_error:
+        logger.debug("Failed to parse websocket subprotocol auth header", exc_info=protocol_header_error)
 
     return auth_token, resolved_api_key
 
@@ -498,8 +498,8 @@ def _build_request_from_websocket(ws: WebSocket) -> StarletteRequest:
             scope["client"] = (client[0], client[1])
         elif client is not None and getattr(client, "host", None) is not None:
             scope["client"] = (client.host, getattr(client, "port", 0))
-    except Exception:
-        pass
+    except Exception as client_scope_error:
+        logger.debug("Failed to propagate websocket client scope details", exc_info=client_scope_error)
     return StarletteRequest(scope)
 
 

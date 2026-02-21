@@ -506,8 +506,8 @@ class CohereAdapter(ChatProvider):
                 try:
                     if hasattr(gen, "close"):
                         gen.close()
-                except Exception:
-                    pass
+                except Exception as stream_close_error:
+                    logger.debug("Cohere streaming generator close failed", exc_info=stream_close_error)
                 loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
         thread = threading.Thread(target=_worker, daemon=True)

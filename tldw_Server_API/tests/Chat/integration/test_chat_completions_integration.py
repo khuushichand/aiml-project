@@ -20,7 +20,7 @@ try:
     if _env_path.exists():
         load_dotenv(dotenv_path=str(_env_path), override=False)
 except Exception:
-    pass
+    _ = None
 
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app
@@ -115,7 +115,7 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
             if api_key:
                 headers["X-API-KEY"] = api_key
     except Exception:
-        pass
+        _ = None
 
     headers["X-CSRF-Token"] = getattr(client, "csrf_token", "")
 
@@ -430,7 +430,7 @@ def _provider_base_url_override(provider_name: str) -> str:
             if isinstance(base, str) and base.strip():
                 return base.strip()
     except Exception:
-        pass
+        _ = None
     env_map = {
         "anthropic": "ANTHROPIC_BASE_URL",
         "google": "GOOGLE_GEMINI_BASE_URL",
@@ -639,7 +639,7 @@ def test_commercial_provider_streaming_no_template(
                             full_content += f"[tool_calls:{len(tc)}]"
                         except Exception:
                             # Ignore formatting errors
-                            pass
+                            _ = None
                     if choices[0].get("finish_reason") == "stop":
                         # Wait for [DONE], but we already have content
                         pass

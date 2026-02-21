@@ -168,8 +168,8 @@ class Supertonic2OnnxAdapter(TTSAdapter):
             )
             if asyncio.iscoroutine(register_result):
                 await register_result
-        except Exception:
-            pass
+        except Exception as registration_error:
+            logger.debug("Supertonic2 provider registration failed; continuing", exc_info=registration_error)
 
         try:
             self.sample_rate = int(getattr(self._engine, "sample_rate", self.sample_rate))
@@ -391,8 +391,8 @@ class Supertonic2OnnxAdapter(TTSAdapter):
             end_idx = int(self.sample_rate * dur_val)
             if end_idx > 0:
                 arr = arr[:end_idx]
-        except Exception:
-            pass
+        except Exception as trim_error:
+            logger.debug("Supertonic2 audio trim by duration failed; using untrimmed audio", exc_info=trim_error)
         return arr
 
     def _build_stream(self, audio_bytes: bytes) -> AsyncGenerator[bytes, None]:

@@ -198,8 +198,8 @@ class PolicyLoader:
                     try:
                         if self._path.exists():
                             cur_mtime = max(cur_mtime, self._path.stat().st_mtime)
-                    except Exception:
-                        pass
+                    except Exception as path_stat_error:
+                        logger.debug("Policy loader failed to stat policy file mtime", exc_info=path_stat_error)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Failed to poll policy store: {}", e)
                     return

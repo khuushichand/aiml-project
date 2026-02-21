@@ -796,7 +796,7 @@ class ChromaDBManager:
                                         claims_coll = self.get_or_create_collection(coll_name)
                                     import hashlib as _hashlib
                                     ids = [
-                                        f"claim_{media_id}_{(c.get('chunk_index') or 0)}_{_hashlib.sha1(str(c.get('claim_text','')).encode()).hexdigest()[:12]}"
+                                        f"claim_{media_id}_{(c.get('chunk_index') or 0)}_{_hashlib.sha1(str(c.get('claim_text','')).encode(), usedforsecurity=False).hexdigest()[:12]}"
                                         for c in claims
                                     ]
                                     metas = []
@@ -1509,7 +1509,7 @@ class ChromaDBManager:
                     for w in words:
                         feats = grams(w)
                         for f in feats:
-                            h = int(_hash.sha1(f.encode("utf-8")).hexdigest()[:16], 16)
+                            h = int(_hash.sha1(f.encode("utf-8"), usedforsecurity=False).hexdigest()[:16], 16)
                             for b in range(64):
                                 if (h >> b) & 1:
                                     bits[b] += 1

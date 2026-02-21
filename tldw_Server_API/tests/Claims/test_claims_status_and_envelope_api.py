@@ -115,7 +115,7 @@ def _principal_override(is_admin: bool):
                     request_id=None,
                 )
             except Exception:
-                pass
+                _ = None
         return principal
 
     return _override
@@ -174,7 +174,7 @@ def test_claims_status_admin_ok():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(True)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
@@ -222,7 +222,7 @@ def test_claims_envelope_pagination_absolute_link():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
@@ -296,7 +296,7 @@ def test_claims_status_reports_queue_activity():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(True)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
@@ -369,7 +369,7 @@ def test_claims_rebuild_policies_enqueue_expected_media():
                     try:
                         override_db.close_connection()
                     except Exception:
-                        pass
+                        _ = None
 
             fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
 

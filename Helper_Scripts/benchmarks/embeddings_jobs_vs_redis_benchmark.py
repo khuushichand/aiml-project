@@ -506,8 +506,8 @@ async def _run_redis_benchmark_synthetic(
         finally:
             try:
                 await client.aclose()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"redis worker client close error stream={stream}: {exc}")
 
     async def chunking_handler(fields: Dict[str, Any], client) -> None:
         root_id = str(fields.get("root_id", ""))
@@ -594,8 +594,8 @@ async def _run_redis_benchmark_synthetic(
         finally:
             try:
                 await client.aclose()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"redis producer client close error: {exc}")
 
         while not done_event.is_set():
             now = _now_s()

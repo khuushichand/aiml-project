@@ -159,8 +159,8 @@ async def enforce_ip_allowlist(request: Request) -> None:
                 is_test_mode()
             )):
                 resolved_ip = "127.0.0.1"
-        except Exception:
-            pass
+        except Exception as loopback_error:
+            logger.debug("MCP IP filter loopback normalization failed", exc_info=loopback_error)
 
     if not controller.is_allowed(resolved_ip):
         logger.warning(

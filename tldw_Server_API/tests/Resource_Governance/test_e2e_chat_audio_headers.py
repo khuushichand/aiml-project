@@ -40,7 +40,7 @@ def _with_rg_middleware(app):
             try:
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
         yield
     finally:
         if changed:
@@ -48,7 +48,7 @@ def _with_rg_middleware(app):
                 app.user_middleware = original_user_middleware
                 app.middleware_stack = app.build_middleware_stack()
             except Exception:
-                pass
+                _ = None
 
 
 def _reset_rg_state(app) -> None:
@@ -101,13 +101,13 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await reset_db_pool()
         reset_settings()
     except Exception:
-        pass
+        _ = None
     try:
         from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
 
         await ensure_authnz_schema_ready_once()
     except Exception:
-        pass
+        _ = None
 
     # Reset cached RG daily ledger between tests when DATABASE_URL changes.
     try:
@@ -115,7 +115,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
 
         _dc._daily_ledger = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Reset cached tokens ledger/backfill flags between tests when DATABASE_URL changes.
     try:
@@ -124,7 +124,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         _ut._tokens_daily_ledger = None  # type: ignore[attr-defined]
         _ut._tokens_legacy_backfill_done = set()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Reset cached audio RG governor/handles so RG_POLICY_PATH changes take effect.
     try:
@@ -134,7 +134,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         _aq._rg_audio_loader = None  # type: ignore[attr-defined]
         _aq._reset_in_process_counters_for_tests()
     except Exception:
-        pass
+        _ = None
 
 
 async def _create_user_and_key(*, username: str, email: str, role: str = "user") -> tuple[int, str]:
@@ -431,15 +431,15 @@ async def test_e2e_audio_websocket_streams_limit(monkeypatch, tmp_path, rg_backe
                     if ws3:
                         ws3.close()
                 except Exception:
-                    pass
+                    _ = None
                 try:
                     ws2.close()
                 except Exception:
-                    pass
+                    _ = None
                 try:
                     ws1.close()
                 except Exception:
-                    pass
+                    _ = None
             assert denied
 
 

@@ -152,7 +152,7 @@ def mock_openai_server():
             if response.status_code == 200:
                 break
         except requests.ConnectionError:
-            pass
+            _ = None
         time.sleep(0.5)
     else:
         process.terminate()
@@ -170,7 +170,7 @@ def mock_openai_server():
         try:
             process.wait(timeout=3)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(scope="function")
@@ -305,7 +305,7 @@ async def webhook_receiver_server(monkeypatch):
         received.clear()
     except Exception:
         # If aiohttp is not available or other import issues, proceed; tests may still pass.
-        pass
+        _ = None
 
     try:
         yield {"url": url, "received": received}
@@ -375,7 +375,7 @@ async def flaky_webhook_receiver_server(monkeypatch):
                 pytest.skip(f"Local HTTP connections blocked in sandbox; skipping webhook tests ({e})")
         received.clear()
     except Exception:
-        pass
+        _ = None
 
     try:
         yield {"url": url, "received": received}
@@ -428,7 +428,7 @@ def mock_llm_analyze(monkeypatch):
             mock_analyze
         )
     except:
-        pass  # Module might not import it
+        _ = None  # Module might not import it
 
     return mock_analyze
 
@@ -644,7 +644,7 @@ def override_unified_service(temp_db_path, monkeypatch):
         cache = getattr(service_module, "_service_instances_by_user")
         cache.pop(_test_user_id, None)
     except Exception:
-        pass
+        _ = None
     service_module._service_instance = None
 
     # Restore the original webhook adapter to avoid leaking test state

@@ -287,25 +287,25 @@ def transactional_cleanup(
         try:
             api_client.delete_chat(chat_id)
         except Exception:
-            pass
+            _ = None
 
     for char_id in resources["character_ids"]:
         try:
             api_client.delete_character(char_id)
         except Exception:
-            pass
+            _ = None
 
     for note_id in resources["note_ids"]:
         try:
             api_client.delete_note(note_id)
         except Exception:
-            pass
+            _ = None
 
     for media_id in resources["media_ids"]:
         try:
             api_client.delete_media(media_id)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(scope="function")

@@ -66,7 +66,7 @@ def isolated_db():
         if os.path.exists(db_path + "-shm"):
             os.unlink(db_path + "-shm")
     except:
-        pass
+        _ = None
 
 
 @pytest.fixture(scope="function")
@@ -190,7 +190,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
             if api_key:
                 headers["X-API-KEY"] = api_key
         except Exception:
-            pass
+            _ = None
         headers["Authorization"] = auth_token
         return client.post(url, json=json_data, headers=headers)
 
@@ -216,7 +216,7 @@ def mock_server_url():
         if response.status_code == 200:
             return "http://localhost:8080"
     except:
-        pass
+        _ = None
 
     # If mock server is not running, skip integration tests
     pytest.skip("Mock OpenAI server not running - skipping integration tests")
@@ -263,7 +263,7 @@ def integration_test_client(isolated_db, mock_server_url):
                     if api_key:
                         headers["X-API-KEY"] = api_key
                 except Exception:
-                    pass
+                    _ = None
                 headers["Authorization"] = auth_token
                 return client.post(url, json=json_data, headers=headers)
 

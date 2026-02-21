@@ -151,7 +151,7 @@ class TestConnectionAcquisition:
                 try:
                     ctx.__exit__(None, None, None)
                 except:
-                    pass
+                    _ = None
             pool.shutdown()
 
     def test_acquire_with_timeout(self, temp_db_path):
@@ -676,7 +676,7 @@ class TestConnectionPoolContextManager:
                 conn.execute("SELECT 1")
                 raise ValueError("Test error")
         except ValueError:
-            pass
+            _ = None
 
         # Connection should still be released
         stats = pool.get_statistics()

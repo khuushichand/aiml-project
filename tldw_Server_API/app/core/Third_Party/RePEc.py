@@ -23,6 +23,7 @@ import os
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from defusedxml import ElementTree as DET
 from tldw_Server_API.app.core.http_client import fetch
 
 # ---------------- IDEAS (RePEc) API: handle -> reference metadata ----------------
@@ -133,7 +134,7 @@ def get_citations_plain(handle: str) -> tuple[dict[str, Any] | None, str | None]
             return None, "CitEc returned empty response."
         # Parse XML
         try:
-            root = ET.fromstring(text)
+            root = DET.fromstring(text)
         except ET.ParseError:
             # Some responses may be HTML-wrapped or XSL transformed; treat as error
             return None, "CitEc response not XML in 'plain' mode."

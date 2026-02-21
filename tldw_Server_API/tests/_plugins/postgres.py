@@ -86,7 +86,7 @@ def _ensure_postgres_available(host: str, port: int, user: str, password: str, *
     try:
         subprocess.run([docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
-        pass
+        _ = None
 
     envs = [
         "-e", f"POSTGRES_USER={user}",
@@ -133,7 +133,7 @@ def _connect_admin(host: str, port: int, user: str, password: str):
                 try:
                     print(f"[pg-fixture] admin connect failed: host={host} port={port} user={user} err={e}")
                 except Exception:
-                    pass
+                    _ = None
             time.sleep(0.5)
     raise last_err  # type: ignore[misc]
 
@@ -165,7 +165,7 @@ def _drop_database(host: str, port: int, user: str, password: str, db_name: str)
         try:
             conn.close()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(scope="session")
@@ -194,7 +194,7 @@ def pg_server() -> Dict[str, str | int]:
                 f"host={env.host} port={env.port} user={env.user} password={masked} database={env.database} dsn={env.dsn}"
             )
         except Exception:
-            pass
+            _ = None
 
     return {"host": env.host, "port": int(env.port), "user": env.user, "password": env.password}
 
@@ -226,7 +226,7 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
                 try:
                     print(f"[pg-fixture] attempting Docker fallback on 127.0.0.1:{alt_port} for user={user}")
                 except Exception:
-                    pass
+                    _ = None
             ok2 = _ensure_postgres_available("127.0.0.1", alt_port, user, password, require_pg=require_pg)
             if ok2:
                 # Switch to alternate local container and retry create
@@ -249,7 +249,7 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
             try:
                 print("[pg-fixture] " + msg)
             except Exception:
-                pass
+                _ = None
         if require_pg:
             pytest.fail(msg)
         else:

@@ -46,8 +46,8 @@ def _build_config_from_env_and_settings() -> DatabaseConfig:
             user = user or pg.get("user")
             password = password or pg.get("password")
             sslmode = sslmode or pg.get("sslmode") or "prefer"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Unable to load PG settings fallback from config: {exc}")
 
     if not host or not database or not user:
         raise RuntimeError("Missing required PG connection info. Set PG_HOST, PG_DATABASE, PG_USER (and PG_PASSWORD if needed).")

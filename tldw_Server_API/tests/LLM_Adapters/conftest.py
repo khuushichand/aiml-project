@@ -94,7 +94,7 @@ def client(client_user_only):
             else:
                 headers.setdefault("X-API-KEY", auth_token)
         except Exception:
-            pass
+            _ = None
         return test_client.post(url, headers=headers, **kwargs)
 
     setattr(test_client, "post_with_auth", post_with_auth)

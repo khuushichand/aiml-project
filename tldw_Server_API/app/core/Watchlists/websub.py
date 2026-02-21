@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+from defusedxml import ElementTree as DET
+from defusedxml.common import DefusedXmlException
 from loguru import logger
 
 _WEBSUB_NONCRITICAL_EXCEPTIONS = (
@@ -33,6 +35,7 @@ _WEBSUB_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     ET.ParseError,
+    DefusedXmlException,
 )
 
 
@@ -205,7 +208,7 @@ def parse_push_items(xml_bytes: bytes) -> list[dict[str, Any]]:
     """
     try:
         text = xml_bytes.decode("utf-8", errors="replace")
-        root = ET.fromstring(text)
+        root = DET.fromstring(text)
     except _WEBSUB_NONCRITICAL_EXCEPTIONS:
         return []
 

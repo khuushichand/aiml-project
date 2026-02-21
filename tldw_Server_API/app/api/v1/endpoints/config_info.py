@@ -116,8 +116,8 @@ def load_safe_config() -> dict:
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps
         safe_config["capabilities"] = caps
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to derive safe capability flags: {e}")
 
     return safe_config
 
@@ -141,8 +141,8 @@ async def get_documentation_config():
     host = config.get("server", {}).get("host", "127.0.0.1")
     port = config.get("server", {}).get("port", 8000)
 
-    # Convert 0.0.0.0 to localhost for documentation
-    if host == "0.0.0.0":
+    # Convert 0.0.0.0 to localhost for documentation (comparison/sanitization only).
+    if host == "0.0.0.0":  # nosec B104
         host = "localhost"
 
     base_url = f"http://{host}:{port}"

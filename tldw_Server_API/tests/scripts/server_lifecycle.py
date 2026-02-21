@@ -78,7 +78,7 @@ def start_server() -> None:
         try:
             _stop_server_by_pid(pid_path)
         except Exception:
-            pass
+            _ = None
 
     env = os.environ.copy()
     cmd = [
@@ -202,7 +202,7 @@ def _stop_server_by_pid(pid_path: Path) -> None:
     try:
         os.kill(pid, kill_signal)
     except OSError:
-        pass
+        _ = None
 
 
 def _process_alive(pid: int) -> bool:
@@ -225,7 +225,7 @@ def _extract_port_from_url(url: str) -> Optional[str]:
         if parsed.scheme == "https":
             return "443"
     except Exception:
-        pass
+        _ = None
     return None
 
 

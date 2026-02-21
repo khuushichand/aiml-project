@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 from typing import Any
+from defusedxml import ElementTree as DET
 from xml.etree import ElementTree as ET
 
 from tldw_Server_API.app.core.http_client import fetch
@@ -22,7 +23,7 @@ def _get_xml(params: dict[str, Any]) -> ET.Element:
     if r.status_code >= 400:
         raise RuntimeError(f"HTTP {r.status_code}")
     try:
-        return ET.fromstring(r.text)
+        return DET.fromstring(r.text)
     finally:
         with contextlib.suppress(Exception):
             r.close()

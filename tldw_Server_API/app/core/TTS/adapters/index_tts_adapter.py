@@ -138,8 +138,8 @@ class IndexTTS2Adapter(TTSAdapter):
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
-            except Exception:
-                pass
+            except Exception as registration_error:
+                logger.debug("IndexTTS provider registration failed; continuing", exc_info=registration_error)
 
             # Cache capabilities for later use
             self._capabilities = await self.get_capabilities()

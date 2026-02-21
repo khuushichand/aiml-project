@@ -77,7 +77,7 @@ def test_db():
         if os.path.exists(db_path + "-shm"):
             os.unlink(db_path + "-shm")
     except:
-        pass
+        _ = None
 
 
 @pytest.fixture
@@ -111,7 +111,7 @@ def test_client(test_db):
             )
         )
     except Exception:
-        pass
+        _ = None
 
     # Create a test user for authentication
     test_user = User(id=1, username="test_user", email="test@example.com", is_active=True)
@@ -159,7 +159,7 @@ def test_client(test_db):
         try:
             initialize_rate_limiter()
         except Exception:
-            pass
+            _ = None
 
 
 import pytest_asyncio

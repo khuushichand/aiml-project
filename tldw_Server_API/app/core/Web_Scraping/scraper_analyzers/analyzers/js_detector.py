@@ -72,8 +72,8 @@ def analyze_js_rendering(url: str) -> dict[str, Any]:
                 try:
                     page.goto(url, wait_until="load", timeout=30_000)
                     page.wait_for_load_state("networkidle", timeout=5_000)
-                except Exception:
-                    pass
+                except Exception as navigation_error:
+                    _ = navigation_error  # continue JS detector with current page state
                 page.wait_for_timeout(2_000)
                 js_html = page.content()
             finally:

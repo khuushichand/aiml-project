@@ -170,4 +170,4 @@ async def test_metrics_collection_respects_config_toggle(monkeypatch):
     try:
         config_module.get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None

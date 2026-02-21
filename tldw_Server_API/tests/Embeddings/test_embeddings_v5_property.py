@@ -353,11 +353,11 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
             if hasattr(self, 'client') and self.client is not None:
                 self.client.close()
         except Exception:
-            pass
+            _ = None
         try:
             app.dependency_overrides.clear()
         except Exception:
-            pass
+            _ = None
 
     texts = Bundle("texts")
 

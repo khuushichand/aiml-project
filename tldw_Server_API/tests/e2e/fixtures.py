@@ -113,7 +113,7 @@ def _build_inprocess_httpx_client() -> httpx.Client:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()
     except Exception:
-        pass
+        _ = None
     from tldw_Server_API.app.main import app
     try:
         transport = httpx.ASGITransport(app=app, lifespan="on")
@@ -192,7 +192,7 @@ class APIClient:
                 try:
                     inst.close()
                 except Exception:
-                    pass
+                    _ = None
 
     def _maybe_set_single_user_auth(self) -> None:
         if "X-API-KEY" in self.client.headers or self.token:
@@ -1025,7 +1025,7 @@ def _resolve_single_user_api_key(health_info: Optional[Dict[str, Any]] = None) -
         if settings.SINGLE_USER_API_KEY:
             return settings.SINGLE_USER_API_KEY
     except Exception:
-        pass
+        _ = None
     return "test-api-key-12345"
 
 
@@ -1137,7 +1137,7 @@ def authenticated_client(api_client, test_user_credentials):
     try:
         api_client.register(**test_user_credentials)
     except httpx.HTTPStatusError:
-        pass  # User might already exist
+        _ = None  # User might already exist
 
     try:
         # Login
@@ -1200,7 +1200,7 @@ def cleanup_test_file(file_path: str):
     try:
         os.unlink(file_path)
     except:
-        pass
+        _ = None
 
 
 class TestDataTracker:
@@ -1267,35 +1267,35 @@ class TestDataTracker:
             try:
                 client.delete_prompt(pid)
             except Exception:
-                pass
+                _ = None
 
         # Delete notes
         for nid in list(self.note_ids):
             try:
                 client.delete_note(nid)
             except Exception:
-                pass
+                _ = None
 
         # Delete chat sessions
         for cid in list(self.chat_ids):
             try:
                 client.delete_chat(cid)
             except Exception:
-                pass
+                _ = None
 
         # Delete characters
         for cid in list(self.character_ids):
             try:
                 client.delete_character(cid)
             except Exception:
-                pass
+                _ = None
 
         # Delete media last
         for mid in list(self.media_ids):
             try:
                 client.delete_media(mid)
             except Exception:
-                pass
+                _ = None
 
 
 @pytest.fixture(scope="session")

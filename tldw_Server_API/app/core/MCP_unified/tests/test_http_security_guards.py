@@ -55,7 +55,7 @@ def test_enforce_http_security_rejects_large_payload(monkeypatch):
     try:
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     client = TestClient(_build_guarded_app())
     try:
         # Small payload passes
@@ -94,7 +94,7 @@ def test_enforce_http_security_get_skips_body_read(monkeypatch):
     try:
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     body_call_count = {"count": 0}
 
@@ -182,7 +182,7 @@ def test_enforce_http_security_requires_client_certificate(monkeypatch):
     try:
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     monkeypatch.setattr(
         ip_filter.IPAccessController,
         "_is_trusted_proxy",
@@ -311,7 +311,7 @@ def test_enforce_http_security_rejects_invalid_cert_value(monkeypatch):
     try:
         ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Treat test client as coming via trusted proxy for header acceptance
     monkeypatch.setattr(

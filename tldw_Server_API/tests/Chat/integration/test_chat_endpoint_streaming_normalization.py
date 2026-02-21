@@ -130,13 +130,13 @@ def test_endpoint_streaming_normalizes_openai_sse_frames():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
 
         _app = app  # type: ignore[assignment]
         try:
             getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -203,12 +203,12 @@ def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         _app = app  # type: ignore[assignment]
         try:
             getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -311,12 +311,12 @@ def test_endpoint_streaming_emits_tool_results_event_before_stream_end():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         _app = app  # type: ignore[assignment]
         try:
             getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.mark.unit
@@ -437,9 +437,9 @@ def test_endpoint_non_stream_auto_continue_returns_followup_assistant_content():
             if os.path.exists(db_path + "-shm"):
                 os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         _app = app  # type: ignore[assignment]
         try:
             getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
         except Exception:
-            pass
+            _ = None

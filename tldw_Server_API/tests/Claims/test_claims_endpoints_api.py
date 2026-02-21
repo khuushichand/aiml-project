@@ -79,7 +79,7 @@ def test_claims_endpoints_list_and_rebuild():
             try:
                 override_db.close_connection()
             except Exception:
-                pass
+                _ = None
 
     async def _override_user():
         return _User()
@@ -126,4 +126,4 @@ def test_claims_endpoints_list_and_rebuild():
     try:
         seed_db.close_connection()
     except Exception:
-        pass
+        _ = None

@@ -43,7 +43,7 @@ async def test_ws_origin_denied(monkeypatch):
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     server = MCPServer()
     # Ensure config picked up in case env cache didn't propagate
@@ -66,7 +66,7 @@ async def test_ws_query_auth_disabled_requires_auth(monkeypatch):
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     server = MCPServer()
     server.config.ws_allowed_origins = ["*"]
@@ -92,7 +92,7 @@ async def test_ws_header_bearer_auth_accepts(monkeypatch):
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     # Create a token using the same JWT manager used by server
     _ = get_config()  # ensure config instantiated with env
@@ -124,7 +124,7 @@ async def test_ws_invalid_authnz_token_allows_api_key(monkeypatch):
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     class _ApiKeyMgr:
         async def validate_api_key(self, api_key: str, ip_address: str | None = None):

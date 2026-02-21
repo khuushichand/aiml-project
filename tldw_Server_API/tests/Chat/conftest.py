@@ -13,7 +13,7 @@ flakiness in tests that incidentally hit persona chat endpoints.
 try:
     from tldw_Server_API.tests._plugins.chat_fixtures import *  # noqa: F401,F403
 except Exception:
-    pass
+    _ = None
 
 import pytest
 
@@ -35,7 +35,7 @@ def _override_character_chat_rate_limits_for_chat(monkeypatch):
         from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as _crl
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     yield
 
@@ -43,4 +43,4 @@ def _override_character_chat_rate_limits_for_chat(monkeypatch):
         from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as _crl
         _crl._rate_limiter = None  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None

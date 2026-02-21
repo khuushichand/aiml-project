@@ -34,7 +34,7 @@ def _setup_env():
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
         reset_settings()
     except Exception:
-        pass
+        _ = None
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +48,7 @@ def client():
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
     _run(reset_mcp_server())
 

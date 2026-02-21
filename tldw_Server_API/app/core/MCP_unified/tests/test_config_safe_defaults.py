@@ -12,12 +12,12 @@ def _clear_mcp_config_cache():
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
     yield
     try:
         get_config.cache_clear()  # type: ignore[attr-defined]
     except Exception:
-        pass
+        _ = None
 
 
 def _set_non_test_runtime(monkeypatch):

@@ -155,7 +155,7 @@ class DoclingVLMBackend(VLMBackend):
                         "page": None,
                         "detections": [{"label": d.label, "score": d.score, "bbox": d.bbox} for d in local_imgs],
                     })
-        except Exception:
-            pass
+        except Exception as grouping_error:
+            _ = grouping_error  # keep partial detections even if page grouping fails
 
         return VLMResult(detections=detections, texts=None, extra={"by_page": by_page})

@@ -260,8 +260,8 @@ def observe_queue_latency(job: dict, acquired_at: datetime | None, created_at: d
                 if job.get("request_id"):
                     labels = dict(labels)
                     labels["request_id"] = str(job.get("request_id"))
-    except Exception:
-        pass
+    except Exception as label_error:
+        logger.debug("Failed to enrich queue latency metric labels", exc_info=label_error)
     get_metrics_registry().observe("jobs.queue_latency_seconds", latency, labels)
 
 
@@ -289,8 +289,8 @@ def observe_duration(job: dict, started_at: datetime | None, completed_at: datet
                 if job.get("request_id"):
                     labels = dict(labels)
                     labels["request_id"] = str(job.get("request_id"))
-    except Exception:
-        pass
+    except Exception as label_error:
+        logger.debug("Failed to enrich job duration metric labels", exc_info=label_error)
     get_metrics_registry().observe("jobs.duration_seconds", duration, labels)
 
 

@@ -134,7 +134,7 @@ def test_categories_allow_pii_redaction():
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
 
@@ -176,5 +176,5 @@ def test_categories_disable_pii_redaction():
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
         except Exception:
-            pass
+            _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)

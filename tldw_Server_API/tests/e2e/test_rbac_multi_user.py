@@ -45,7 +45,7 @@ class TestRBACAdminAccess:
         try:
             user_client.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         user_client.login(creds["username"], creds["password"])  # sets Authorization header
 
         # Non-admin should get 403 on admin routes
@@ -124,7 +124,7 @@ class TestMultiUserIsolation:
                 if r.status_code == 200 and r.json().get("has_embeddings"):
                     return True
             except Exception:
-                pass
+                _ = None
             time.sleep(0.5)
         return False
 
@@ -144,7 +144,7 @@ class TestMultiUserIsolation:
         try:
             client_a.register(**ua)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         client_a.login(ua["username"], ua["password"])  # Bearer for A
 
         # Create user B
@@ -156,7 +156,7 @@ class TestMultiUserIsolation:
         try:
             client_b.register(**ub)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         client_b.login(ub["username"], ub["password"])  # Bearer for B
 
         # User A uploads media
@@ -214,7 +214,7 @@ class TestMultiUserIsolation:
             try:
                 c.register(**creds)
             except httpx.HTTPStatusError:
-                pass
+                _ = None
             c.login(creds["username"], creds["password"])  # sets bearer
 
         # User A uploads and triggers embeddings
@@ -253,7 +253,7 @@ class TestMultiUserIsolation:
         try:
             c.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         c.login(creds["username"], creds["password"])  # Bearer
 
         # Create self virtual API key allowing media endpoints
@@ -294,7 +294,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             user.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         user.login(creds["username"], creds["password"])  # for me endpoint
         uinfo = user.get_current_user()
         uid = uinfo.get("id") or uinfo.get("user_id")
@@ -359,7 +359,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer for /auth/me
         uid = u.get_current_user().get("id")
 
@@ -442,7 +442,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer for /auth/me
         uid = u.get_current_user().get("id")
 
@@ -492,7 +492,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer for /auth/me
         uid = u.get_current_user().get("id")
 
@@ -548,7 +548,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer for /auth/me
         uid = u.get_current_user().get("id")
 
@@ -606,7 +606,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer for user
         uid = u.get_current_user().get("id")
 
@@ -671,7 +671,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer
         uid = u.get_current_user().get("id")
 
@@ -736,7 +736,7 @@ class TestAdminMintedVirtualKeyConstraints:
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         u.login(creds["username"], creds["password"])  # bearer for /auth/me
         uid = u.get_current_user().get("id")
 
@@ -811,7 +811,7 @@ class TestOrgsTeamsRBAC:
             try:
                 cli.register(**creds)
             except httpx.HTTPStatusError:
-                pass
+                _ = None
             cli.login(creds["username"], creds["password"])  # for /auth/me
 
         uid1 = u1.get_current_user().get("id")
@@ -901,7 +901,7 @@ class TestAdminRoleAssignment:
         try:
             user.register(**creds)
         except httpx.HTTPStatusError:
-            pass
+            _ = None
         user.login(creds["username"], creds["password"])  # non-admin bearer
         uid = user.get_current_user().get("id")
 

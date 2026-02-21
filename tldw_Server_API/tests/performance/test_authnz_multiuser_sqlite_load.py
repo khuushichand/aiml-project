@@ -46,7 +46,7 @@ async def _build_app(tmp_path, monkeypatch):
         from tldw_Server_API.app.core.config import settings as core_settings
         core_settings["CSRF_ENABLED"] = False
     except Exception:
-        pass
+        _ = None
 
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool

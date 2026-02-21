@@ -78,5 +78,5 @@ def test_jobs_events_sse_sqlite_smoke(monkeypatch):
                                 hb = True
                                 break
                         except Exception:
-                            pass
+                            _ = None
             assert hb, "did not observe SSE heartbeat frame"

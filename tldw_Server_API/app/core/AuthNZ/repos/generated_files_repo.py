@@ -554,7 +554,7 @@ class AuthnzGeneratedFilesRepo:
                 else:
                     placeholders = ",".join("?" for _ in file_ids)
                     cursor = await conn.execute(
-                        f"""
+                        f"""  # nosec B608
                         UPDATE generated_files
                         SET is_deleted = 1, deleted_at = ?, updated_at = ?
                         WHERE id IN ({placeholders}) AND is_deleted = 0
@@ -589,7 +589,7 @@ class AuthnzGeneratedFilesRepo:
                 else:
                     placeholders = ",".join("?" for _ in file_ids)
                     cursor = await conn.execute(
-                        f"""
+                        f"""  # nosec B608
                         UPDATE generated_files
                         SET folder_tag = ?, updated_at = ?
                         WHERE id IN ({placeholders}) AND is_deleted = 0

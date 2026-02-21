@@ -34,7 +34,7 @@ def _normalize_personalization_user_id(user_id: str) -> str:
         raise ValueError("user_id is required")
     if raw.isdigit():
         return str(int(raw))
-    digest = hashlib.sha1(raw.encode("utf-8")).digest()
+    digest = hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).digest()
     return str(int.from_bytes(digest[:4], byteorder="big", signed=False))
 
 
@@ -167,4 +167,3 @@ def persist_tool_outcome(
         metadata={"tool_name": str(tool_name or ""), "step_idx": int(step_idx)},
         store_as_memory=True,
     )
-

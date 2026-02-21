@@ -65,13 +65,13 @@ def _index_of_media(docs: List[Dict[str, Any]], media_id: int) -> int:
             if int(str(d.get("id"))) == int(media_id):
                 return i
         except Exception:
-            pass
+            _ = None
         md = d.get("metadata") or {}
         try:
             if int(str(md.get("media_id"))) == int(media_id):
                 return i
         except Exception:
-            pass
+            _ = None
     return -1
 
 
@@ -83,7 +83,7 @@ def _poll_embeddings_ready(client: APIClient, media_id: int, timeout_s: int = 20
             if r.status_code == 200 and bool(r.json().get("has_embeddings")):
                 return True
         except Exception:
-            pass
+            _ = None
         time.sleep(0.5)
     return False
 

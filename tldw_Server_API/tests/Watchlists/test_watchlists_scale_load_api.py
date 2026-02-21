@@ -44,7 +44,7 @@ def client_admin(monkeypatch):
         if user_db_path.exists():
             user_db_path.unlink()
     except Exception:
-        pass
+        _ = None
 
     from fastapi import FastAPI
     from tldw_Server_API.app.api.v1.endpoints.watchlists import router as watchlists_router

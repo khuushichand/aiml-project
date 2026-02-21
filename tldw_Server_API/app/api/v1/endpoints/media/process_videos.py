@@ -90,9 +90,9 @@ async def process_videos_endpoint(
             tags=["no_db"],
             metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
         )
-    except Exception:
+    except Exception as usage_log_error:
         # Usage logging is best-effort; do not fail the request.
-        pass
+        logger.debug("Video process endpoint usage logging failed", exc_info=usage_log_error)
 
     if form_data.urls and form_data.urls == [""]:
         logger.info(
@@ -346,8 +346,8 @@ async def process_videos_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception:
-        pass
+    except Exception as rechunk_error:
+        logger.debug("Video process endpoint rechunking failed; returning original result", exc_info=rechunk_error)
 
     return JSONResponse(status_code=final_status_code, content=batch_result)
 

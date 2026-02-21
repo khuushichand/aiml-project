@@ -158,8 +158,8 @@ def ingest_files(client: ApiClient, media_type: str, paths: List[Path]) -> List[
                 for _, f in files_param:
                     try:
                         f[1].close()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        print(f"[WARN] Failed to close upload file handle: {exc}", file=sys.stderr)
             r.raise_for_status()
             payload = r.json()
             # Try to extract db_ids from common shapes
@@ -170,8 +170,8 @@ def ingest_files(client: ApiClient, media_type: str, paths: List[Path]) -> List[
                     if mid is not None:
                         try:
                             media_ids.append(int(mid))
-                        except Exception:
-                            pass
+                        except (TypeError, ValueError):
+                            continue
         except Exception as e:
             print(f"[WARN] Ingest batch failed ({media_type}): {e}", file=sys.stderr)
     return media_ids
@@ -202,8 +202,8 @@ def generate_embeddings_and_wait(client: ApiClient, media_id: int, provider: Opt
             js = s.json()
             if bool(js.get("has_embeddings")):
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Embedding status poll failed for media {media_id}: {exc}", file=sys.stderr)
         time.sleep(poll_sec)
     return False
 
@@ -285,8 +285,8 @@ def wait_for_run(client: ApiClient, run_id: str, poll_sec: float = 3.0, max_wait
             status = (js.get("status") or "").lower()
             if status in {"completed", "failed", "cancelled"}:
                 return js
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[WARN] Run status poll failed for run {run_id}: {exc}", file=sys.stderr)
         time.sleep(poll_sec)
     return last
 

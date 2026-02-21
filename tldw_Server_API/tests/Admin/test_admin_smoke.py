@@ -36,7 +36,7 @@ def _fresh_client(test_mode: bool = False, user_db_base_dir: Optional[str] = Non
     try:
         asyncio.run(reset_db_pool())
     except Exception:
-        pass
+        _ = None
 
     # Ensure schema migrations and RBAC seed exist on the fresh database
     ensure_authnz_tables(Path(tmp_path))

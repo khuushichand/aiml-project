@@ -47,7 +47,7 @@ def client(tmp_path_factory):
         try:
             db_instance.close_all_connections()
         except Exception:
-            pass
+            _ = None
         close_all_chacha_db_instances()
 
 

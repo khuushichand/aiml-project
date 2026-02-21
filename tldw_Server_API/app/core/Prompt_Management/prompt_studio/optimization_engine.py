@@ -759,8 +759,8 @@ class OptimizationEngine:
                 if "score" in extra and extra["score"] is None:
                     extra.pop("score")
                 final_metrics.update(extra)
-            except Exception:
-                pass
+            except Exception as metric_merge_error:
+                logger.debug("Optimization engine failed to merge extra metric payload", exc_info=metric_merge_error)
         return final_metrics
 
     def _update_optimization_results(self, optimization_id: int, results: dict[str, Any]):

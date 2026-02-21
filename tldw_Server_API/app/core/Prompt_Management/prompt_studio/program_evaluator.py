@@ -20,6 +20,8 @@ import textwrap
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from loguru import logger
+
 _DEFAULT_IMPORT_WHITELIST = ("math", "statistics")
 _WRAPPER_ALLOWED_IMPORTS = {"json", "sys", "builtins", "resource", "math"}
 _FORBIDDEN_PATTERNS = [
@@ -80,8 +82,8 @@ class ProgramEvaluator:
                 flag = md.get("enable_code_eval")
                 if isinstance(flag, bool):
                     return flag
-        except Exception:
-            pass
+        except Exception as metadata_error:
+            logger.debug("Program evaluator failed to resolve project metadata flag", exc_info=metadata_error)
         return ProgramEvaluator.is_enabled_globally()
 
     # --------------------------------------------------------------------------------------------
@@ -419,8 +421,8 @@ class ProgramEvaluator:
                 try:
                     score_val = float(nums[-1])
                     metrics["parsed_metric_value"] = score_val
-                except Exception:
-                    pass
+                except Exception as metric_parse_error:
+                    logger.debug("Program evaluator failed to parse metric value from objective output", exc_info=metric_parse_error)
 
         # Evaluate simple constraints: expect expressions like "x >= 0" over globals_dump
         constraints_ok = True

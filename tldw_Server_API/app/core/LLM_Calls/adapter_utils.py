@@ -66,8 +66,8 @@ def ensure_app_config(app_config: dict[str, Any] | None = None) -> dict[str, Any
             cfg = loader()
             if cfg is not None:
                 return cfg
-    except Exception:
-        pass
+    except Exception as load_error:
+        _ = load_error  # fallback to standard config loader below
     return load_and_log_configs() or {}
 
 

@@ -87,7 +87,7 @@ class QueryResultCache:
             "kwargs": kwargs
         }
         key_str = json.dumps(key_data, sort_keys=True)
-        return hashlib.md5(key_str.encode()).hexdigest()
+        return hashlib.md5(key_str.encode(), usedforsecurity=False).hexdigest()
 
     async def get(self, query: str, collection: str, **kwargs) -> Optional[Any]:
         """Get cached results"""

@@ -251,8 +251,8 @@ async def get_system_stats(db) -> SystemStatsResponse:
                     storage={"total_used_mb": 0.0, "total_quota_mb": 0.0, "average_used_mb": 0.0, "max_used_mb": 0.0},
                     sessions={"active": 0, "unique_users": 0},
                 )
-        except Exception:
-            pass
+        except Exception as db_summary_error:
+            logger.debug("Admin system service failed to build fallback DB summary", exc_info=db_summary_error)
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve system statistics",

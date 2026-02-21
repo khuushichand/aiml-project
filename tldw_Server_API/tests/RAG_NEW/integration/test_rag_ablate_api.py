@@ -41,7 +41,7 @@ def client_with_overrides(monkeypatch, auth_headers):
         fastapi_app.dependency_overrides[_get_media_db] = _none_media_db
         fastapi_app.dependency_overrides[_get_chacha_db] = _none_chacha_db
     except Exception:
-        pass
+        _ = None
 
     try:
         # Prefer disabling lifespan to avoid DB/services startup in CI; skip if not supported

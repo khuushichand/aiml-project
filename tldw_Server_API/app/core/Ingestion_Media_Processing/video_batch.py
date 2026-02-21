@@ -112,9 +112,9 @@ async def run_video_batch(
                     else None,
                 }
                 logger.debug(f"process_videos processing_output summary: {safe_meta}")
-        except Exception:
+        except Exception as summary_log_error:
             # Debug logging must never affect endpoint behavior.
-            pass
+            logger.debug("Video batch processing summary logging failed", exc_info=summary_log_error)
 
         # --- Combine Processing Results ---
         # Clear counters before merging library output; file errors will be
@@ -165,9 +165,9 @@ async def run_video_batch(
                             and "download failed" not in err
                         ):
                             final_errors_list.append(f"Download failed for {ref}")
-            except Exception:
+            except Exception as normalize_error:
                 # Never fail the request due to error-normalization debug logic.
-                pass
+                logger.debug("Video batch error normalization failed", exc_info=normalize_error)
 
             # Handle confabulation results if present.
             if "confabulation_results" in processing_output:

@@ -366,3 +366,16 @@ stt-golden:
 	TLDW_STT_GOLDEN_ENABLE=1 \
 	TLDW_STT_GOLDEN_AUDIO_DIR="$(STT_GOLDEN_AUDIO_DIR)" \
 	python -m pytest tldw_Server_API/tests/Audio/test_stt_adapters_golden.py -m "stt_golden" -v
+
+# -----------------------------------------------------------------------------
+# Bandit (project-scoped)
+# -----------------------------------------------------------------------------
+.PHONY: bandit-b110-project
+
+BANDIT_INI ?= .bandit
+BANDIT_OUTPUT ?= /tmp/bandit_b110_project.json
+
+bandit-b110-project:
+	@echo "[bandit] Running project-scoped B110 scan with excludes from $(BANDIT_INI)"
+	$(PYTHON) -m bandit --ini "$(BANDIT_INI)" -r . -t B110 -f json -o "$(BANDIT_OUTPUT)"
+	@echo "[bandit] Wrote $(BANDIT_OUTPUT)"

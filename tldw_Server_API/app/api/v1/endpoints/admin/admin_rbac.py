@@ -512,10 +512,13 @@ async def get_roles_matrix(
                 role_params.append(role_names)
             role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
             # total count
-            total_roles = await db.fetchval(f"SELECT COUNT(*) FROM roles{role_where}", *role_params)
+            total_roles = await db.fetchval(
+                f"SELECT COUNT(*) FROM roles{role_where}",  # nosec B608
+                *role_params,
+            )
             # fetch with limit/offset
             role_rows = await db.fetch(
-                f"SELECT id, name, description, COALESCE(is_system,0) as is_system FROM roles{role_where} ORDER BY name LIMIT ${len(role_params)+1} OFFSET ${len(role_params)+2}",
+                f"SELECT id, name, description, COALESCE(is_system,0) as is_system FROM roles{role_where} ORDER BY name LIMIT ${len(role_params)+1} OFFSET ${len(role_params)+2}",  # nosec B608
                 *role_params, roles_limit, roles_offset,
             )
             roles = [RoleResponse(**dict(r)) for r in role_rows]
@@ -530,12 +533,12 @@ async def get_roles_matrix(
                 role_params.extend(role_names)
             role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
             # total count
-            cur = await db.execute(f"SELECT COUNT(*) FROM roles{role_where}", role_params)
+            cur = await db.execute(f"SELECT COUNT(*) FROM roles{role_where}", role_params)  # nosec B608
             row = await cur.fetchone()
             total_roles = int(row[0]) if row else 0
             # fetch with limit/offset
             cur = await db.execute(
-                f"SELECT id, name, description, COALESCE(is_system,0) FROM roles{role_where} ORDER BY name LIMIT ? OFFSET ?",
+                f"SELECT id, name, description, COALESCE(is_system,0) FROM roles{role_where} ORDER BY name LIMIT ? OFFSET ?",  # nosec B608
                 [*role_params, roles_limit, roles_offset],
             )
             role_rows = await cur.fetchall()
@@ -555,20 +558,19 @@ async def get_roles_matrix(
                 params.append(f"%{search}%")
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
             perm_rows = await db.fetch(
-                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", *params
+                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name",  # nosec B608
+                *params
             )
             permissions = [PermissionResponse(**dict(r)) for r in perm_rows]
 
             # Grants limited to filtered permissions via join
-            grant_rows = await db.fetch(
-                f"""
-                SELECT rp.role_id, rp.permission_id
-                FROM role_permissions rp
-                JOIN permissions p ON p.id = rp.permission_id
-                {where}
-                """,
-                *params,
+            grant_sql = (  # nosec B608
+                "SELECT rp.role_id, rp.permission_id "  # nosec B608
+                "FROM role_permissions rp "
+                "JOIN permissions p ON p.id = rp.permission_id"
+                f"{where}"
             )
+            grant_rows = await db.fetch(grant_sql, *params)  # nosec B608
             grants = [RolePermissionGrant(role_id=r['role_id'], permission_id=r['permission_id']) for r in grant_rows]
         else:
             # SQLite
@@ -580,21 +582,19 @@ async def get_roles_matrix(
                 params.extend([f"%{search}%", f"%{search}%"])
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
             cur = await db.execute(
-                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name",
+                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name",  # nosec B608
                 params,
             )
             perm_rows = await cur.fetchall()
             permissions = [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in perm_rows]
 
-            cur = await db.execute(
-                f"""
-                SELECT rp.role_id, rp.permission_id
-                FROM role_permissions rp
-                JOIN permissions p ON p.id = rp.permission_id
-                {where}
-                """,
-                params,
+            grant_sql = (  # nosec B608
+                "SELECT rp.role_id, rp.permission_id "  # nosec B608
+                "FROM role_permissions rp "
+                "JOIN permissions p ON p.id = rp.permission_id"
+                f"{where}"
             )
+            cur = await db.execute(grant_sql, params)  # nosec B608
             grant_rows = await cur.fetchall()
             grants = [RolePermissionGrant(role_id=row[0], permission_id=row[1]) for row in grant_rows]
 
@@ -629,9 +629,12 @@ async def get_roles_matrix_boolean(
                 role_clauses.append(f"name = ANY(${len(role_params)+1})")
                 role_params.append(role_names)
             role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
-            total_roles = await db.fetchval(f"SELECT COUNT(*) FROM roles{role_where}", *role_params)
+            total_roles = await db.fetchval(
+                f"SELECT COUNT(*) FROM roles{role_where}",  # nosec B608
+                *role_params,
+            )
             role_rows = await db.fetch(
-                f"SELECT id, name, description, COALESCE(is_system,0) as is_system FROM roles{role_where} ORDER BY name LIMIT ${len(role_params)+1} OFFSET ${len(role_params)+2}",
+                f"SELECT id, name, description, COALESCE(is_system,0) as is_system FROM roles{role_where} ORDER BY name LIMIT ${len(role_params)+1} OFFSET ${len(role_params)+2}",  # nosec B608
                 *role_params, roles_limit, roles_offset,
             )
             roles = [RoleResponse(**dict(r)) for r in role_rows]
@@ -644,11 +647,11 @@ async def get_roles_matrix_boolean(
                 role_clauses.append(f"name IN ({placeholders})")
                 role_params.extend(role_names)
             role_where = (" WHERE " + " AND ".join(role_clauses)) if role_clauses else ""
-            cur = await db.execute(f"SELECT COUNT(*) FROM roles{role_where}", role_params)
+            cur = await db.execute(f"SELECT COUNT(*) FROM roles{role_where}", role_params)  # nosec B608
             row = await cur.fetchone()
             total_roles = int(row[0]) if row else 0
             cur = await db.execute(
-                f"SELECT id, name, description, COALESCE(is_system,0) FROM roles{role_where} ORDER BY name LIMIT ? OFFSET ?",
+                f"SELECT id, name, description, COALESCE(is_system,0) FROM roles{role_where} ORDER BY name LIMIT ? OFFSET ?",  # nosec B608
                 [*role_params, roles_limit, roles_offset],
             )
             role_rows = await cur.fetchall()
@@ -666,7 +669,10 @@ async def get_roles_matrix_boolean(
                 clauses.append(f"(name ILIKE ${idx} OR description ILIKE ${idx})")
                 params.append(f"%{search}%")
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-            perm_rows = await db.fetch(f"SELECT id, name FROM permissions{where} ORDER BY name", *params)
+            perm_rows = await db.fetch(
+                f"SELECT id, name FROM permissions{where} ORDER BY name",  # nosec B608
+                *params,
+            )
             perm_ids = [r['id'] for r in perm_rows]
             perm_names = [r['name'] for r in perm_rows]
         else:
@@ -677,7 +683,7 @@ async def get_roles_matrix_boolean(
                 clauses.append("(name LIKE ? OR description LIKE ?)")
                 params.extend([f"%{search}%", f"%{search}%"])
             where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-            cur = await db.execute(f"SELECT id, name FROM permissions{where} ORDER BY name", params)
+            cur = await db.execute(f"SELECT id, name FROM permissions{where} ORDER BY name", params)  # nosec B608
             perm_rows = await cur.fetchall()
             perm_ids = [row[0] for row in perm_rows]
             perm_names = [row[1] for row in perm_rows]
@@ -685,36 +691,32 @@ async def get_roles_matrix_boolean(
         # Grants set (also restrict to selected roles if any)
         if is_pg:
             role_ids = [r.id for r in roles]
-            grant_sql = (
-                f"""
-                SELECT rp.role_id, rp.permission_id
-                FROM role_permissions rp
-                JOIN permissions p ON p.id = rp.permission_id
-                {where}
-                """
+            grant_sql = (  # nosec B608
+                "SELECT rp.role_id, rp.permission_id "  # nosec B608
+                "FROM role_permissions rp "
+                "JOIN permissions p ON p.id = rp.permission_id"
+                f"{where}"
             )
             grant_params = list(params)
             if role_ids:
                 grant_sql += f" AND rp.role_id = ANY(${len(grant_params)+1})"
                 grant_params.append(role_ids)
-            grant_rows = await db.fetch(grant_sql, *grant_params)
+            grant_rows = await db.fetch(grant_sql, *grant_params)  # nosec B608
             grants_set = {(r['role_id'], r['permission_id']) for r in grant_rows}
         else:
             role_ids = [r.id for r in roles]
-            grant_sql = (
-                f"""
-                SELECT rp.role_id, rp.permission_id
-                FROM role_permissions rp
-                JOIN permissions p ON p.id = rp.permission_id
-                {where}
-                """
+            grant_sql = (  # nosec B608
+                "SELECT rp.role_id, rp.permission_id "  # nosec B608
+                "FROM role_permissions rp "
+                "JOIN permissions p ON p.id = rp.permission_id"
+                f"{where}"
             )
             grant_params = list(params)
             if role_ids:
                 placeholders = ",".join(["?"] * len(role_ids))
                 grant_sql += f" AND rp.role_id IN ({placeholders})"
                 grant_params.extend(role_ids)
-            cur = await db.execute(grant_sql, grant_params)
+            cur = await db.execute(grant_sql, grant_params)  # nosec B608
             grant_rows = await cur.fetchall()
             grants_set = {(row[0], row[1]) for row in grant_rows}
 
@@ -773,10 +775,16 @@ async def list_permissions(category: str | None = None, search: str | None = Non
                 params.append(f"%{search}%")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         if is_pg:
-            rows = await db.fetch(f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", *params)
+            rows = await db.fetch(
+                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name",  # nosec B608
+                *params,
+            )
             return [PermissionResponse(**dict(r)) for r in rows]
         else:
-            cur = await db.execute(f"SELECT id, name, description, category FROM permissions{where} ORDER BY name", params)
+            cur = await db.execute(
+                f"SELECT id, name, description, category FROM permissions{where} ORDER BY name",  # nosec B608
+                params,
+            )
             rows = await cur.fetchall()
             return [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in rows]
     except _RBAC_NONCRITICAL_EXCEPTIONS as e:

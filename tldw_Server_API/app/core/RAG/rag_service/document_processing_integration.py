@@ -386,7 +386,7 @@ class DocumentProcessor:
     def _generate_chunk_id(self, source: str, index: int) -> str:
         """Generate unique chunk ID."""
         data = f"{source}_{index}_{hash(source)}"
-        return hashlib.md5(data.encode()).hexdigest()[:12]
+        return hashlib.md5(data.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 class DocumentValidator:
@@ -414,7 +414,7 @@ class DocumentValidator:
         # Check for duplicate content
         content_hashes = defaultdict(list)
         for chunk in chunks:
-            content_hash = hashlib.md5(chunk.content.encode()).hexdigest()
+            content_hash = hashlib.md5(chunk.content.encode(), usedforsecurity=False).hexdigest()
             content_hashes[content_hash].append(chunk.id)
 
         duplicates = {h: ids for h, ids in content_hashes.items() if len(ids) > 1}

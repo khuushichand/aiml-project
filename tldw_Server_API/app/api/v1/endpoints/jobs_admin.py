@@ -605,7 +605,10 @@ async def list_sla_policies_endpoint(
                 if job_type:
                     where.append("job_type=%s")
                     params.append(job_type)
-                cur.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params))
+                cur.execute(
+                    f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type",  # nosec B608
+                    tuple(params),
+                )
                 rows = cur.fetchall() or []
                 return [dict(r) for r in rows]
         else:
@@ -620,7 +623,10 @@ async def list_sla_policies_endpoint(
             if job_type:
                 where.append("job_type=?")
                 params2.append(job_type)
-            rows = conn.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params2)).fetchall() or []
+            rows = conn.execute(
+                f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type",  # nosec B608
+                tuple(params2),
+            ).fetchall() or []
             return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -1408,7 +1414,7 @@ async def stale_processing_endpoint(
                         where.append("queue = %s")
                         params.append(queue)
                     cur.execute(
-                        f"SELECT domain, queue, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue",
+                        f"SELECT domain, queue, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue",  # nosec B608
                         tuple(params),
                     )
                     for (d, q, c) in cur.fetchall():
@@ -1422,7 +1428,7 @@ async def stale_processing_endpoint(
                 if queue:
                     where.append("queue = ?")
                     params2.append(queue)
-                sql = f"SELECT domain, queue, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue"
+                sql = f"SELECT domain, queue, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue"  # nosec B608
                 for (d, q, c) in conn.execute(sql, tuple(params2)).fetchall():
                     out.append(StaleGroup(domain=str(d), queue=str(q), count=int(c)))
         finally:
@@ -1503,7 +1509,7 @@ async def batch_cancel_endpoint(
                 with jm._pg_cursor(conn) as cur:
                     if req.dry_run:
                         cur.execute(
-                            f"SELECT COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status IN ('queued','processing')",
+                            f"SELECT COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status IN ('queued','processing')",  # nosec B608
                             tuple(params),
                         )
                         c = cur.fetchone()
@@ -1517,7 +1523,7 @@ async def batch_cancel_endpoint(
                     if counters_enabled:
                         cur.execute(
                             (
-                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) "
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) "  # nosec B608
                                 "AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type"
                             ),
                             tuple(params),
@@ -1525,26 +1531,26 @@ async def batch_cancel_endpoint(
                         grp_ready = cur.fetchall() or []
                         cur.execute(
                             (
-                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) "
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) "  # nosec B608
                                 "AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) GROUP BY domain,queue,job_type"
                             ),
                             tuple(params),
                         )
                         grp_sched = cur.fetchall() or []
                         cur.execute(
-                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",
+                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",  # nosec B608
                             tuple(params),
                         )
                         grp_proc = cur.fetchall() or []
                     # queued immediate cancel
                     cur.execute(
-                        f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
+                        f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",  # nosec B608
                         tuple(params),
                     )
                     affected = cur.rowcount or 0
                     # processing terminal cancel
                     cur.execute(
-                        f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",
+                        f"UPDATE jobs SET status='cancelled', cancelled_at = NOW(), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",  # nosec B608
                         tuple(params),
                     )
                     affected += cur.rowcount or 0
@@ -1592,7 +1598,7 @@ async def batch_cancel_endpoint(
             else:
                 if req.dry_run:
                     cur = conn.execute(
-                        f"SELECT COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status IN ('queued','processing')",
+                        f"SELECT COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status IN ('queued','processing')",  # nosec B608
                         tuple(params),
                     )
                     r = cur.fetchone()
@@ -1605,30 +1611,30 @@ async def batch_cancel_endpoint(
                 if counters_enabled:
                     grp_ready2 = conn.execute(
                         (
-                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) "
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) "  # nosec B608
                             "AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type"
                         ),
                         tuple(params),
                     ).fetchall() or []
                     grp_sched2 = conn.execute(
                         (
-                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) "
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) "  # nosec B608
                             "AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type"
                         ),
                         tuple(params),
                     ).fetchall() or []
                     grp_proc2 = conn.execute(
-                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",
+                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE ({' AND '.join(where)}) AND status='processing' GROUP BY domain,queue,job_type",  # nosec B608
                         tuple(params),
                     ).fetchall() or []
                 before = conn.total_changes or 0
                 conn.execute(
-                    f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",
+                    f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel' WHERE ({' AND '.join(where)}) AND status = 'queued'",  # nosec B608
                     tuple(params),
                 )
                 mid = conn.total_changes or 0
                 conn.execute(
-                    f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",
+                    f"UPDATE jobs SET status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='batch_cancel', leased_until = NULL WHERE ({' AND '.join(where)}) AND status = 'processing'",  # nosec B608
                     tuple(params),
                 )
                 after = conn.total_changes or 0
@@ -1714,7 +1720,7 @@ async def batch_reschedule_endpoint(
                 with jm._pg_cursor(conn) as cur:
                     if req.dry_run:
                         cur.execute(
-                            f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}",
+                            f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}",  # nosec B608
                             tuple(params),
                         )
                         r = cur.fetchone()
@@ -1724,14 +1730,14 @@ async def batch_reschedule_endpoint(
                     if counters_enabled:
                         cur.execute(
                             (
-                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} "
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} "  # nosec B608
                                 "AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type"
                             ),
                             tuple(params),
                         )
                         grp_ready = cur.fetchall() or []
                     cur.execute(
-                        f"UPDATE jobs SET available_at = NOW() + (%s || ' seconds')::interval WHERE {' AND '.join(where)}",
+                        f"UPDATE jobs SET available_at = NOW() + (%s || ' seconds')::interval WHERE {' AND '.join(where)}",  # nosec B608
                         tuple([int(req.delay_seconds)] + params),
                     )
                     # Update counters: ready -> scheduled for affected
@@ -1759,7 +1765,7 @@ async def batch_reschedule_endpoint(
             else:
                 if req.dry_run:
                     cur = conn.execute(
-                        f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}",
+                        f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}",  # nosec B608
                         tuple(params),
                     )
                     r = cur.fetchone()
@@ -1769,13 +1775,13 @@ async def batch_reschedule_endpoint(
                 if counters_enabled:
                     grp_ready2 = conn.execute(
                         (
-                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type"
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type"  # nosec B608
                         ),
                         tuple(params),
                     ).fetchall() or []
                 before = conn.total_changes or 0
                 conn.execute(
-                    f"UPDATE jobs SET available_at = DATETIME('now', ?) WHERE {' AND '.join(where)}",
+                    f"UPDATE jobs SET available_at = DATETIME('now', ?) WHERE {' AND '.join(where)}",  # nosec B608
                     tuple([f"+{int(req.delay_seconds)} seconds"] + params),
                 )
                 after = conn.total_changes or 0
@@ -1920,7 +1926,7 @@ async def batch_requeue_quarantined_endpoint(
                 with conn:
                     with jm._pg_cursor(conn) as cur:
                         if req.dry_run:
-                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
+                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))  # nosec B608
                             r = cur.fetchone()
                             count = int(r.get("c") or 0) if isinstance(r, dict) else int(r[0] if r else 0)
                             return BatchRequeueQuarantinedResponse(affected=count)
@@ -1929,12 +1935,12 @@ async def batch_requeue_quarantined_endpoint(
                         grp_rows: list = []
                         if counters_enabled:
                             cur.execute(
-                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue, job_type",
+                                f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue, job_type",  # nosec B608
                                 tuple(params),
                             )
                             grp_rows = cur.fetchall() or []
                         cur.execute(
-                            f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = NOW(), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",
+                            f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = NOW(), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",  # nosec B608
                             tuple(params),
                         )
                         affected = int(cur.rowcount or 0)
@@ -1975,7 +1981,7 @@ async def batch_requeue_quarantined_endpoint(
                     where.append("id = ?")
                     params2.append(int(req.job_id))
                 if req.dry_run:
-                    cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2))
+                    cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2))  # nosec B608
                     r = cur.fetchone()
                     return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
                 with conn:
@@ -1984,11 +1990,11 @@ async def batch_requeue_quarantined_endpoint(
                     grp_rows2 = []
                     if counters_enabled:
                         grp_rows2 = conn.execute(
-                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue, job_type",
+                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain, queue, job_type",  # nosec B608
                             tuple(params2),
                         ).fetchall() or []
                     conn.execute(
-                        f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = DATETIME('now'), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",
+                        f"UPDATE jobs SET status='queued', failure_streak_count = 0, failure_streak_code = NULL, quarantined_at = NULL, available_at = DATETIME('now'), leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where)}",  # nosec B608
                         tuple(params2),
                     )
                     affected2 = int(conn.total_changes or 0)

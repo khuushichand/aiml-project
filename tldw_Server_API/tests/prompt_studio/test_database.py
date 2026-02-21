@@ -89,17 +89,17 @@ def multi_user_prompt_dbs():
                 try:
                     db.close()
                 except Exception:
-                    pass
+                    _ = None
             elif hasattr(db, "conn"):
                 try:
                     db.conn.close()
                 except Exception:
-                    pass
+                    _ = None
         for path in temp_paths:
             try:
                 os.unlink(path)
             except FileNotFoundError:
-                pass
+                _ = None
 
 ########################################################################################################################
 # Database Initialization Tests

@@ -35,10 +35,10 @@ async def _get_orgs_teams_repo() -> AuthnzOrgsTeamsRepo:
                 )
 
                 await ensure_authnz_core_tables_pg(pool)
-            except Exception:
+            except Exception as ensure_tables_error:
                 # Best-effort: org APIs will still raise concrete SQL errors if the schema
                 # is missing; don't mask them here.
-                pass
+                _ = ensure_tables_error
     return AuthnzOrgsTeamsRepo(pool)
 
 

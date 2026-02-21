@@ -303,14 +303,14 @@ class PGVectorAdapter(VectorStoreAdapter):
                 await self._exec(
                     f"CREATE INDEX IF NOT EXISTS {tbl}_embedding_ivf ON {tbl} USING ivfflat (embedding {ops})"
                 )
-            except Exception:  # noqa: BLE001 - index creation best-effort
+            except Exception as index_error:  # noqa: BLE001 - index creation best-effort
                 # If both fail, continue without an ANN index (still usable for brute-force)
-                pass
+                logger.debug("pgvector index creation failed; continuing without ANN index", exc_info=index_error)
         # Analyze to help planner (best-effort)
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:  # noqa: BLE001 - analyze best-effort
-            pass
+        except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+            logger.debug("pgvector analyze after collection creation failed", exc_info=analyze_error)
 
     async def delete_collection(self, collection_name: str) -> None:
         tbl = self._sanitize_collection(collection_name)
@@ -601,15 +601,15 @@ class PGVectorAdapter(VectorStoreAdapter):
                 defrows = await self._query("SELECT indexdef FROM pg_indexes WHERE indexname = %s", (name,))
                 if defrows and 'embedding' in (defrows[0][0] or '').lower():
                     await self._exec(f"DROP INDEX IF EXISTS \"{name}\"")
-            except Exception:  # noqa: BLE001 - index drop best-effort
+            except Exception as drop_error:  # noqa: BLE001 - index drop best-effort
                 # Continue dropping best-effort
-                pass
+                logger.debug("pgvector index drop failed during optimize", exc_info=drop_error)
 
         if index_type.lower() == 'drop':
             try:
                 await self._exec(f"ANALYZE {tbl}")
-            except Exception:  # noqa: BLE001 - analyze best-effort
-                pass
+            except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+                logger.debug("pgvector analyze after index drop failed", exc_info=analyze_error)
             return await self.get_index_info(collection_name)
 
         op_metric = (metric or self.config.distance_metric or 'cosine').lower()
@@ -627,8 +627,8 @@ class PGVectorAdapter(VectorStoreAdapter):
 
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:  # noqa: BLE001 - analyze best-effort
-            pass
+        except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+            logger.debug("pgvector analyze after index optimize failed", exc_info=analyze_error)
         return await self.get_index_info(collection_name)
 
     # Adapter-specific helper: get a single vector by id
@@ -741,8 +741,8 @@ class PGVectorAdapter(VectorStoreAdapter):
         tbl = self._sanitize_collection(collection_name)
         try:
             await self._exec(f"ANALYZE {tbl}")
-        except Exception:  # noqa: BLE001 - analyze best-effort
-            pass
+        except Exception as analyze_error:  # noqa: BLE001 - analyze best-effort
+            logger.debug("pgvector analyze in optimize_collection failed", exc_info=analyze_error)
 
     async def get_index_info(self, collection_name: str) -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
@@ -769,15 +769,15 @@ class PGVectorAdapter(VectorStoreAdapter):
             if self._pool is not None:
                 # psycopg_pool.ConnectionPool exposes close(); run in executor to avoid blocking
                 await asyncio.get_event_loop().run_in_executor(None, getattr(self._pool, "close", lambda: None))
-        except Exception:  # noqa: BLE001 - close best-effort
-            pass
+        except Exception as close_error:  # noqa: BLE001 - close best-effort
+            logger.debug("pgvector pool close failed", exc_info=close_error)
         finally:
             self._pool = None
         try:
             if self._conn:
                 await asyncio.get_event_loop().run_in_executor(None, self._conn.close)
-        except Exception:  # noqa: BLE001 - close best-effort
-            pass
+        except Exception as close_error:  # noqa: BLE001 - close best-effort
+            logger.debug("pgvector connection close failed", exc_info=close_error)
         finally:
             self._conn = None
         await super().close()
@@ -795,8 +795,8 @@ class PGVectorAdapter(VectorStoreAdapter):
                     "num_connections": getattr(self._pool, "num_connections", None),
                     "num_available": getattr(self._pool, "num_available", None),
                 }
-        except Exception:  # noqa: BLE001 - pool stats best-effort
-            pass
+        except Exception as stats_error:  # noqa: BLE001 - pool stats best-effort
+            logger.debug("pgvector pool stats collection failed", exc_info=stats_error)
         try:
             rows = await self._query("SELECT 1", None)
             ok = bool(rows)

@@ -545,7 +545,16 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
       aria-label={t("playground:composer.activeContext", "Active context") as string}
       className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-2"
     >
-      {renderContextItem(casualModelItem)}
+      {modelSelectButton ? (
+        <span
+          data-testid="composer-casual-model-selector-chip"
+          className="inline-flex items-center"
+        >
+          {modelSelectButton}
+        </span>
+      ) : (
+        renderContextItem(casualModelItem)
+      )}
       {casualRuntimeItem
         ? renderContextItem(casualRuntimeItem, "composer-casual-runtime-context-chip")
         : null}

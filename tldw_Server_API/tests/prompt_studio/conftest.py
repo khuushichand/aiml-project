@@ -100,7 +100,7 @@ def isolated_db(test_db_path):
         try:
             db.close()
         except Exception:
-            pass
+            _ = None
 
     if os.path.exists(unique_path):
         os.unlink(unique_path)
@@ -178,7 +178,7 @@ def _reset_prompt_studio_tables(db: PromptStudioDatabase) -> None:
                     tables,
                 )
             except Exception:
-                pass
+                _ = None
     finally:
         cursor.execute("PRAGMA foreign_keys=ON")
     conn.commit()
@@ -193,7 +193,7 @@ def prompt_studio_sqlite_db_path(tmp_path_factory: pytest.TempPathFactory) -> Pa
         try:
             db.close()
         except Exception:
-            pass
+            _ = None
     return db_path
 
 
@@ -220,15 +220,15 @@ def prompt_studio_pg_shared_db(
         try:
             db_instance.close_connection()
         except Exception:
-            pass
+            _ = None
         try:
             db_instance.close()
         except Exception:
-            pass
+            _ = None
         try:
             backend.get_pool().close_all()
         except Exception:
-            pass
+            _ = None
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -254,15 +254,15 @@ def prompt_studio_dual_backend_db(
             try:
                 db_instance.close_connection()
             except Exception:
-                pass
+                _ = None
             try:
                 db_instance.close()
             except Exception:
-                pass
+                _ = None
             try:
                 os.unlink(str(prompt_studio_sqlite_db_path))
             except Exception:
-                pass
+                _ = None
             db_instance = PromptStudioDatabase(str(prompt_studio_sqlite_db_path), f"dual-{label}")
             _reset_prompt_studio_tables(db_instance)
         yield label, db_instance
@@ -270,12 +270,12 @@ def prompt_studio_dual_backend_db(
         try:
             db_instance.close_connection()
         except Exception:
-            pass
+            _ = None
         if label == "sqlite":
             try:
                 db_instance.close()
             except Exception:
-                pass
+                _ = None
         # No explicit drop needed; pg_database_config fixture handles DB cleanup
 
 
@@ -313,7 +313,7 @@ def prompt_studio_dual_backend_client(
             try:
                 db_instance.close_connection()
             except Exception:
-                pass
+                _ = None
 
     _app: Any = fastapi_app  # appease static analyzers about dynamic attributes
     _app.dependency_overrides[get_request_user] = override_user
