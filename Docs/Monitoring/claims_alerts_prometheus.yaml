@@ -49,6 +49,30 @@ groups:
             Check provider availability or credentials.
           runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsprovidererrorsspike"
 
+      - alert: ClaimsOutputParseErrorsSpike
+        expr: sum(increase(claims_output_parse_events_total{outcome="error"}[10m])) > 25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims output parse errors elevated"
+          description: >
+            Claims parse errors exceeded 25 events in 10 minutes.
+            Verify response format support and recent prompt/schema changes.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsoutputparseerrorsspike"
+
+      - alert: ClaimsFallbackSpike
+        expr: sum(increase(claims_fallback_total[10m])) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims fallback volume elevated"
+          description: >
+            Claims fallback events exceeded 50 in 10 minutes.
+            Check throttle, budget, and parse failure reasons by provider/model.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsfallbackspike"
+
       - alert: ClaimsAlertWebhookFailures
         expr: increase(claims_alert_webhook_failed_total[10m]) > 0
         for: 5m

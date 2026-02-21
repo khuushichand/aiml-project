@@ -41,6 +41,28 @@ This runbook covers the Prometheus alerts in `Docs/Monitoring/claims_alerts_prom
   - Fail over to a backup provider/model.
   - Reduce concurrency or adjust retry settings.
 
+## ClaimsOutputParseErrorsSpike
+- **What it means**: Structured parse failures are elevated for claims extraction or verification output.
+- **Immediate checks**:
+  - Inspect `claims_output_parse_events_total{outcome="error"}` by `provider`, `model`, and `mode`.
+  - Compare `claims_response_format_selected_total` to ensure `json_schema`/`json_object` is still applied.
+  - Review recent prompt/schema or provider adapter changes.
+- **Remediation**:
+  - Force strict structured output where supported (`response_format`).
+  - Roll back prompt changes that introduced schema drift.
+  - Temporarily increase heuristic fallback coverage while parser regressions are fixed.
+
+## ClaimsFallbackSpike
+- **What it means**: Claims flows are frequently degrading to fallback paths.
+- **Immediate checks**:
+  - Inspect `claims_fallback_total` by `reason` (`throttle`, `budget`, `parse_error`, `provider_error`, `empty_claims`).
+  - Cross-check provider health in `claims_provider_errors_total` and latency histograms.
+  - Check budget/throttle settings for overly strict limits.
+- **Remediation**:
+  - Adjust budget/throttle thresholds to match current traffic.
+  - Shift traffic to healthier provider/model combinations.
+  - Fix upstream parse/provider failures causing repeat fallback.
+
 ## ClaimsAlertWebhookFailures
 - **What it means**: Alert webhook delivery is failing.
 - **Immediate checks**:
