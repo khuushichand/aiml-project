@@ -78,11 +78,13 @@ export const createSaveMessageOnError = (
         {
           role: "user",
           content: e.userMessage,
-          image: e.image
+          image: e.image,
+          messageType: e.userMessageType ?? e.message_type
         },
         {
           role: "assistant",
-          content: e.botMessage
+          content: e.botMessage,
+          messageType: e.assistantMessageType ?? e.message_type
         }
       ])
 

@@ -92,6 +92,14 @@ export const ControlRow: React.FC<ControlRowProps> = ({
     "allowExternalImages",
     DEFAULT_CHAT_SETTINGS.allowExternalImages
   )
+  const [showMoodBadge, setShowMoodBadge] = useStorage(
+    "chatShowMoodBadge",
+    true
+  )
+  const [showMoodConfidence, setShowMoodConfidence] = useStorage(
+    "chatShowMoodConfidence",
+    Boolean(selectedCharacterId)
+  )
 
   React.useEffect(() => {
     setCatalogDraft(toolCatalog)
@@ -548,6 +556,49 @@ export const ControlRow: React.FC<ControlRowProps> = ({
             {t(
               "sidepanel:controlRow.allowExternalImagesHelp",
               "When off, external image URLs are blocked and shown as links."
+            )}
+          </p>
+
+          <div className="panel-divider my-1" />
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-text">
+              {t(
+                "sidepanel:controlRow.showMoodBadge",
+                "Show mood badge in chat"
+              )}
+            </span>
+            <Switch
+              size="small"
+              checked={showMoodBadge}
+              onChange={(checked) => setShowMoodBadge(checked)}
+            />
+          </div>
+          <p className="text-[11px] text-text-muted">
+            {t(
+              "sidepanel:controlRow.showMoodBadgeHelp",
+              "Shows labels like \"Mood: neutral\" on assistant messages."
+            )}
+          </p>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-text">
+              {t(
+                "sidepanel:controlRow.showMoodConfidence",
+                "Show mood confidence (%)"
+              )}
+            </span>
+            <Switch
+              size="small"
+              checked={showMoodConfidence}
+              disabled={!showMoodBadge}
+              onChange={(checked) => setShowMoodConfidence(checked)}
+            />
+          </div>
+          <p className="text-[11px] text-text-muted">
+            {t(
+              "sidepanel:controlRow.showMoodConfidenceHelp",
+              "Adds confidence percentage when available."
             )}
           </p>
         </div>

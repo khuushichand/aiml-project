@@ -28,7 +28,10 @@ DEFAULT_BYOK_ALLOWED_PROVIDERS: set[str] = {
     "moonshot",
     "openai",
     "openrouter",
+    "novita",
+    "poe",
     "qwen",
+    "together",
     "voyage",
     "zai",
 }

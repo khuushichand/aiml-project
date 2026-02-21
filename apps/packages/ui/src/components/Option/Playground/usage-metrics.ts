@@ -99,6 +99,18 @@ export type TokenBudgetProjection = {
   isOverLimit: boolean
 }
 
+export type TokenBudgetRiskLevel =
+  | "unknown"
+  | "low"
+  | "medium"
+  | "high"
+  | "critical"
+
+export type TokenBudgetRisk = {
+  level: TokenBudgetRiskLevel
+  overflowTokens: number
+}
+
 export const projectTokenBudget = (params: {
   conversationTokens: number
   draftTokens: number
@@ -137,5 +149,47 @@ export const projectTokenBudget = (params: {
     utilizationPercent,
     isNearLimit,
     isOverLimit
+  }
+}
+
+export const resolveTokenBudgetRisk = (
+  projection: TokenBudgetProjection
+): TokenBudgetRisk => {
+  const remainingTokens = projection.remainingTokens
+  const overflowTokens =
+    typeof remainingTokens === "number" && remainingTokens < 0
+      ? Math.abs(Math.round(remainingTokens))
+      : 0
+
+  if (projection.isOverLimit) {
+    return {
+      level: "critical",
+      overflowTokens
+    }
+  }
+
+  const utilizationPercent = projection.utilizationPercent
+  if (typeof utilizationPercent !== "number" || !Number.isFinite(utilizationPercent)) {
+    return {
+      level: "unknown",
+      overflowTokens
+    }
+  }
+
+  if (utilizationPercent >= 92) {
+    return {
+      level: "high",
+      overflowTokens
+    }
+  }
+  if (utilizationPercent >= 78) {
+    return {
+      level: "medium",
+      overflowTokens
+    }
+  }
+  return {
+    level: "low",
+    overflowTokens
   }
 }

@@ -25,7 +25,17 @@ vi.mock("../HeaderShortcuts", () => ({
   )
 }))
 
-const t = ((key: string, fallback?: string) => fallback || key) as unknown as TFunction
+const t = ((
+  key: string,
+  fallback?: string,
+  values?: Record<string, unknown>
+) => {
+  const base = fallback || key
+  if (!values) return base
+  return Object.entries(values).reduce((acc, [name, value]) => {
+    return acc.replaceAll(`{{${name}}}`, String(value))
+  }, base)
+}) as unknown as TFunction
 
 const createProps = (overrides: Partial<React.ComponentProps<typeof ChatHeader>> = {}) => ({
   t,
@@ -170,5 +180,25 @@ describe("ChatHeader shortcut toggle", () => {
     render(<ChatHeader {...props} />)
 
     expect(screen.queryByText("Chat title")).not.toBeInTheDocument()
+  })
+
+  it("shows share controls and status when provided", () => {
+    const onOpenShareModal = vi.fn()
+    const props = createProps({
+      onOpenShareModal,
+      shareStatusLabel: "2 active link(s)"
+    })
+    render(<ChatHeader {...props} />)
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Share conversation (2 active link(s))"
+      })
+    )
+
+    expect(onOpenShareModal).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId("chat-header-share-status")).toHaveTextContent(
+      "2 active link(s)"
+    )
   })
 })

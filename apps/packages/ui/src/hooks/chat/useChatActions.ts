@@ -7,6 +7,7 @@ import {
   saveMessage,
   updateHistory,
   updateMessage,
+  updateMessageMedia,
   removeMessageByIndex,
   formatToChatHistory,
   formatToMessage,
@@ -43,6 +44,19 @@ import {
   updateActiveVariant
 } from "@/utils/message-variants"
 import { resolveImageBackendCandidates } from "@/utils/image-backends"
+import {
+  buildImageGenerationEventMirrorContent,
+  isImageGenerationMessageType,
+  PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY,
+  resolveImageGenerationEventSyncMode,
+  normalizeImageGenerationEventSyncMode,
+  normalizeImageGenerationEventSyncPolicy,
+  type ImageGenerationEventSyncPolicy,
+  type ImageGenerationEventSyncMode,
+  type ImageGenerationRefineMetadata,
+  type ImageGenerationPromptMode,
+  type ImageGenerationRequestSnapshot
+} from "@/utils/image-generation-chat"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { consumeStreamingChunk } from "@/utils/streaming-chunks"
 import { updatePageTitle } from "@/utils/update-page-title"
@@ -89,6 +103,11 @@ import {
   isGreetingMessageType,
   resolveGreetingSelection
 } from "@/utils/character-greetings"
+import { useStorage } from "@plasmohq/storage/hook"
+import {
+  PLAYGROUND_APPEND_FORMATTING_GUIDE_PROMPT_STORAGE_KEY,
+  resolveOutputFormattingGuideSuffix
+} from "@/utils/output-formatting-guide"
 
 type ChatModelSettingsStore = ChatModelSettings & {
   setSystemPrompt?: (prompt: string) => void
@@ -98,6 +117,7 @@ type ChatModeOverrides = {
   historyId?: string | null
   serverChatId?: string | null
   selectedModel?: string | null
+  imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
 } & Record<string, unknown>
 
 const loadActorSettings = () => import("@/services/actor-settings")
@@ -279,6 +299,14 @@ export const useChatActions = ({
   messageSteeringForceNarrate,
   clearMessageSteering
 }: UseChatActionsOptions) => {
+  const [appendFormattingGuidePrompt] = useStorage(
+    PLAYGROUND_APPEND_FORMATTING_GUIDE_PROMPT_STORAGE_KEY,
+    false
+  )
+  const [imageEventSyncGlobalDefault] = useStorage<ImageGenerationEventSyncMode>(
+    PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY,
+    "off"
+  )
   const normalizeSelectedModel = React.useCallback(
     (value: string | null | undefined): string | null => {
       if (typeof value !== "string") return null
@@ -345,6 +373,10 @@ export const useChatActions = ({
       ),
     [messageSteeringPrompts]
   )
+  const systemPromptAppendix = React.useMemo(
+    () => resolveOutputFormattingGuideSuffix(Boolean(appendFormattingGuidePrompt)),
+    [appendFormattingGuidePrompt]
+  )
   const messagesRef = React.useRef(messages)
 
   React.useEffect(() => {
@@ -403,6 +435,100 @@ export const useChatActions = ({
     ) => void
   )
 
+  const resolveImageEventSyncModeForPayload = React.useCallback(
+    (payload?: SaveMessagePayload): ImageGenerationEventSyncMode => {
+      const requestPolicy = normalizeImageGenerationEventSyncPolicy(
+        payload?.imageEventSyncPolicy,
+        "inherit"
+      )
+      const chatMode = normalizeImageGenerationEventSyncMode(
+        chatSettings?.imageEventSyncMode,
+        "off"
+      )
+      const globalMode = normalizeImageGenerationEventSyncMode(
+        imageEventSyncGlobalDefault,
+        "off"
+      )
+      return resolveImageGenerationEventSyncMode({
+        requestPolicy,
+        chatMode,
+        globalMode
+      })
+    },
+    [chatSettings?.imageEventSyncMode, imageEventSyncGlobalDefault]
+  )
+
+  const updateImageEventSyncMetadata = React.useCallback(
+    async (
+      payload: SaveMessagePayload,
+      update: {
+        status: "pending" | "synced" | "failed"
+        policy: ImageGenerationEventSyncPolicy
+        mode: ImageGenerationEventSyncMode
+        serverMessageId?: string
+        error?: string
+      }
+    ) => {
+      const targetMessageId = payload.assistantMessageId
+      if (!targetMessageId) return
+      const now = Date.now()
+
+      let nextGenerationInfo: Record<string, unknown> | null = null
+      let nextImages: string[] = []
+
+      setMessages((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== targetMessageId) return entry
+          const currentGenerationInfo =
+            entry.generationInfo &&
+            typeof entry.generationInfo === "object" &&
+            !Array.isArray(entry.generationInfo)
+              ? (entry.generationInfo as Record<string, unknown>)
+              : {}
+          const currentImageGeneration =
+            currentGenerationInfo.image_generation &&
+            typeof currentGenerationInfo.image_generation === "object" &&
+            !Array.isArray(currentGenerationInfo.image_generation)
+              ? (currentGenerationInfo.image_generation as Record<string, unknown>)
+              : {}
+
+          nextGenerationInfo = {
+            ...currentGenerationInfo,
+            image_generation: {
+              ...currentImageGeneration,
+              sync: {
+                mode: update.mode,
+                policy: update.policy,
+                status: update.status,
+                serverMessageId: update.serverMessageId,
+                error: update.error,
+                lastAttemptAt: now,
+                mirroredAt: update.status === "synced" ? now : undefined
+              }
+            }
+          }
+          nextImages = Array.isArray(entry.images)
+            ? entry.images.filter(
+                (image): image is string =>
+                  typeof image === "string" && image.length > 0
+              )
+            : []
+          return {
+            ...entry,
+            generationInfo: nextGenerationInfo
+          }
+        })
+      )
+
+      if (!nextGenerationInfo) return
+      await updateMessageMedia(targetMessageId, {
+        images: nextImages,
+        generationInfo: nextGenerationInfo
+      }).catch(() => null)
+    },
+    [setMessages]
+  )
+
   const saveMessageOnSuccess = async (
     payload?: SaveMessagePayload
   ): Promise<string | null> => {
@@ -440,6 +566,14 @@ export const useChatActions = ({
     const serverConversationMatches = payloadConversationId
       ? payloadConversationId === String(serverChatId)
       : true
+    const isImageGenerationNoOp =
+      isImageGenerationMessageType(payload?.userMessageType) ||
+      isImageGenerationMessageType(payload?.assistantMessageType)
+    const imageEventSyncPolicy = normalizeImageGenerationEventSyncPolicy(
+      payload?.imageEventSyncPolicy,
+      "inherit"
+    )
+    const imageEventSyncMode = resolveImageEventSyncModeForPayload(payload)
 
     if (isServerConversation && payload?.saveToDb) {
       try {
@@ -454,32 +588,157 @@ export const useChatActions = ({
     if (
       serverChatId &&
       serverConversationMatches &&
-      !skipServerWrite &&
-      !payload?.isRegenerate &&
-      !payload?.isContinue &&
-      typeof payload?.message === "string" &&
-      typeof payload?.fullText === "string"
+      !skipServerWrite
     ) {
-      try {
-        const cid = serverChatId
-        const userContent = payload.message.trim()
-        const assistantContent = payload.fullText.trim()
+      if (
+        isImageGenerationNoOp &&
+        imageEventSyncMode === "on" &&
+        payload?.assistantMessageId
+      ) {
+        await updateImageEventSyncMetadata(payload, {
+          status: "pending",
+          mode: imageEventSyncMode,
+          policy: imageEventSyncPolicy
+        })
 
-        if (userContent.length > 0) {
-          await tldwClient.addChatMessage(cid, {
-            role: "user",
-            content: userContent
+        try {
+          const generationInfo =
+            payload.generationInfo &&
+            typeof payload.generationInfo === "object" &&
+            !Array.isArray(payload.generationInfo)
+              ? (payload.generationInfo as Record<string, unknown>)
+              : {}
+          const imageGeneration =
+            generationInfo.image_generation &&
+            typeof generationInfo.image_generation === "object" &&
+            !Array.isArray(generationInfo.image_generation)
+              ? (generationInfo.image_generation as Record<string, unknown>)
+              : {}
+          const request =
+            imageGeneration.request &&
+            typeof imageGeneration.request === "object" &&
+            !Array.isArray(imageGeneration.request)
+              ? imageGeneration.request
+              : null
+          if (!request) {
+            throw new Error("Image event sync skipped: missing request metadata.")
+          }
+
+          const mirroredImages = Array.isArray(payload.assistantImages)
+            ? payload.assistantImages.filter(
+                (value): value is string =>
+                  typeof value === "string" && value.startsWith("data:image/")
+              )
+            : []
+          const latestPreview = mirroredImages[mirroredImages.length - 1]
+          const variantCount =
+            typeof imageGeneration.variant_count === "number" &&
+            Number.isFinite(imageGeneration.variant_count)
+              ? Math.max(1, Math.round(imageGeneration.variant_count))
+              : undefined
+          const activeVariantIndex =
+            typeof imageGeneration.active_variant_index === "number" &&
+            Number.isFinite(imageGeneration.active_variant_index)
+              ? Math.max(0, Math.round(imageGeneration.active_variant_index))
+              : undefined
+          const eventId =
+            typeof imageGeneration.event_id === "string" &&
+            imageGeneration.event_id.trim().length > 0
+              ? imageGeneration.event_id.trim()
+              : payload.assistantMessageId
+          const mirroredContent = buildImageGenerationEventMirrorContent({
+            kind: "image_generation_event",
+            version: 1,
+            eventId,
+            createdAt:
+              typeof imageGeneration.createdAt === "number" &&
+              Number.isFinite(imageGeneration.createdAt)
+                ? imageGeneration.createdAt
+                : Date.now(),
+            fileId:
+              typeof generationInfo.file_id === "string" &&
+              generationInfo.file_id.trim().length > 0
+                ? generationInfo.file_id.trim()
+                : undefined,
+            request: request as ImageGenerationRequestSnapshot,
+            promptMode:
+              imageGeneration.promptMode === "scene" ||
+              imageGeneration.promptMode === "expression" ||
+              imageGeneration.promptMode === "selfie" ||
+              imageGeneration.promptMode === "camera-angle" ||
+              imageGeneration.promptMode === "outfit" ||
+              imageGeneration.promptMode === "custom"
+                ? imageGeneration.promptMode
+                : undefined,
+            source:
+              imageGeneration.source === "slash-command" ||
+              imageGeneration.source === "generate-modal" ||
+              imageGeneration.source === "message-regen"
+                ? imageGeneration.source
+                : undefined,
+            refine:
+              imageGeneration.refine &&
+              typeof imageGeneration.refine === "object" &&
+              !Array.isArray(imageGeneration.refine)
+                ? (imageGeneration.refine as ImageGenerationRefineMetadata)
+                : undefined,
+            variantCount,
+            activeVariantIndex,
+            imageDataUrl: latestPreview
           })
-        }
 
-        if (assistantContent.length > 0) {
-          await tldwClient.addChatMessage(cid, {
+          const mirroredMessage = await tldwClient.addChatMessage(serverChatId, {
             role: "assistant",
-            content: assistantContent
+            content: mirroredContent
+          })
+
+          await updateImageEventSyncMetadata(payload, {
+            status: "synced",
+            mode: imageEventSyncMode,
+            policy: imageEventSyncPolicy,
+            serverMessageId:
+              mirroredMessage?.id != null ? String(mirroredMessage.id) : undefined
+          })
+        } catch (error) {
+          const reason =
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "Failed to mirror image event to server history."
+          await updateImageEventSyncMetadata(payload, {
+            status: "failed",
+            mode: imageEventSyncMode,
+            policy: imageEventSyncPolicy,
+            error: reason
           })
         }
-      } catch {
-        // Ignore sync errors; local history is still saved.
+      } else if (
+        !isImageGenerationNoOp &&
+        !payload?.isRegenerate &&
+        !payload?.isContinue &&
+        typeof payload?.message === "string" &&
+        typeof payload?.fullText === "string"
+      ) {
+        try {
+          const cid = serverChatId
+          const userContent = payload.message.trim()
+          const assistantContent = payload.fullText.trim()
+
+          if (userContent.length > 0) {
+            await tldwClient.addChatMessage(cid, {
+              role: "user",
+              content: userContent
+            })
+          }
+
+          if (assistantContent.length > 0) {
+            await tldwClient.addChatMessage(cid, {
+              role: "assistant",
+              content: assistantContent
+            })
+          }
+        } catch {
+          // Ignore sync errors; local history is still saved.
+        }
       }
     }
 
@@ -540,6 +799,7 @@ export const useChatActions = ({
       setActionInfo,
       webSearch,
       actorSettings,
+      systemPromptAppendix,
       messageSteeringPrompts: resolvedMessageSteeringPrompts,
       ...overrides
     }
@@ -1338,9 +1598,8 @@ export const useChatActions = ({
     (items: Message[]): ChatHistory =>
       items
         .filter((message) =>
-          greetingEnabled
-            ? true
-            : !isGreetingMessageType(message.messageType)
+          !isImageGenerationMessageType(message.messageType) &&
+          (greetingEnabled ? true : !isGreetingMessageType(message.messageType))
         )
         .map((message) => ({
           role: message.isBot ? "assistant" : "user",
@@ -1487,6 +1746,13 @@ export const useChatActions = ({
     docs,
     regenerateFromMessage,
     imageBackendOverride,
+    userMessageType,
+    assistantMessageType,
+    imageGenerationRequest,
+    imageGenerationRefine,
+    imageGenerationPromptMode,
+    imageGenerationSource,
+    imageEventSyncPolicy,
     messageSteeringOverride,
     continueOutputTarget = "chat",
     serverChatIdOverride
@@ -1501,6 +1767,13 @@ export const useChatActions = ({
     docs?: ChatDocuments
     regenerateFromMessage?: Message
     imageBackendOverride?: string
+    userMessageType?: string
+    assistantMessageType?: string
+    imageGenerationRequest?: Partial<ImageGenerationRequestSnapshot>
+    imageGenerationRefine?: ImageGenerationRefineMetadata
+    imageGenerationPromptMode?: ImageGenerationPromptMode
+    imageGenerationSource?: "slash-command" | "generate-modal" | "message-regen"
+    imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
     messageSteeringOverride?: Partial<MessageSteeringState> | null
     continueOutputTarget?: "chat" | "composer_input"
     serverChatIdOverride?: string | null
@@ -1549,7 +1822,14 @@ export const useChatActions = ({
 
     const chatModeParams = await buildChatModeParams({
       selectedModel: effectiveSelectedModel,
-      messageSteering: messageSteeringForTurn
+      messageSteering: messageSteeringForTurn,
+      userMessageType,
+      assistantMessageType,
+      imageGenerationRequest,
+      imageGenerationRefine,
+      imageGenerationPromptMode,
+      imageGenerationSource,
+      imageEventSyncPolicy
     })
     const baseMessages = chatHistory || messages
     const baseHistory = memory || history

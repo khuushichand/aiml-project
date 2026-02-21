@@ -70,6 +70,7 @@ export function ReasoningBlock({
                   message={content}
                   className={`${markdownBaseClasses} ${assistantTextClass}`}
                   searchQuery={searchQuery}
+                  codeBlockVariant="github"
                 />
                 {isReasoningStreaming && (
                   <span className="inline-block w-2 h-4 ml-1 bg-text-muted animate-pulse rounded-sm" />

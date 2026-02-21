@@ -50,7 +50,7 @@ describe("TokenProgressBar", () => {
     expect(screen.getByText(/used/i)).toBeInTheDocument()
   })
 
-  it("falls back to a resolved memory label when interpolation tokens are unresolved", () => {
+  it("shows compact numeric conversation + draft tokens when context is known", () => {
     render(
       <TokenProgressBar
         conversationTokens={500}
@@ -60,7 +60,19 @@ describe("TokenProgressBar", () => {
       />
     )
 
-    expect(screen.getByText("Memory: 60% full")).toBeInTheDocument()
-    expect(screen.queryByText(/{{percentage}}/)).toBeNull()
+    expect(screen.getByText("500 + ~100 = 600 tokens")).toBeInTheDocument()
+  })
+
+  it("shows conversation token count when context window is unavailable", () => {
+    render(
+      <TokenProgressBar
+        conversationTokens={1280}
+        draftTokens={0}
+        maxTokens={null}
+        compact
+      />
+    )
+
+    expect(screen.getByText("1,280 + ~0 = 1,280 tokens")).toBeInTheDocument()
   })
 })

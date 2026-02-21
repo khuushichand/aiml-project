@@ -2241,6 +2241,22 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: '/api/v1/notes/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { content, ...metadata } })
   }
 
+  async listNotes(
+    params?: {
+      page?: number
+      results_per_page?: number
+      include_keywords?: boolean
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<any> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<any>({
+      path: `/api/v1/notes/${query}`,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+  }
+
   async searchNotes(query: string): Promise<any> {
     // OpenAPI uses trailing slash for this path
     return await bgRequest<any>({ path: '/api/v1/notes/search/', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query } })

@@ -6,6 +6,7 @@ import {
   Menu,
   Moon,
   Search,
+  Share2,
   Signpost,
   SquarePen,
   Sun,
@@ -28,6 +29,9 @@ type ChatHeaderProps = {
   onOpenCommandPalette: () => void
   onOpenShortcutsModal: () => void
   onOpenSettings: () => void
+  onOpenShareModal?: () => void
+  shareStatusLabel?: string | null
+  shareButtonDisabled?: boolean
   onToggleTheme?: () => void
   themeMode?: "system" | "dark" | "light"
   onClearChat: () => void
@@ -56,6 +60,9 @@ export function ChatHeader({
   onOpenCommandPalette,
   onOpenShortcutsModal,
   onOpenSettings,
+  onOpenShareModal,
+  shareStatusLabel = null,
+  shareButtonDisabled = false,
   onToggleTheme,
   themeMode = "dark",
   onClearChat,
@@ -92,6 +99,11 @@ export function ChatHeader({
     onStartTemporaryChat ?? onClearChat
   const startCharacterChat =
     onStartCharacterChat ?? onClearChat
+  const shareButtonLabel = shareStatusLabel
+    ? t("playground:header.shareStatusAria", "Share conversation ({{status}})", {
+        status: shareStatusLabel
+      } as any)
+    : t("playground:header.shareConversation", "Share conversation")
   const focusRingClasses =
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
 
@@ -206,6 +218,16 @@ export function ChatHeader({
                   </span>
                 </span>
               ) : null}
+              {shareStatusLabel ? (
+                <span
+                  className="inline-flex max-w-[220px] items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primaryStrong"
+                  title={shareButtonLabel as string}
+                  data-testid="chat-header-share-status"
+                >
+                  <Share2 className="size-3" aria-hidden="true" />
+                  <span className="truncate">{shareStatusLabel}</span>
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -256,6 +278,21 @@ export function ChatHeader({
               {t("playground:header.characterShort", "Character")}
             </button>
           </Tooltip>
+          {onOpenShareModal && (
+            <Tooltip title={shareButtonLabel}>
+              <button
+                type="button"
+                onClick={onOpenShareModal}
+                disabled={shareButtonDisabled}
+                aria-label={shareButtonLabel as string}
+                className={`inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text disabled:cursor-not-allowed disabled:opacity-60 ${focusRingClasses}`}
+                title={shareButtonLabel as string}
+                data-testid="chat-header-share-button"
+              >
+                <Share2 className="size-4" aria-hidden="true" />
+              </button>
+            </Tooltip>
+          )}
           <Tooltip title={t("sidepanel:header.settingsShortLabel", "Settings")}>
             <button
               type="button"

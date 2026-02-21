@@ -515,6 +515,7 @@ export function CompactMessage({
                         key={idx}
                         message={block.content}
                         searchQuery={searchQuery}
+                        codeBlockVariant="github"
                       />
                     )
                   })}

@@ -4,8 +4,10 @@ import { LoadingStatus } from "./ActionInfo"
 import {
   AlertTriangle,
   CheckCircle2,
+  RotateCcw,
   Smile,
-  StopCircle as StopCircleIcon
+  StopCircle as StopCircleIcon,
+  Trash2
 } from "lucide-react"
 import { EditMessageForm } from "./EditMessageForm"
 import { useTranslation } from "react-i18next"
@@ -72,6 +74,12 @@ import {
   buildQuickMessageActionPrompt,
   type QuickMessageAction
 } from "./quick-message-actions"
+import { resolveFallbackAudit } from "./routing-fallback-audit"
+import {
+  IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+  resolveImageGenerationMetadata,
+  type ImageGenerationRequestSnapshot
+} from "@/utils/image-generation-chat"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -217,6 +225,32 @@ type Props = {
   messageSteeringForceNarrate?: boolean
   onMessageSteeringForceNarrateChange?: (enabled: boolean) => void
   onClearMessageSteering?: () => void
+  onRegenerateImage?: (payload: {
+    messageId?: string
+    imageIndex: number
+    imageUrl: string
+    request: ImageGenerationRequestSnapshot | null
+  }) => void | Promise<void>
+  onDeleteImage?: (payload: {
+    messageId?: string
+    imageIndex: number
+    imageUrl: string
+  }) => void
+  onSelectImageVariant?: (payload: {
+    messageId?: string
+    variantIndex: number
+  }) => void
+  onKeepImageVariant?: (payload: {
+    messageId?: string
+    variantIndex: number
+  }) => void
+  onDeleteImageVariant?: (payload: {
+    messageId?: string
+    variantIndex: number
+  }) => void
+  onDeleteAllImageVariants?: (payload: {
+    messageId?: string
+  }) => void
 }
 
 export const PlaygroundMessage = (props: Props) => {
@@ -239,6 +273,13 @@ export const PlaygroundMessage = (props: Props) => {
   const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
   const [showCharacterPortraits] = useStorage("chatShowCharacterPortraits", true)
+  const [showMoodBadge] = useStorage("chatShowMoodBadge", true)
+  const moodConfidenceDefault =
+    Boolean(props.characterIdentityEnabled) && Boolean(props.characterIdentity?.id)
+  const [showMoodConfidence] = useStorage(
+    "chatShowMoodConfidence",
+    moodConfidenceDefault
+  )
   const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
   const [ttsProvider] = useStorage("ttsProvider", "browser")
   const { t } = useTranslation(["common", "playground"])
@@ -260,6 +301,9 @@ export const PlaygroundMessage = (props: Props) => {
     })
   const [isFeedbackOpen, setIsFeedbackOpen] = React.useState(false)
   const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = React.useState(false)
+  const [compareVariantIndex, setCompareVariantIndex] = React.useState<
+    number | null
+  >(null)
   const [savingKnowledge, setSavingKnowledge] = React.useState<
     "note" | "flashcard" | null
   >(null)
@@ -352,6 +396,175 @@ export const PlaygroundMessage = (props: Props) => {
       minute: "2-digit"
     })
   }, [props.createdAt, props.generationInfo])
+  const fallbackAudit = React.useMemo(
+    () => resolveFallbackAudit(props.generationInfo),
+    [props.generationInfo]
+  )
+  const fallbackAuditPolicyLabel = React.useMemo(() => {
+    if (!fallbackAudit) return null
+    if (fallbackAudit.policy === "auto") {
+      return t("playground:routing.policyAuto", "Auto fallback")
+    }
+    if (fallbackAudit.policy === "pinned") {
+      return t("playground:routing.policyPinned", "Provider pinned")
+    }
+    return t("playground:routing.policyGeneric", "Routing")
+  }, [fallbackAudit, t])
+  const fallbackAuditPathLabel = React.useMemo(() => {
+    if (!fallbackAudit) return null
+    if (
+      fallbackAudit.fallbackApplied &&
+      fallbackAudit.requestedTarget &&
+      fallbackAudit.resolvedTarget
+    ) {
+      return `${fallbackAudit.requestedTarget} → ${fallbackAudit.resolvedTarget}`
+    }
+    return fallbackAudit.resolvedTarget || fallbackAudit.requestedTarget
+  }, [fallbackAudit])
+  const imageGenerationMetadata = React.useMemo(
+    () => resolveImageGenerationMetadata(props.generationInfo),
+    [props.generationInfo]
+  )
+  const canRegenerateImage =
+    props.isBot &&
+    Boolean(props.onRegenerateImage) &&
+    Boolean(imageGenerationMetadata?.request)
+  const showInlineImageActions = canRegenerateImage || Boolean(props.onDeleteImage)
+  const isImageGenerationAssistantEvent =
+    props.isBot &&
+    Boolean(imageGenerationMetadata?.request) &&
+    (!props.message_type ||
+      props.message_type === IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE)
+  const imageGenerationEventSummary = React.useMemo(() => {
+    if (!imageGenerationMetadata?.request) return null
+
+    const request = imageGenerationMetadata.request
+    const chips: string[] = [
+      String(
+        t("playground:imageGeneration.eventBackend", "Backend: {{value}}", {
+          value: request.backend
+        } as any)
+      )
+    ]
+
+    if (request.model) {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventModel", "Model: {{value}}", {
+            value: request.model
+          } as any)
+        )
+      )
+    }
+    if (typeof request.width === "number" && typeof request.height === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSize", "Size: {{width}}x{{height}}", {
+            width: request.width,
+            height: request.height
+          } as any)
+        )
+      )
+    }
+    if (request.format) {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventFormat", "Format: {{value}}", {
+            value: request.format.toUpperCase()
+          } as any)
+        )
+      )
+    }
+    if (typeof request.steps === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSteps", "Steps: {{value}}", {
+            value: request.steps
+          } as any)
+        )
+      )
+    }
+    if (typeof request.cfgScale === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventCfg", "CFG: {{value}}", {
+            value: request.cfgScale
+          } as any)
+        )
+      )
+    }
+    if (typeof request.seed === "number") {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSeed", "Seed: {{value}}", {
+            value: request.seed
+          } as any)
+        )
+      )
+    }
+    if (request.sampler) {
+      chips.push(
+        String(
+          t("playground:imageGeneration.eventSampler", "Sampler: {{value}}", {
+            value: request.sampler
+          } as any)
+        )
+      )
+    }
+
+    const sourceLabel =
+      imageGenerationMetadata.source === "slash-command"
+        ? String(
+            t("playground:imageGeneration.eventSourceSlash", "Slash command")
+          )
+        : imageGenerationMetadata.source === "message-regen"
+          ? String(
+              t("playground:imageGeneration.eventSourceRegen", "Regenerated")
+            )
+          : imageGenerationMetadata.source === "generate-modal"
+            ? String(
+                t("playground:imageGeneration.eventSourceModal", "Generate menu")
+              )
+            : null
+
+    const refineLabel = imageGenerationMetadata.refine
+      ? String(
+          t(
+            "playground:imageGeneration.eventRefined",
+            "Refined with {{model}} ({{ms}} ms)",
+            {
+              model: imageGenerationMetadata.refine.model,
+              ms: imageGenerationMetadata.refine.latencyMs
+            } as any
+          )
+        )
+      : null
+    const syncLabel = imageGenerationMetadata.sync
+      ? imageGenerationMetadata.sync.mode === "off"
+        ? String(t("playground:imageGeneration.eventSyncOff", "Local only"))
+        : imageGenerationMetadata.sync.status === "synced"
+          ? String(
+              t("playground:imageGeneration.eventSyncOn", "Mirrored to server")
+            )
+          : imageGenerationMetadata.sync.status === "failed"
+            ? String(
+                t("playground:imageGeneration.eventSyncFailed", "Mirror failed")
+              )
+            : String(
+                t("playground:imageGeneration.eventSyncPending", "Mirroring...")
+              )
+      : null
+    const syncStatus = imageGenerationMetadata.sync?.status ?? null
+
+    return {
+      prompt: request.prompt,
+      chips,
+      sourceLabel,
+      refineLabel,
+      syncLabel,
+      syncStatus
+    }
+  }, [imageGenerationMetadata, t])
   const variantCount = props.variants?.length ?? 0
   const resolvedVariantIndex = (() => {
     const fallback =
@@ -363,6 +576,59 @@ export const PlaygroundMessage = (props: Props) => {
     if (variantCount <= 0) return 0
     return Math.max(0, Math.min(fallback, variantCount - 1))
   })()
+  const imageVariantEntries = React.useMemo(() => {
+    const variants = Array.isArray(props.variants) ? props.variants : []
+    if (variants.length === 0) {
+      const baseImages = Array.isArray(props.images)
+        ? props.images.filter((image) => typeof image === "string" && image.length > 0)
+        : []
+      if (baseImages.length === 0) return []
+      return [
+        {
+          index: 0,
+          preview: baseImages[0],
+          images: baseImages
+        }
+      ]
+    }
+    return variants
+      .map((variant, index) => {
+        const images = Array.isArray(variant?.images)
+          ? variant.images.filter((image) => typeof image === "string" && image.length > 0)
+          : []
+        if (images.length === 0) return null
+        return {
+          index,
+          preview: images[0],
+          images
+        }
+      })
+      .filter((entry): entry is { index: number; preview: string; images: string[] } =>
+        Boolean(entry)
+      )
+  }, [props.images, props.variants])
+  const activeVariantPreview = React.useMemo(() => {
+    if (imageVariantEntries.length === 0) return null
+    return (
+      imageVariantEntries.find((entry) => entry.index === resolvedVariantIndex) ||
+      imageVariantEntries[0]
+    )
+  }, [imageVariantEntries, resolvedVariantIndex])
+  const compareVariantPreview = React.useMemo(() => {
+    if (compareVariantIndex == null) return null
+    return (
+      imageVariantEntries.find((entry) => entry.index === compareVariantIndex) || null
+    )
+  }, [compareVariantIndex, imageVariantEntries])
+  React.useEffect(() => {
+    if (compareVariantIndex == null) return
+    const compareStillValid = imageVariantEntries.some(
+      (entry) => entry.index === compareVariantIndex
+    )
+    if (!compareStillValid || compareVariantIndex === resolvedVariantIndex) {
+      setCompareVariantIndex(null)
+    }
+  }, [compareVariantIndex, imageVariantEntries, resolvedVariantIndex])
   const showVariantPager = props.isBot && variantCount > 1
   const canSwipePrev =
     showVariantPager && Boolean(props.onSwipePrev) && resolvedVariantIndex > 0
@@ -437,7 +703,11 @@ export const PlaygroundMessage = (props: Props) => {
   const moodBadgeLabel = React.useMemo(() => {
     if (!resolvedMoodLabel) return null
     const normalizedMood = resolvedMoodLabel.replace(/_/g, " ")
-    if (typeof props.moodConfidence === "number" && Number.isFinite(props.moodConfidence)) {
+    if (
+      showMoodConfidence &&
+      typeof props.moodConfidence === "number" &&
+      Number.isFinite(props.moodConfidence)
+    ) {
       const percent = Math.max(0, Math.min(100, Math.round(props.moodConfidence * 100)))
       return t("playground:message.moodLabelConfidence", "Mood: {{mood}} ({{confidence}}%)", {
         mood: normalizedMood,
@@ -447,7 +717,7 @@ export const PlaygroundMessage = (props: Props) => {
     return t("playground:message.moodLabel", "Mood: {{mood}}", {
       mood: normalizedMood
     })
-  }, [props.moodConfidence, resolvedMoodLabel, t])
+  }, [props.moodConfidence, resolvedMoodLabel, showMoodConfidence, t])
   const baseCharacterAvatar = resolveCharacterBaseAvatarUrl(
     props.characterIdentity
   )
@@ -1556,7 +1826,7 @@ export const PlaygroundMessage = (props: Props) => {
                     • {messageTimestamp}
                   </span>
                 )}
-                {props.isBot && !isSystemMessage && moodBadgeLabel && (
+                {props.isBot && !isSystemMessage && showMoodBadge && moodBadgeLabel && (
                   <span
                     data-testid="message-mood-indicator"
                     className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent"
@@ -1651,6 +1921,255 @@ export const PlaygroundMessage = (props: Props) => {
                   {" "}
                   • {formatCost(messageCostUsd)}
                 </>
+              )}
+            </div>
+          )}
+          {props.isBot && !isSystemMessage && fallbackAudit && (
+            <div
+              data-testid="message-fallback-audit"
+              className="text-[11px] text-text-muted"
+            >
+              {fallbackAuditPolicyLabel}
+              {fallbackAuditPathLabel ? ` • ${fallbackAuditPathLabel}` : ""}
+              {typeof fallbackAudit.attempts === "number" &&
+              fallbackAudit.attempts > 1
+                ? ` • ${t("playground:routing.attempts", "{{count}} attempts", {
+                    count: fallbackAudit.attempts
+                  } as any)}`
+                : ""}
+              {fallbackAudit.reason ? ` • ${fallbackAudit.reason}` : ""}
+            </div>
+          )}
+          {isImageGenerationAssistantEvent && imageGenerationEventSummary && (
+            <div
+              data-testid="playground-image-event-card"
+              className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-text"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-primaryStrong">
+                  {t(
+                    "playground:imageGeneration.eventTitle",
+                    "Image artifact event"
+                  )}
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {imageGenerationEventSummary.sourceLabel && (
+                    <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong">
+                      {imageGenerationEventSummary.sourceLabel}
+                    </span>
+                  )}
+                  {imageGenerationEventSummary.syncLabel && (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                        imageGenerationEventSummary.syncStatus === "failed"
+                          ? "border-danger/40 bg-danger/10 text-danger"
+                          : imageGenerationEventSummary.syncStatus === "synced"
+                            ? "border-success/40 bg-success/10 text-success"
+                            : "border-primary/30 bg-surface text-primaryStrong"
+                      }`}
+                    >
+                      {imageGenerationEventSummary.syncLabel}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p
+                data-testid="playground-image-event-prompt"
+                className="mt-2 whitespace-pre-wrap text-sm text-text"
+              >
+                {imageGenerationEventSummary.prompt}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {imageGenerationEventSummary.chips.map((chip, index) => (
+                  <span
+                    key={`img-event-chip-${index}-${chip}`}
+                    className="rounded-full border border-border/70 bg-surface px-2 py-0.5 text-[11px] text-text-muted"
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+              {imageGenerationEventSummary.refineLabel && (
+                <div className="mt-2 text-[11px] text-text-muted">
+                  {imageGenerationEventSummary.refineLabel}
+                </div>
+              )}
+              {imageVariantEntries.length > 1 && (
+                <div
+                  data-testid="playground-image-variant-strip"
+                  className="mt-3 rounded-md border border-border/70 bg-surface/50 p-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="font-medium text-text-muted">
+                      {String(
+                        t(
+                          "playground:imageGeneration.eventVariants",
+                          "Variants {{current}}/{{total}}",
+                          {
+                            current: resolvedVariantIndex + 1,
+                            total: imageVariantEntries.length
+                          } as any
+                        )
+                      )}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {props.onKeepImageVariant && (
+                        <button
+                          type="button"
+                          data-testid="playground-image-variant-keep-active"
+                          className="rounded border border-success/35 bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success hover:bg-success/15"
+                          onClick={() =>
+                            props.onKeepImageVariant?.({
+                              messageId: props.messageId,
+                              variantIndex: resolvedVariantIndex
+                            })
+                          }
+                        >
+                          {t(
+                            "playground:imageGeneration.keepActiveVariant",
+                            "Keep active"
+                          )}
+                        </button>
+                      )}
+                      {props.onDeleteAllImageVariants && (
+                        <button
+                          type="button"
+                          data-testid="playground-image-variant-delete-all"
+                          className="rounded border border-danger/35 bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger hover:bg-danger/15"
+                          onClick={() =>
+                            props.onDeleteAllImageVariants?.({
+                              messageId: props.messageId
+                            })
+                          }
+                        >
+                          {t("playground:imageGeneration.deleteAllVariants", "Delete all")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-start gap-2">
+                    {imageVariantEntries.map((entry) => {
+                      const isActive = entry.index === resolvedVariantIndex
+                      const isCompared = compareVariantIndex === entry.index
+                      return (
+                        <div
+                          key={`image-variant-${entry.index}`}
+                          className={`rounded border p-1 ${
+                            isActive
+                              ? "border-primary/60 bg-primary/10"
+                              : "border-border/70 bg-surface"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            data-testid={`playground-image-variant-select-${entry.index}`}
+                            className="flex flex-col items-center gap-1"
+                            onClick={() =>
+                              props.onSelectImageVariant?.({
+                                messageId: props.messageId,
+                                variantIndex: entry.index
+                              })
+                            }
+                          >
+                            <img
+                              src={entry.preview}
+                              alt={t(
+                                "playground:imageGeneration.variantPreview",
+                                "Variant {{index}} preview",
+                                { index: entry.index + 1 } as any
+                              ) as string}
+                              className="h-12 w-12 rounded object-cover"
+                              loading="lazy"
+                            />
+                            <span className="text-[10px] text-text-muted">
+                              {String(
+                                t("playground:imageGeneration.variantLabel", "V{{index}}", {
+                                  index: entry.index + 1
+                                } as any)
+                              )}
+                            </span>
+                          </button>
+                          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+                            {!isActive && (
+                              <button
+                                type="button"
+                                data-testid={`playground-image-variant-compare-${entry.index}`}
+                                className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-muted hover:bg-surface2"
+                                onClick={() =>
+                                  setCompareVariantIndex((prev) =>
+                                    prev === entry.index ? null : entry.index
+                                  )
+                                }
+                              >
+                                {isCompared
+                                  ? t(
+                                      "playground:imageGeneration.hideCompareVariant",
+                                      "Hide compare"
+                                    )
+                                  : t(
+                                      "playground:imageGeneration.compareVariant",
+                                      "Compare"
+                                    )}
+                              </button>
+                            )}
+                            {props.onDeleteImageVariant && (
+                              <button
+                                type="button"
+                                data-testid={`playground-image-variant-delete-${entry.index}`}
+                                className="rounded border border-danger/35 px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10"
+                                onClick={() =>
+                                  props.onDeleteImageVariant?.({
+                                    messageId: props.messageId,
+                                    variantIndex: entry.index
+                                  })
+                                }
+                              >
+                                {t("common:delete", "Delete")}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {activeVariantPreview && compareVariantPreview && (
+                    <div
+                      data-testid="playground-image-variant-compare-preview"
+                      className="mt-2 grid gap-2 sm:grid-cols-2"
+                    >
+                      <div className="rounded border border-border/70 bg-surface p-2">
+                        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+                          {t("playground:imageGeneration.activeVariant", "Active")}
+                        </p>
+                        <img
+                          src={activeVariantPreview.preview}
+                          alt={t(
+                            "playground:imageGeneration.activeVariant",
+                            "Active"
+                          ) as string}
+                          className="h-28 w-full rounded object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="rounded border border-border/70 bg-surface p-2">
+                        <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+                          {t("playground:imageGeneration.compareVariant", "Compare")}
+                        </p>
+                        <img
+                          src={compareVariantPreview.preview}
+                          alt={t(
+                            "playground:imageGeneration.compareVariant",
+                            "Compare"
+                          ) as string}
+                          className="h-28 w-full rounded object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -1756,6 +2275,7 @@ export const PlaygroundMessage = (props: Props) => {
                             message={e.content}
                             className={`${MARKDOWN_BASE_CLASSES} ${assistantTextClass}`}
                             searchQuery={props.searchQuery}
+                            codeBlockVariant="github"
                           />
                         </React.Suspense>
                       )
@@ -1787,17 +2307,69 @@ export const PlaygroundMessage = (props: Props) => {
           {/* images if available */}
           {props.images &&
             props.images.filter((img) => img.length > 0).length > 0 && (
-              <div>
+              <div className="mt-2 flex flex-wrap gap-3">
                 {props.images
                   .filter((image) => image.length > 0)
                   .map((image, index) => (
-                    <Image
-                      key={index}
-                      src={image}
-                      alt="Uploaded Image"
-                      width={180}
-                      className="rounded-md relative"
-                    />
+                    <div key={index} className="group relative">
+                      <Image
+                        src={image}
+                        alt="Uploaded Image"
+                        width={180}
+                        className="rounded-md relative"
+                      />
+                      {showInlineImageActions && (
+                        <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-full border border-border/70 bg-surface/90 px-1 py-1 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100">
+                          {canRegenerateImage && (
+                            <button
+                              type="button"
+                              className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition hover:bg-surface2 hover:text-text"
+                              aria-label={t(
+                                "playground:imageGeneration.regenerateImage",
+                                "Regenerate image"
+                              ) as string}
+                              title={t(
+                                "playground:imageGeneration.regenerateImage",
+                                "Regenerate image"
+                              ) as string}
+                              onClick={() => {
+                                void props.onRegenerateImage?.({
+                                  messageId: props.messageId,
+                                  imageIndex: index,
+                                  imageUrl: image,
+                                  request: imageGenerationMetadata?.request ?? null
+                                })
+                              }}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                          {props.onDeleteImage && (
+                            <button
+                              type="button"
+                              className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition hover:bg-danger/10 hover:text-danger"
+                              aria-label={t(
+                                "playground:imageGeneration.deleteImage",
+                                "Delete image"
+                              ) as string}
+                              title={t(
+                                "playground:imageGeneration.deleteImage",
+                                "Delete image"
+                              ) as string}
+                              onClick={() => {
+                                props.onDeleteImage?.({
+                                  messageId: props.messageId,
+                                  imageIndex: index,
+                                  imageUrl: image
+                                })
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   ))}
               </div>
             )}

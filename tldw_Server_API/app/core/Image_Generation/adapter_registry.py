@@ -18,6 +18,9 @@ class ImageAdapterRegistry:
     DEFAULT_ADAPTERS: dict[str, str] = {
         "stable_diffusion_cpp": "tldw_Server_API.app.core.Image_Generation.adapters.stable_diffusion_cpp_adapter.StableDiffusionCppAdapter",
         "swarmui": "tldw_Server_API.app.core.Image_Generation.adapters.swarmui_adapter.SwarmUIAdapter",
+        "openrouter": "tldw_Server_API.app.core.Image_Generation.adapters.openrouter_image_adapter.OpenRouterImageAdapter",
+        "novita": "tldw_Server_API.app.core.Image_Generation.adapters.novita_image_adapter.NovitaImageAdapter",
+        "together": "tldw_Server_API.app.core.Image_Generation.adapters.together_image_adapter.TogetherImageAdapter",
     }
 
     def __init__(self, config_override: dict[str, Any] | None = None) -> None:

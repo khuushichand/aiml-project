@@ -3,6 +3,7 @@ import React from "react"
 import useDynamicTextareaSize from "~/hooks/useDynamicTextareaSize"
 import { toBase64 } from "~/libs/to-base64"
 import { useMessageOption } from "~/hooks/useMessageOption"
+import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import {
   Checkbox,
   Dropdown,
@@ -39,7 +40,8 @@ import {
   CornerUpLeft,
   Settings2,
   HelpCircle,
-  ArrowRight
+  ArrowRight,
+  WandSparkles
 } from "lucide-react"
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
@@ -69,6 +71,7 @@ import {
   compareModelsSupportCapability as compareModelsSupportCapabilityCheck,
   getCompareCapabilityIncompatibilities
 } from "./compare-preflight"
+import { buildCompareInteroperabilityNotices } from "./compare-interoperability"
 import { useMobileComposerViewport } from "./useMobileComposerViewport"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
@@ -98,6 +101,11 @@ import {
   normalizeMediaChatHandoffPayload,
   parseMediaIdAsNumber
 } from "@/services/tldw/media-chat-handoff"
+import {
+  getImageBackendConfigs,
+  normalizeImageBackendConfig,
+  resolveImageBackendConfig
+} from "@/services/image-generation"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
@@ -148,8 +156,20 @@ import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { formatCost } from "@/utils/model-pricing"
 import {
   aggregateSessionUsage,
-  projectTokenBudget
+  projectTokenBudget,
+  resolveTokenBudgetRisk
 } from "./usage-metrics"
+import {
+  buildConversationSummaryCheckpointPrompt,
+  evaluateSummaryCheckpointSuggestion
+} from "./conversation-summary-checkpoint"
+import { SessionInsightsPanel } from "./SessionInsightsPanel"
+import { ModelRecommendationsPanel } from "./ModelRecommendationsPanel"
+import { buildSessionInsights } from "./session-insights"
+import {
+  buildModelRecommendations,
+  type ModelRecommendationAction
+} from "./model-recommendations"
 import {
   createStartupTemplateBundle,
   describeStartupTemplatePrompt,
@@ -162,6 +182,33 @@ import {
   upsertStartupTemplateBundle,
   type StartupTemplateBundle
 } from "./startup-template-bundles"
+import {
+  IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+  PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY,
+  resolveImageGenerationEventSyncMode,
+  normalizeImageGenerationEventSyncMode,
+  normalizeImageGenerationEventSyncPolicy,
+  type ImageGenerationEventSyncPolicy,
+  type ImageGenerationEventSyncMode,
+  type ImageGenerationRefineMetadata,
+  IMAGE_GENERATION_USER_MESSAGE_TYPE,
+  type ImageGenerationPromptMode,
+  type ImageGenerationRequestSnapshot
+} from "@/utils/image-generation-chat"
+import {
+  buildImagePromptRefineMessages,
+  extractImagePromptRefineCandidate
+} from "@/utils/image-prompt-refinement"
+import {
+  createImagePromptDraftFromStrategy,
+  deriveImagePromptRawContext,
+  getImagePromptStrategies,
+  type WeightedImagePromptContextEntry
+} from "@/utils/image-prompt-strategies"
+import {
+  computeResponseDiffPreview,
+  type CompareResponseDiff
+} from "./compare-response-diff"
 
 type Props = {
   droppedFiles: File[]
@@ -213,6 +260,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     "allowExternalImages",
     DEFAULT_CHAT_SETTINGS.allowExternalImages
   )
+  const [showMoodBadge, setShowMoodBadge] = useStorage(
+    "chatShowMoodBadge",
+    true
+  )
   const {
     onSubmit,
     messages,
@@ -248,6 +299,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setUseOCR,
     defaultInternetSearchOn,
     setHistory,
+    historyId,
     history,
     uploadedFiles,
     fileRetrievalEnabled,
@@ -277,6 +329,20 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   } = useMessageOption()
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
   const setRagPinnedResults = useStoreMessageOption((s) => s.setRagPinnedResults)
+  const { settings: chatSettings, updateSettings: updateChatSettings } =
+    useChatSettingsRecord({
+      historyId,
+      serverChatId
+    })
+  const [imageEventSyncGlobalDefault, setImageEventSyncGlobalDefault] =
+    useStorage<ImageGenerationEventSyncMode>(
+      PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY,
+      "off"
+    )
+  const imageEventSyncChatMode = React.useMemo(
+    () => normalizeImageGenerationEventSyncMode(chatSettings?.imageEventSyncMode, "off"),
+    [chatSettings?.imageEventSyncMode]
+  )
 
   const [autoSubmitVoiceMessage] = useStorage("autoSubmitVoiceMessage", false)
   const isMobileViewport = useMobile()
@@ -426,6 +492,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [contextWindowDraftValue, setContextWindowDraftValue] = React.useState<
     number | undefined
   >(undefined)
+  const [sessionInsightsOpen, setSessionInsightsOpen] = React.useState(false)
+  const [dismissedRecommendationIds, setDismissedRecommendationIds] =
+    React.useState<string[]>([])
   const [modeLauncherOpen, setModeLauncherOpen] = React.useState(false)
   const [modeAnnouncement, setModeAnnouncement] = React.useState<string | null>(
     null
@@ -463,6 +532,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null)
+  const [showMoodConfidence, setShowMoodConfidence] = useStorage(
+    "chatShowMoodConfidence",
+    Boolean(selectedCharacter?.id) && !compareMode
+  )
   const [startupTemplatesRaw, setStartupTemplatesRaw] = useStorage(
     "playgroundStartupTemplateBundles",
     "[]"
@@ -1334,6 +1407,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return `${base} (${formatCost(sessionUsageSummary.estimatedCostUsd)})`
   }, [sessionUsageSummary.estimatedCostUsd, sessionUsageSummary.totalTokens, t])
+  const sessionInsights = React.useMemo(
+    () => buildSessionInsights(messages as any[]),
+    [messages]
+  )
   const projectedBudget = React.useMemo(
     () =>
       projectTokenBudget({
@@ -1343,6 +1420,25 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       }),
     [conversationTokenCount, draftTokenCount, resolvedMaxContext]
   )
+  const tokenBudgetRisk = React.useMemo(
+    () => resolveTokenBudgetRisk(projectedBudget),
+    [projectedBudget]
+  )
+  const tokenBudgetRiskLabel = React.useMemo(() => {
+    if (tokenBudgetRisk.level === "critical") {
+      return t("playground:tokens.riskCritical", "Critical risk")
+    }
+    if (tokenBudgetRisk.level === "high") {
+      return t("playground:tokens.riskHigh", "High risk")
+    }
+    if (tokenBudgetRisk.level === "medium") {
+      return t("playground:tokens.riskMedium", "Medium risk")
+    }
+    if (tokenBudgetRisk.level === "low") {
+      return t("playground:tokens.riskLow", "Low risk")
+    }
+    return t("playground:tokens.riskUnknown", "Unknown")
+  }, [t, tokenBudgetRisk.level])
   const showTokenBudgetWarning =
     projectedBudget.isOverLimit || projectedBudget.isNearLimit
   const tokenBudgetWarningText = React.useMemo(() => {
@@ -1408,6 +1504,56 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       return total + estimateTokensFromText(text)
     }, 0)
   }, [messages])
+  const summaryCheckpointSuggestion = React.useMemo(
+    () =>
+      evaluateSummaryCheckpointSuggestion({
+        messageCount: messages.length,
+        projectedBudget
+      }),
+    [messages.length, projectedBudget]
+  )
+  const modelRecommendations = React.useMemo(
+    () =>
+      buildModelRecommendations({
+        draftText: String(form.values.message || ""),
+        selectedModel,
+        modelCapabilities,
+        webSearch,
+        jsonMode: Boolean(currentChatModelSettings.jsonMode),
+        hasImageAttachment: Boolean(form.values.image),
+        tokenBudgetRiskLevel: tokenBudgetRisk.level,
+        sessionInsights
+      }),
+    [
+      currentChatModelSettings.jsonMode,
+      form.values.image,
+      form.values.message,
+      modelCapabilities,
+      selectedModel,
+      sessionInsights,
+      tokenBudgetRisk.level,
+      webSearch
+    ]
+  )
+  const visibleModelRecommendations = React.useMemo(
+    () =>
+      modelRecommendations.filter(
+        (recommendation) =>
+          !dismissedRecommendationIds.includes(recommendation.id)
+      ),
+    [dismissedRecommendationIds, modelRecommendations]
+  )
+  React.useEffect(() => {
+    setDismissedRecommendationIds((previous) => {
+      if (previous.length === 0) return previous
+      const availableIds = new Set(
+        modelRecommendations.map((recommendation) => recommendation.id)
+      )
+      const next = previous.filter((id) => availableIds.has(id))
+      if (next.length === previous.length) return previous
+      return next
+    })
+  }, [modelRecommendations])
   const contextFootprintRows = React.useMemo(
     () => [
       {
@@ -1530,6 +1676,64 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     setContextWindowDraftValue(undefined)
   }, [modelContextLength, updateChatModelSetting])
+  const openSessionInsightsModal = React.useCallback(() => {
+    setSessionInsightsOpen(true)
+  }, [])
+  const handleModelRecommendationAction = React.useCallback(
+    (action: ModelRecommendationAction) => {
+      if (action === "open_model_settings") {
+        setOpenModelSettings(true)
+        return
+      }
+      if (action === "enable_json_mode") {
+        if (!currentChatModelSettings.jsonMode) {
+          updateChatModelSetting("jsonMode", true)
+        }
+        setOpenModelSettings(true)
+        return
+      }
+      if (action === "open_context_window") {
+        openContextWindowModal()
+        return
+      }
+      if (action === "open_session_insights") {
+        openSessionInsightsModal()
+      }
+    },
+    [
+      currentChatModelSettings.jsonMode,
+      openContextWindowModal,
+      openSessionInsightsModal,
+      setOpenModelSettings,
+      updateChatModelSetting
+    ]
+  )
+  const dismissModelRecommendation = React.useCallback((id: string) => {
+    setDismissedRecommendationIds((previous) =>
+      previous.includes(id) ? previous : [...previous, id]
+    )
+  }, [])
+  const getModelRecommendationActionLabel = React.useCallback(
+    (action: ModelRecommendationAction) => {
+      if (action === "enable_json_mode") {
+        return t("playground:composer.recommendationEnableJson", "Enable JSON")
+      }
+      if (action === "open_context_window") {
+        return t(
+          "playground:composer.recommendationAdjustContext",
+          "Adjust context"
+        )
+      }
+      if (action === "open_session_insights") {
+        return t(
+          "playground:composer.recommendationOpenInsights",
+          "Open insights"
+        )
+      }
+      return t("playground:composer.recommendationReviewModels", "Review models")
+    },
+    [t]
+  )
   const clearPromptContext = React.useCallback(() => {
     setSelectedQuickPrompt(null)
     setSelectedSystemPrompt("")
@@ -1564,6 +1768,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     clearPromptContext,
     largestContextContributor
   ])
+  const insertSummaryCheckpointPrompt = React.useCallback(() => {
+    const checkpointPrompt = buildConversationSummaryCheckpointPrompt(messages, {
+      maxRecentMessages: 10
+    })
+    setMessageValue(checkpointPrompt, {
+      collapseLarge: true,
+      forceCollapse: true
+    })
+    textAreaFocus()
+  }, [messages, setMessageValue, textAreaFocus])
 
   const {
     imageBackendDefault: imageBackendDefaultTrimmed,
@@ -2750,6 +2964,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             })),
         imageBackendOverride: intent.isImageCommand
           ? intent.imageBackendOverride
+          : undefined,
+        userMessageType: intent.isImageCommand
+          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
+          : undefined,
+        assistantMessageType: intent.isImageCommand
+          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
+          : undefined,
+        imageGenerationSource: intent.isImageCommand
+          ? "slash-command"
           : undefined
       })
     })()
@@ -2888,6 +3111,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             })),
         imageBackendOverride: intent.isImageCommand
           ? intent.imageBackendOverride
+          : undefined,
+        userMessageType: intent.isImageCommand
+          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
+          : undefined,
+        assistantMessageType: intent.isImageCommand
+          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
+          : undefined,
+        imageGenerationSource: intent.isImageCommand
+          ? "slash-command"
           : undefined
       })
     })()
@@ -3789,6 +4021,57 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [rawRequestModalOpen, setRawRequestModalOpen] = React.useState(false)
   const [rawRequestSnapshot, setRawRequestSnapshot] =
     React.useState<ChatRequestDebugSnapshot | null>(null)
+  const [imageGenerateModalOpen, setImageGenerateModalOpen] =
+    React.useState(false)
+  const [imageGenerateBackend, setImageGenerateBackend] = React.useState("")
+  const [imageGeneratePrompt, setImageGeneratePrompt] = React.useState("")
+  const [imageGeneratePromptMode, setImageGeneratePromptMode] =
+    React.useState<ImageGenerationPromptMode>("scene")
+  const [imageGenerateFormat, setImageGenerateFormat] = React.useState<
+    "png" | "jpg" | "webp"
+  >("png")
+  const [imageGenerateNegativePrompt, setImageGenerateNegativePrompt] =
+    React.useState("")
+  const [imageGenerateWidth, setImageGenerateWidth] = React.useState<
+    number | undefined
+  >(undefined)
+  const [imageGenerateHeight, setImageGenerateHeight] = React.useState<
+    number | undefined
+  >(undefined)
+  const [imageGenerateSteps, setImageGenerateSteps] = React.useState<
+    number | undefined
+  >(undefined)
+  const [imageGenerateCfgScale, setImageGenerateCfgScale] = React.useState<
+    number | undefined
+  >(undefined)
+  const [imageGenerateSeed, setImageGenerateSeed] = React.useState<
+    number | undefined
+  >(undefined)
+  const [imageGenerateSampler, setImageGenerateSampler] = React.useState("")
+  const [imageGenerateModel, setImageGenerateModel] = React.useState("")
+  const [imageGenerateExtraParams, setImageGenerateExtraParams] =
+    React.useState("")
+  const [imageGenerateSyncPolicy, setImageGenerateSyncPolicy] =
+    React.useState<ImageGenerationEventSyncPolicy>("inherit")
+  const [imagePromptContextBreakdown, setImagePromptContextBreakdown] =
+    React.useState<WeightedImagePromptContextEntry[]>([])
+  const [imagePromptRefineSubmitting, setImagePromptRefineSubmitting] =
+    React.useState(false)
+  const [imagePromptRefineBaseline, setImagePromptRefineBaseline] =
+    React.useState("")
+  const [imagePromptRefineCandidate, setImagePromptRefineCandidate] =
+    React.useState("")
+  const [imagePromptRefineModel, setImagePromptRefineModel] = React.useState<
+    string | null
+  >(null)
+  const [imagePromptRefineLatencyMs, setImagePromptRefineLatencyMs] =
+    React.useState<number | null>(null)
+  const [imagePromptRefineDiff, setImagePromptRefineDiff] =
+    React.useState<CompareResponseDiff | null>(null)
+  const [imageGenerateRefineMetadata, setImageGenerateRefineMetadata] =
+    React.useState<ImageGenerationRefineMetadata | undefined>(undefined)
+  const [imageGenerateSubmitting, setImageGenerateSubmitting] =
+    React.useState(false)
   const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
 
   const parseJsonObject = React.useCallback((value?: string) => {
@@ -3805,6 +4088,416 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return undefined
   }, [])
+
+  const imagePromptStrategies = React.useMemo(() => getImagePromptStrategies(), [])
+  const imageGenerationCharacterMood = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const candidate = messages[i]
+      if (candidate?.isBot && typeof candidate?.moodLabel === "string") {
+        return candidate.moodLabel
+      }
+    }
+    return null
+  }, [messages])
+
+  const imageGenerateBackendOptions = React.useMemo(() => {
+    return imageBackendOptions.filter((option) => option.value.trim().length > 0)
+  }, [imageBackendOptions])
+
+  const clearImagePromptRefineCandidate = React.useCallback(() => {
+    setImagePromptRefineBaseline("")
+    setImagePromptRefineCandidate("")
+    setImagePromptRefineModel(null)
+    setImagePromptRefineLatencyMs(null)
+    setImagePromptRefineDiff(null)
+  }, [])
+
+  const clearImagePromptRefineState = React.useCallback(() => {
+    clearImagePromptRefineCandidate()
+    setImageGenerateRefineMetadata(undefined)
+  }, [clearImagePromptRefineCandidate])
+
+  const imageGenerateBusy = imageGenerateSubmitting || imagePromptRefineSubmitting
+  const imageEventSyncBaselineMode = React.useMemo(
+    () =>
+      resolveImageGenerationEventSyncMode({
+        requestPolicy: "inherit",
+        chatMode: imageEventSyncChatMode,
+        globalMode: normalizeImageGenerationEventSyncMode(
+          imageEventSyncGlobalDefault,
+          "off"
+        )
+      }),
+    [imageEventSyncChatMode, imageEventSyncGlobalDefault]
+  )
+  const imageGenerateResolvedSyncMode = React.useMemo(
+    () =>
+      resolveImageGenerationEventSyncMode({
+        requestPolicy: imageGenerateSyncPolicy,
+        chatMode: imageEventSyncChatMode,
+        globalMode: normalizeImageGenerationEventSyncMode(
+          imageEventSyncGlobalDefault,
+          "off"
+        )
+      }),
+    [
+      imageEventSyncChatMode,
+      imageEventSyncGlobalDefault,
+      imageGenerateSyncPolicy
+    ]
+  )
+
+  const hydrateImageGenerateSettings = React.useCallback(
+    async (backend: string) => {
+      if (!backend) return
+      const configs = await getImageBackendConfigs().catch(() => ({}))
+      const config = normalizeImageBackendConfig(
+        resolveImageBackendConfig(backend, configs)
+      )
+      setImageGenerateFormat(config.format || "png")
+      setImageGenerateNegativePrompt(config.negativePrompt || "")
+      setImageGenerateWidth(config.width)
+      setImageGenerateHeight(config.height)
+      setImageGenerateSteps(config.steps)
+      setImageGenerateCfgScale(config.cfgScale)
+      setImageGenerateSeed(config.seed)
+      setImageGenerateSampler(config.sampler || "")
+      setImageGenerateModel(config.model || "")
+      setImageGenerateExtraParams(
+        config.extraParams == null
+          ? ""
+          : typeof config.extraParams === "string"
+            ? config.extraParams
+            : JSON.stringify(config.extraParams, null, 2)
+      )
+    },
+    []
+  )
+
+  const openImageGenerateModal = React.useCallback(() => {
+    setToolsPopoverOpen(false)
+    setImagePromptContextBreakdown([])
+    clearImagePromptRefineState()
+    setImageGenerateSyncPolicy("inherit")
+    const defaultBackend =
+      imageBackendDefaultTrimmed ||
+      imageGenerateBackendOptions[0]?.value ||
+      ""
+    setImageGenerateBackend(defaultBackend)
+    if (!imageGeneratePrompt.trim()) {
+      const draftFromComposer = String(form.values.message || "").trim()
+      if (draftFromComposer) {
+        setImageGeneratePrompt(draftFromComposer)
+      }
+    }
+    if (defaultBackend) {
+      void hydrateImageGenerateSettings(defaultBackend)
+    }
+    setImageGenerateModalOpen(true)
+  }, [
+    clearImagePromptRefineState,
+    form.values.message,
+    hydrateImageGenerateSettings,
+    imageBackendDefaultTrimmed,
+    imageGenerateBackendOptions,
+    imageGeneratePrompt
+  ])
+
+  const handleCreateImagePromptDraft = React.useCallback(() => {
+    const rawContext = deriveImagePromptRawContext({
+      messages: messages as Array<{ isBot?: boolean; message?: string }>,
+      characterName: selectedCharacter?.name ?? null,
+      moodLabel: imageGenerationCharacterMood,
+      userIntent: form.values.message || imageGeneratePrompt
+    })
+    const draftResult = createImagePromptDraftFromStrategy({
+      strategyId: imageGeneratePromptMode,
+      rawContext
+    })
+    setImageGeneratePrompt(draftResult.prompt)
+    setImagePromptContextBreakdown(draftResult.weightedContext.entries.slice(0, 4))
+    clearImagePromptRefineState()
+  }, [
+    clearImagePromptRefineState,
+    form.values.message,
+    imageGeneratePromptMode,
+    imageGenerationCharacterMood,
+    imageGeneratePrompt,
+    messages,
+    selectedCharacter?.name
+  ])
+
+  const handleRefineImagePromptDraft = React.useCallback(async () => {
+    const prompt = imageGeneratePrompt.trim()
+    if (!prompt) {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:imageGeneration.refinePromptRequired",
+          "Add or create a prompt before refining."
+        )
+      })
+      return
+    }
+
+    const normalizedModel = String(selectedModel || "")
+      .replace(/^tldw:/, "")
+      .trim()
+    if (!normalizedModel) {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:imageGeneration.refineModelRequired",
+          "Select a chat model before using Refine with LLM."
+        )
+      })
+      return
+    }
+
+    const strategyLabel =
+      imagePromptStrategies.find((entry) => entry.id === imageGeneratePromptMode)
+        ?.label || imageGeneratePromptMode
+    const contextEntries =
+      imagePromptContextBreakdown.length > 0
+        ? imagePromptContextBreakdown
+        : createImagePromptDraftFromStrategy({
+            strategyId: imageGeneratePromptMode,
+            rawContext: deriveImagePromptRawContext({
+              messages: messages as Array<{ isBot?: boolean; message?: string }>,
+              characterName: selectedCharacter?.name ?? null,
+              moodLabel: imageGenerationCharacterMood,
+              userIntent: form.values.message || imageGeneratePrompt
+            })
+          }).weightedContext.entries.slice(0, 4)
+
+    setImagePromptRefineSubmitting(true)
+    setImageGenerateRefineMetadata(undefined)
+    try {
+      const startedAt =
+        typeof performance !== "undefined" ? performance.now() : Date.now()
+      await tldwClient.initialize().catch(() => null)
+      const provider = await resolveApiProviderForModel({
+        modelId: normalizedModel,
+        explicitProvider: currentChatModelSettings.apiProvider
+      })
+      const completionResponse = await tldwClient.createChatCompletion({
+        model: normalizedModel,
+        api_provider: provider || undefined,
+        temperature: 0.1,
+        max_tokens: 320,
+        messages: buildImagePromptRefineMessages({
+          originalPrompt: prompt,
+          strategyLabel,
+          backend: imageGenerateBackend,
+          contextEntries
+        })
+      })
+      const completionPayload = await completionResponse.json().catch(() => null)
+      const candidate = extractImagePromptRefineCandidate(completionPayload)
+      if (!candidate) {
+        throw new Error(
+          t(
+            "playground:imageGeneration.refineEmpty",
+            "Refiner returned an empty prompt. Try again."
+          )
+        )
+      }
+      const elapsedRaw =
+        typeof performance !== "undefined" ? performance.now() : Date.now()
+      const latencyMs = Math.max(1, Math.round(elapsedRaw - startedAt))
+      const diff = computeResponseDiffPreview({
+        baseline: prompt,
+        candidate,
+        maxHighlights: 4
+      })
+      setImagePromptRefineBaseline(prompt)
+      setImagePromptRefineCandidate(candidate)
+      setImagePromptRefineModel(normalizedModel)
+      setImagePromptRefineLatencyMs(latencyMs)
+      setImagePromptRefineDiff(diff)
+    } catch (error: any) {
+      notificationApi.error({
+        message: t(
+          "playground:imageGeneration.refineFailedTitle",
+          "Prompt refinement failed"
+        ),
+        description:
+          error?.message ||
+          t(
+            "playground:imageGeneration.refineFailedBody",
+            "Could not refine the image prompt."
+          )
+      })
+    } finally {
+      setImagePromptRefineSubmitting(false)
+    }
+  }, [
+    currentChatModelSettings.apiProvider,
+    form.values.message,
+    imageGenerateBackend,
+    imageGeneratePrompt,
+    imageGeneratePromptMode,
+    imageGenerationCharacterMood,
+    imagePromptContextBreakdown,
+    imagePromptStrategies,
+    messages,
+    notificationApi,
+    selectedCharacter?.name,
+    selectedModel,
+    t
+  ])
+
+  const applyRefinedImagePromptCandidate = React.useCallback(() => {
+    const candidate = imagePromptRefineCandidate.trim()
+    if (!candidate) return
+
+    if (imagePromptRefineModel && imagePromptRefineLatencyMs != null) {
+      const diffStats = imagePromptRefineDiff
+        ? {
+            baselineSegments: imagePromptRefineDiff.baselineSegments,
+            candidateSegments: imagePromptRefineDiff.candidateSegments,
+            sharedSegments: imagePromptRefineDiff.sharedSegments,
+            overlapRatio: imagePromptRefineDiff.overlapRatio,
+            addedCount: imagePromptRefineDiff.addedHighlights.length,
+            removedCount: imagePromptRefineDiff.removedHighlights.length
+          }
+        : {
+            baselineSegments: 0,
+            candidateSegments: 0,
+            sharedSegments: 0,
+            overlapRatio: 0,
+            addedCount: 0,
+            removedCount: 0
+          }
+      setImageGenerateRefineMetadata({
+        model: imagePromptRefineModel,
+        latencyMs: imagePromptRefineLatencyMs,
+        diffStats
+      })
+    }
+
+    setImageGeneratePrompt(candidate)
+    clearImagePromptRefineCandidate()
+  }, [
+    clearImagePromptRefineCandidate,
+    imagePromptRefineCandidate,
+    imagePromptRefineDiff,
+    imagePromptRefineLatencyMs,
+    imagePromptRefineModel
+  ])
+
+  const rejectRefinedImagePromptCandidate = React.useCallback(() => {
+    clearImagePromptRefineState()
+  }, [clearImagePromptRefineState])
+
+  const submitImageGenerateModal = React.useCallback(async () => {
+    const prompt = imageGeneratePrompt.trim()
+    const backend = imageGenerateBackend.trim()
+    if (!backend) {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:imageGeneration.modalBackendRequired",
+          "Select an image backend before generating."
+        )
+      })
+      return
+    }
+    if (!prompt) {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:imageGeneration.modalPromptRequired",
+          "Image prompt is required."
+        )
+      })
+      return
+    }
+    const parsedExtraParams = parseJsonObject(imageGenerateExtraParams)
+    if (imageGenerateExtraParams.trim().length > 0 && !parsedExtraParams) {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description: t(
+          "playground:imageGeneration.modalExtraParamsInvalid",
+          "Extra params must be valid JSON object."
+        )
+      })
+      return
+    }
+
+    const request: Partial<ImageGenerationRequestSnapshot> = {
+      prompt,
+      backend,
+      format: imageGenerateFormat,
+      negativePrompt: imageGenerateNegativePrompt.trim() || undefined,
+      width:
+        typeof imageGenerateWidth === "number" && Number.isFinite(imageGenerateWidth)
+          ? imageGenerateWidth
+          : undefined,
+      height:
+        typeof imageGenerateHeight === "number" && Number.isFinite(imageGenerateHeight)
+          ? imageGenerateHeight
+          : undefined,
+      steps:
+        typeof imageGenerateSteps === "number" && Number.isFinite(imageGenerateSteps)
+          ? imageGenerateSteps
+          : undefined,
+      cfgScale:
+        typeof imageGenerateCfgScale === "number" &&
+        Number.isFinite(imageGenerateCfgScale)
+          ? imageGenerateCfgScale
+          : undefined,
+      seed:
+        typeof imageGenerateSeed === "number" && Number.isFinite(imageGenerateSeed)
+          ? imageGenerateSeed
+          : undefined,
+      sampler: imageGenerateSampler.trim() || undefined,
+      model: imageGenerateModel.trim() || undefined,
+      extraParams: parsedExtraParams
+    }
+
+    setImageGenerateSubmitting(true)
+    try {
+      await sendMessage({
+        message: prompt,
+        image: "",
+        docs: [],
+        imageBackendOverride: backend,
+        userMessageType: IMAGE_GENERATION_USER_MESSAGE_TYPE,
+        assistantMessageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+        imageGenerationRequest: request,
+        imageGenerationRefine: imageGenerateRefineMetadata,
+        imageGenerationPromptMode: imageGeneratePromptMode,
+        imageGenerationSource: "generate-modal",
+        imageEventSyncPolicy: imageGenerateSyncPolicy
+      })
+      setImageGenerateModalOpen(false)
+      textAreaFocus()
+    } finally {
+      setImageGenerateSubmitting(false)
+    }
+  }, [
+    imageGenerateBackend,
+    imageGenerateCfgScale,
+    imageGenerateExtraParams,
+    imageGenerateFormat,
+    imageGenerateHeight,
+    imageGenerateModel,
+    imageGenerateNegativePrompt,
+    imageGeneratePromptMode,
+    imageGenerateSyncPolicy,
+    imageGeneratePrompt,
+    imageGenerateSampler,
+    imageGenerateSeed,
+    imageGenerateSteps,
+    imageGenerateWidth,
+    imageGenerateRefineMetadata,
+    notificationApi,
+    parseJsonObject,
+    sendMessage,
+    t,
+    textAreaFocus
+  ])
 
   const getComposerModelMeta = React.useCallback(
     (modelId: string) => {
@@ -4377,6 +5070,48 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             <div className="border-t border-border my-1" />
 
             <div className="flex flex-col gap-1.5 px-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-text">
+                  {t("playground:tools.showMoodBadge", "Show mood badge in chat")}
+                </span>
+                <Switch
+                  size="small"
+                  checked={showMoodBadge}
+                  onChange={(checked) => setShowMoodBadge(checked)}
+                />
+              </div>
+              <p className="text-[11px] text-text-muted">
+                {t(
+                  "playground:tools.showMoodBadgeHelp",
+                  "Shows labels like \"Mood: neutral\" on assistant messages."
+                )}
+              </p>
+
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-text">
+                  {t(
+                    "playground:tools.showMoodConfidence",
+                    "Show mood confidence (%)"
+                  )}
+                </span>
+                <Switch
+                  size="small"
+                  checked={showMoodConfidence}
+                  disabled={!showMoodBadge}
+                  onChange={(checked) => setShowMoodConfidence(checked)}
+                />
+              </div>
+              <p className="text-[11px] text-text-muted">
+                {t(
+                  "playground:tools.showMoodConfidenceHelp",
+                  "Adds confidence percentage when available."
+                )}
+              </p>
+            </div>
+
+            <div className="border-t border-border my-1" />
+
+            <div className="flex flex-col gap-1.5 px-2">
               <button
                 type="button"
                 onClick={openRawRequestModal}
@@ -4477,9 +5212,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       openRawRequestModal,
       setAllowExternalImages,
       setDefaultInternetSearchOnSetting,
+      setShowMoodBadge,
+      setShowMoodConfidence,
       setSimpleInternetSearch,
       setToolsPopoverOpen,
       setWebSearch,
+      showMoodBadge,
+      showMoodConfidence,
       simpleInternetSearch,
       useOCR,
       setUseOCR,
@@ -4864,6 +5603,33 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           : "active",
       onClick: focusConnectionCard
     })
+    const routingPolicyValue =
+      typeof currentChatModelSettings.apiProvider === "string" &&
+      currentChatModelSettings.apiProvider.trim().length > 0
+        ? String(
+            t("playground:composer.context.routingPinned", "{{provider}} pinned", {
+              provider: getProviderDisplayName(
+                currentChatModelSettings.apiProvider.trim()
+              )
+            } as any)
+          )
+        : String(
+            t(
+              "playground:composer.context.routingAuto",
+              "Auto fallback"
+            )
+          )
+    items.push({
+      id: "routingPolicy",
+      label: t("playground:composer.context.routing", "Routing"),
+      value: routingPolicyValue,
+      tone:
+        currentChatModelSettings.apiProvider &&
+        currentChatModelSettings.apiProvider.trim().length > 0
+          ? "neutral"
+          : "active",
+      onClick: () => setOpenModelSettings(true)
+    })
 
     if (compareModeActive) {
       items.push({
@@ -4951,7 +5717,25 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         id: "sessionUsage",
         label: t("playground:composer.context.session", "Session"),
         value: sessionUsageLabel,
-        tone: "neutral"
+        tone: "neutral",
+        onClick: openSessionInsightsModal
+      })
+    }
+    if (messages.length >= 2) {
+      items.push({
+        id: "summaryCheckpoint",
+        label: t("playground:composer.context.checkpoint", "Checkpoint"),
+        value: summaryCheckpointSuggestion.shouldSuggest
+          ? t(
+              "playground:composer.context.checkpointSuggested",
+              "Suggested now"
+            )
+          : t(
+              "playground:composer.context.checkpointManual",
+              "Summarize thread"
+            ),
+        tone: summaryCheckpointSuggestion.shouldSuggest ? "warning" : "neutral",
+        onClick: insertSummaryCheckpointPrompt
       })
     }
 
@@ -4985,11 +5769,24 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       items.push({
         id: "budget",
         label: t("playground:composer.context.budget", "Budget"),
-        value:
+        value: `${tokenBudgetRiskLabel}${
           projectedBudget.utilizationPercent != null
-            ? `${Math.round(projectedBudget.utilizationPercent)}%`
-            : t("common:warning", "Warning"),
+            ? ` • ${Math.round(projectedBudget.utilizationPercent)}%`
+            : ""
+        }`,
         tone: "warning",
+        onClick: openContextWindowModal
+      })
+    }
+    if (tokenBudgetRisk.level !== "unknown" && !showTokenBudgetWarning) {
+      items.push({
+        id: "truncationRisk",
+        label: t("playground:composer.context.truncationRisk", "Truncation"),
+        value: tokenBudgetRiskLabel,
+        tone:
+          tokenBudgetRisk.level === "high" || tokenBudgetRisk.level === "critical"
+            ? "warning"
+            : "neutral",
         onClick: openContextWindowModal
       })
     }
@@ -5018,6 +5815,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
     }
 
+    if (!temporaryChat) {
+      items.push({
+        id: "imageEventSync",
+        label: t("playground:composer.context.imageSync", "Image sync"),
+        value:
+          imageEventSyncBaselineMode === "on"
+            ? t("playground:composer.context.imageSyncOn", "Mirror on")
+            : t("playground:composer.context.imageSyncOff", "Local only"),
+        tone: imageEventSyncBaselineMode === "on" ? "active" : "neutral",
+        onClick: openImageGenerateModal
+      })
+    }
+
     if (temporaryChat) {
       items.push({
         id: "temporary",
@@ -5035,6 +5845,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     connectionUxState,
     contextToolsOpen,
     currentPreset,
+    currentChatModelSettings.apiProvider,
     currentChatModelSettings.jsonMode,
     focusConnectionCard,
     handleToggleWebSearch,
@@ -5047,14 +5858,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     nonMessageContextPercent,
     characterPendingApply,
     promptSummaryLabel,
+    tokenBudgetRisk.level,
+    tokenBudgetRiskLabel,
     ragPinnedResults.length,
     selectedCharacter?.name,
     selectedModel,
+    summaryCheckpointSuggestion.shouldSuggest,
     selectedQuickPrompt,
     selectedSystemPrompt,
     serverChatState,
+    imageEventSyncBaselineMode,
     sessionUsageLabel,
     sessionUsageSummary.totalTokens,
+    openSessionInsightsModal,
+    openImageGenerateModal,
+    messages.length,
     setContextToolsOpen,
     setOpenModelSettings,
     setModelDropdownOpen,
@@ -5063,16 +5881,21 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     showNonMessageContextWarning,
     systemPrompt,
     t,
+    insertSummaryCheckpointPrompt,
     temporaryChat,
     updateChatModelSetting
   ])
 
-  const compareSharedContextLabels = React.useMemo(() => {
-    const labels: string[] = []
-    const hasPromptContext =
+  const compareHasPromptContext = React.useMemo(
+    () =>
       Boolean(selectedSystemPrompt) ||
       Boolean(selectedQuickPrompt) ||
-      String(systemPrompt || "").trim().length > 0
+      String(systemPrompt || "").trim().length > 0,
+    [selectedQuickPrompt, selectedSystemPrompt, systemPrompt]
+  )
+
+  const compareSharedContextLabels = React.useMemo(() => {
+    const labels: string[] = []
     if (selectedCharacter?.name) {
       labels.push(
         String(
@@ -5084,7 +5907,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         )
       )
     }
-    if (hasPromptContext) {
+    if (compareHasPromptContext) {
       labels.push(
         String(
           t(
@@ -5117,15 +5940,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return labels
   }, [
+    compareHasPromptContext,
     currentChatModelSettings.jsonMode,
     ragPinnedResults.length,
     selectedCharacter?.name,
-    selectedQuickPrompt,
-    selectedSystemPrompt,
-    systemPrompt,
     t,
     webSearch
   ])
+
+  const compareInteroperabilityNotices = React.useMemo(
+    () =>
+      buildCompareInteroperabilityNotices({
+        t,
+        characterName: selectedCharacter?.name || null,
+        pinnedSourceCount: ragPinnedResults.length,
+        webSearch,
+        hasPromptContext: compareHasPromptContext,
+        jsonMode: Boolean(currentChatModelSettings.jsonMode),
+        voiceChatEnabled
+      }),
+    [
+      compareHasPromptContext,
+      currentChatModelSettings.jsonMode,
+      ragPinnedResults.length,
+      selectedCharacter?.name,
+      t,
+      voiceChatEnabled,
+      webSearch
+    ]
+  )
 
   const contextConflictWarnings = React.useMemo(
     () => {
@@ -5230,6 +6073,26 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           onAction: () => openContextWindowModal()
         })
       }
+      if (summaryCheckpointSuggestion.shouldSuggest && messages.length >= 2) {
+        warnings.push({
+          id: "summary-checkpoint",
+          text:
+            summaryCheckpointSuggestion.reason === "token-budget"
+              ? t(
+                  "playground:composer.conflict.summaryCheckpointBudget",
+                  "Consider creating a checkpoint summary before your next turn to reduce truncation risk."
+                )
+              : t(
+                  "playground:composer.conflict.summaryCheckpointVolume",
+                  "This thread is getting long. A checkpoint summary can preserve key decisions before context is trimmed."
+                ),
+          actionLabel: t(
+            "playground:composer.conflict.createCheckpointSummary",
+            "Create checkpoint summary"
+          ),
+          onAction: insertSummaryCheckpointPrompt
+        })
+      }
       if (showNonMessageContextWarning) {
         warnings.push({
           id: "context-footprint",
@@ -5259,6 +6122,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       compareModeActive,
       compareNeedsMoreModels,
       largestContextContributor,
+      insertSummaryCheckpointPrompt,
+      messages.length,
       nonMessageContextPercent,
       openKnowledgePanel,
       trimLargestContextContributor,
@@ -5270,6 +6135,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       setModeLauncherOpen,
       setModelDropdownOpen,
       showNonMessageContextWarning,
+      summaryCheckpointSuggestion.reason,
+      summaryCheckpointSuggestion.shouldSuggest,
       showTokenBudgetWarning,
       systemPrompt,
       t,
@@ -5447,6 +6314,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const externalPinSources =
     contextToolsOpen ||
     contextWindowModalOpen ||
+    sessionInsightsOpen ||
+    imageGenerateModalOpen ||
     mcpSettingsOpen ||
     openModelSettings ||
     openActorSettings ||
@@ -5738,6 +6607,53 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </button>
     </Tooltip>
   ) : null
+
+  const generateButton = (
+    <Dropdown
+      trigger={["click"]}
+      placement="topRight"
+      menu={{
+        items: [
+          {
+            key: "image",
+            label: (
+              <span className="inline-flex items-center gap-2">
+                <ImageIcon className="h-4 w-4" />
+                <span>{t("playground:generate.image", "Image")}</span>
+              </span>
+            ),
+            onClick: () => {
+              openImageGenerateModal()
+            }
+          }
+        ]
+      }}
+    >
+      <TldwButton
+        variant="outline"
+        size={isMobileViewport ? "lg" : "sm"}
+        shape={isProMode ? "rounded" : "pill"}
+        iconOnly={!isProMode}
+        ariaLabel={t("playground:generate.open", "Generate") as string}
+        title={t("playground:generate.open", "Generate") as string}
+        data-testid="composer-generate-button"
+      >
+        {isProMode ? (
+          <span className="inline-flex items-center gap-1.5">
+            <WandSparkles className="h-4 w-4" aria-hidden="true" />
+            <span>{t("playground:generate.open", "Generate")}</span>
+          </span>
+        ) : (
+          <>
+            <WandSparkles className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">
+              {t("playground:generate.open", "Generate")}
+            </span>
+          </>
+        )}
+      </TldwButton>
+    </Dropdown>
+  )
 
   const toolsButton = (
     <Popover
@@ -6197,6 +7113,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           })),
                       imageBackendOverride: intent.isImageCommand
                         ? intent.imageBackendOverride
+                        : undefined,
+                      userMessageType: intent.isImageCommand
+                        ? IMAGE_GENERATION_USER_MESSAGE_TYPE
+                        : undefined,
+                      assistantMessageType: intent.isImageCommand
+                        ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
+                        : undefined,
+                      imageGenerationSource: intent.isImageCommand
+                        ? "slash-command"
                         : undefined
                     })
                   })}
@@ -6545,6 +7470,30 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                             )}
                           </div>
                         </div>
+                        {compareInteroperabilityNotices.length > 0 && (
+                          <div className="space-y-1" data-testid="compare-interoperability-notices">
+                            <p className="text-[11px] font-medium text-primaryStrong">
+                              {t(
+                                "playground:composer.compareActivationInteroperability",
+                                "Interoperability notes"
+                              )}
+                            </p>
+                            <div className="space-y-1">
+                              {compareInteroperabilityNotices.map((notice) => (
+                                <div
+                                  key={notice.id}
+                                  className={`rounded border px-2 py-1 text-[11px] ${
+                                    notice.tone === "warning"
+                                      ? "border-warn/40 bg-warn/10 text-warn"
+                                      : "border-primary/30 bg-surface text-primaryStrong"
+                                  }`}
+                                >
+                                  {notice.text}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span
                             className={
@@ -6629,6 +7578,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ))}
                       </div>
                     )}
+                    <ModelRecommendationsPanel
+                      t={t}
+                      recommendations={visibleModelRecommendations}
+                      showOpenInsights={sessionInsights.totals.totalTokens > 0}
+                      onOpenInsights={openSessionInsightsModal}
+                      onRunAction={handleModelRecommendationAction}
+                      onDismiss={dismissModelRecommendation}
+                      getActionLabel={getModelRecommendationActionLabel}
+                    />
                     {currentChatModelSettings.jsonMode && (
                       <div
                         role="status"
@@ -6764,6 +7722,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         mcpControl={mcpControl}
                         sendControl={sendControl}
                         attachmentButton={attachmentButton}
+                        generateButton={generateButton}
                         toolsButton={toolsButton}
                         voiceChatButton={voiceChatButton}
                         modelUsageBadge={modelUsageBadge}
@@ -6919,6 +7878,586 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
           </div>
         </div>
       </div>
+      <Modal
+        open={imageGenerateModalOpen}
+        onCancel={() => {
+          if (imageGenerateBusy) return
+          setImageGenerateModalOpen(false)
+        }}
+        title={t("playground:imageGeneration.modalTitle", "Generate image")}
+        width={720}
+        destroyOnHidden
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={handleCreateImagePromptDraft}
+                icon={<WandSparkles className="h-4 w-4" />}
+                disabled={imageGenerateBusy}
+              >
+                {t("playground:imageGeneration.createPrompt", "Create prompt")}
+              </Button>
+              <Button
+                onClick={() => {
+                  void handleRefineImagePromptDraft()
+                }}
+                loading={imagePromptRefineSubmitting}
+                disabled={imageGenerateSubmitting}
+                data-testid="image-refine-with-llm"
+              >
+                {t(
+                  "playground:imageGeneration.refineWithLlm",
+                  "Refine with LLM"
+                )}
+              </Button>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                onClick={() => setImageGenerateModalOpen(false)}
+                disabled={imageGenerateBusy}
+              >
+                {t("common:cancel", "Cancel")}
+              </Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  void submitImageGenerateModal()
+                }}
+                loading={imageGenerateSubmitting}
+                disabled={imagePromptRefineSubmitting}
+              >
+                {t(
+                  "playground:imageGeneration.generateNow",
+                  "Generate image"
+                )}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.backendLabel", "Backend")}
+              </label>
+              <Select
+                value={imageGenerateBackend || undefined}
+                data-testid="image-generate-backend-select"
+                options={imageGenerateBackendOptions.map((option) => ({
+                  value: option.value,
+                  label: option.provider
+                    ? `${getProviderDisplayName(option.provider)} · ${option.label}`
+                    : option.label
+                }))}
+                onChange={(value) => {
+                  const next = String(value || "")
+                  setImageGenerateBackend(next)
+                  void hydrateImageGenerateSettings(next)
+                }}
+                placeholder={t(
+                  "playground:imageGeneration.backendPlaceholder",
+                  "Select backend"
+                )}
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.promptModeLabel", "Prompt mode")}
+              </label>
+              <Radio.Group
+                optionType="button"
+                value={imageGeneratePromptMode}
+                onChange={(event) =>
+                  setImageGeneratePromptMode(
+                    event.target.value as ImageGenerationPromptMode
+                  )
+                }
+                disabled={imageGenerateBusy}
+              >
+                {imagePromptStrategies.map((strategy) => (
+                  <Radio.Button key={strategy.id} value={strategy.id}>
+                    {strategy.label}
+                  </Radio.Button>
+                ))}
+                </Radio.Group>
+              </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.syncPolicyLabel", "Server sync")}
+              </label>
+              <Select
+                value={imageGenerateSyncPolicy}
+                data-testid="image-generate-sync-policy-select"
+                options={[
+                  {
+                    value: "inherit",
+                    label: t(
+                      "playground:imageGeneration.syncPolicyInherit",
+                      "Inherit defaults"
+                    )
+                  },
+                  {
+                    value: "on",
+                    label: t(
+                      "playground:imageGeneration.syncPolicyOn",
+                      "Mirror event"
+                    )
+                  },
+                  {
+                    value: "off",
+                    label: t(
+                      "playground:imageGeneration.syncPolicyOff",
+                      "Local only"
+                    )
+                  }
+                ]}
+                onChange={(value) =>
+                  setImageGenerateSyncPolicy(
+                    normalizeImageGenerationEventSyncPolicy(value, "inherit")
+                  )
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.syncChatDefault", "Chat default")}
+              </label>
+              <Select
+                value={imageEventSyncChatMode}
+                data-testid="image-generate-chat-default-select"
+                options={[
+                  {
+                    value: "off",
+                    label: t(
+                      "playground:imageGeneration.syncChatDefaultOff",
+                      "Off (local only)"
+                    )
+                  },
+                  {
+                    value: "on",
+                    label: t(
+                      "playground:imageGeneration.syncChatDefaultOn",
+                      "On (mirror events)"
+                    )
+                  }
+                ]}
+                onChange={(value) => {
+                  const next = normalizeImageGenerationEventSyncMode(value, "off")
+                  void updateChatSettings({
+                    imageEventSyncMode: next
+                  })
+                }}
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.syncGlobalDefault", "Global default")}
+              </label>
+              <Select
+                value={normalizeImageGenerationEventSyncMode(
+                  imageEventSyncGlobalDefault,
+                  "off"
+                )}
+                data-testid="image-generate-global-default-select"
+                options={[
+                  {
+                    value: "off",
+                    label: t(
+                      "playground:imageGeneration.syncGlobalDefaultOff",
+                      "Off (local only)"
+                    )
+                  },
+                  {
+                    value: "on",
+                    label: t(
+                      "playground:imageGeneration.syncGlobalDefaultOn",
+                      "On (mirror events)"
+                    )
+                  }
+                ]}
+                onChange={(value) => {
+                  const next = normalizeImageGenerationEventSyncMode(value, "off")
+                  void setImageEventSyncGlobalDefault(next)
+                }}
+                disabled={imageGenerateBusy}
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-text-muted">
+            {imageGenerateResolvedSyncMode === "on"
+              ? t(
+                  "playground:imageGeneration.syncEffectiveOn",
+                  "Effective policy: this generation event will also be mirrored to server chat history."
+                )
+              : t(
+                  "playground:imageGeneration.syncEffectiveOff",
+                  "Effective policy: this generation event stays local-only and does not mirror to server chat history."
+                )}
+          </p>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-text-muted">
+              {t("playground:imageGeneration.promptLabel", "Prompt")}
+            </label>
+            <Input.TextArea
+              value={imageGeneratePrompt}
+              onChange={(event) => {
+                setImageGeneratePrompt(event.target.value)
+                clearImagePromptRefineState()
+              }}
+              autoSize={{ minRows: 4, maxRows: 8 }}
+              disabled={imageGenerateBusy}
+              placeholder={t(
+                "playground:imageGeneration.promptPlaceholder",
+                "Describe the image you want to generate."
+              )}
+            />
+            <p className="text-[11px] text-text-muted">
+              {t(
+                "playground:imageGeneration.promptHint",
+                "Create prompt drafts from current chat context, then edit before generating."
+              )}
+            </p>
+            {imagePromptContextBreakdown.length > 0 && (
+              <div
+                className="rounded-md border border-border/70 bg-surface2/60 px-2 py-2 text-[11px] text-text-muted"
+                data-testid="image-prompt-context-breakdown"
+              >
+                <div className="mb-1 font-medium text-text">
+                  {t(
+                    "playground:imageGeneration.contextBlendLabel",
+                    "Weighted context blend"
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {imagePromptContextBreakdown.map((entry) => (
+                    <span
+                      key={`${entry.id}-${entry.score}`}
+                      className="inline-flex items-center rounded-full border border-border px-2 py-0.5"
+                      title={entry.text}
+                    >
+                      {entry.label} {Math.round(entry.score * 100)}%
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {imagePromptRefineCandidate && (
+              <div
+                className="rounded-md border border-primary/30 bg-primary/10 px-3 py-3"
+                data-testid="image-prompt-refine-diff"
+              >
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-primaryStrong">
+                    {t(
+                      "playground:imageGeneration.refineCandidateTitle",
+                      "Refined prompt candidate"
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1 text-[11px] text-primaryStrong">
+                    {imagePromptRefineModel ? (
+                      <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
+                        {imagePromptRefineModel}
+                      </span>
+                    ) : null}
+                    {imagePromptRefineLatencyMs != null ? (
+                      <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
+                        {t(
+                          "playground:imageGeneration.refineLatency",
+                          "{{ms}} ms",
+                          { ms: imagePromptRefineLatencyMs } as any
+                        )}
+                      </span>
+                    ) : null}
+                    {imagePromptRefineDiff ? (
+                      <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
+                        {t(
+                          "playground:imageGeneration.refineOverlap",
+                          "{{percent}}% overlap",
+                          {
+                            percent: Math.round(
+                              imagePromptRefineDiff.overlapRatio * 100
+                            )
+                          } as any
+                        )}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <div className="text-[11px] font-medium text-text-muted">
+                      {t(
+                        "playground:imageGeneration.refineOriginalLabel",
+                        "Original draft"
+                      )}
+                    </div>
+                    <Input.TextArea
+                      value={imagePromptRefineBaseline}
+                      autoSize={{ minRows: 3, maxRows: 6 }}
+                      readOnly
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[11px] font-medium text-text-muted">
+                      {t(
+                        "playground:imageGeneration.refineCandidateLabel",
+                        "Refined prompt"
+                      )}
+                    </div>
+                    <Input.TextArea
+                      value={imagePromptRefineCandidate}
+                      autoSize={{ minRows: 3, maxRows: 6 }}
+                      readOnly
+                    />
+                  </div>
+                </div>
+                {imagePromptRefineDiff && (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-success">
+                        {t("playground:imageGeneration.refineAdded", "Added")}
+                      </div>
+                      <div className="space-y-1 text-[11px] text-text-muted">
+                        {imagePromptRefineDiff.addedHighlights.length > 0 ? (
+                          imagePromptRefineDiff.addedHighlights.map((entry, index) => (
+                            <div
+                              key={`image-refine-added-${index}`}
+                              className="rounded border border-success/40 bg-success/10 px-2 py-1"
+                            >
+                              {entry}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded border border-border/70 bg-surface2/50 px-2 py-1">
+                            {t(
+                              "playground:imageGeneration.refineNoAdded",
+                              "No added segments"
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-medium text-danger">
+                        {t("playground:imageGeneration.refineRemoved", "Removed")}
+                      </div>
+                      <div className="space-y-1 text-[11px] text-text-muted">
+                        {imagePromptRefineDiff.removedHighlights.length > 0 ? (
+                          imagePromptRefineDiff.removedHighlights.map(
+                            (entry, index) => (
+                              <div
+                                key={`image-refine-removed-${index}`}
+                                className="rounded border border-danger/40 bg-danger/10 px-2 py-1"
+                              >
+                                {entry}
+                              </div>
+                            )
+                          )
+                        ) : (
+                          <div className="rounded border border-border/70 bg-surface2/50 px-2 py-1">
+                            {t(
+                              "playground:imageGeneration.refineNoRemoved",
+                              "No removed segments"
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <Button onClick={rejectRefinedImagePromptCandidate}>
+                    {t(
+                      "playground:imageGeneration.refineKeepOriginal",
+                      "Keep original"
+                    )}
+                  </Button>
+                  <Button
+                    type="primary"
+                    onClick={applyRefinedImagePromptCandidate}
+                    data-testid="image-refine-accept"
+                  >
+                    {t(
+                      "playground:imageGeneration.refineAccept",
+                      "Apply refined prompt"
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.formatLabel", "Format")}
+              </label>
+              <Select
+                value={imageGenerateFormat}
+                options={[
+                  { value: "png", label: "PNG" },
+                  { value: "jpg", label: "JPG" },
+                  { value: "webp", label: "WEBP" }
+                ]}
+                onChange={(value) =>
+                  setImageGenerateFormat(value as "png" | "jpg" | "webp")
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.widthLabel", "Width")}
+              </label>
+              <InputNumber
+                value={imageGenerateWidth}
+                min={64}
+                step={64}
+                style={{ width: "100%" }}
+                onChange={(value) =>
+                  setImageGenerateWidth(
+                    typeof value === "number" && Number.isFinite(value)
+                      ? value
+                      : undefined
+                  )
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.heightLabel", "Height")}
+              </label>
+              <InputNumber
+                value={imageGenerateHeight}
+                min={64}
+                step={64}
+                style={{ width: "100%" }}
+                onChange={(value) =>
+                  setImageGenerateHeight(
+                    typeof value === "number" && Number.isFinite(value)
+                      ? value
+                      : undefined
+                  )
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.stepsLabel", "Steps")}
+              </label>
+              <InputNumber
+                value={imageGenerateSteps}
+                min={1}
+                style={{ width: "100%" }}
+                onChange={(value) =>
+                  setImageGenerateSteps(
+                    typeof value === "number" && Number.isFinite(value)
+                      ? value
+                      : undefined
+                  )
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.cfgScaleLabel", "CFG scale")}
+              </label>
+              <InputNumber
+                value={imageGenerateCfgScale}
+                min={0}
+                step={0.5}
+                style={{ width: "100%" }}
+                onChange={(value) =>
+                  setImageGenerateCfgScale(
+                    typeof value === "number" && Number.isFinite(value)
+                      ? value
+                      : undefined
+                  )
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.seedLabel", "Seed")}
+              </label>
+              <InputNumber
+                value={imageGenerateSeed}
+                style={{ width: "100%" }}
+                onChange={(value) =>
+                  setImageGenerateSeed(
+                    typeof value === "number" && Number.isFinite(value)
+                      ? value
+                      : undefined
+                  )
+                }
+                disabled={imageGenerateBusy}
+              />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.samplerLabel", "Sampler")}
+              </label>
+              <Input
+                value={imageGenerateSampler}
+                onChange={(event) => setImageGenerateSampler(event.target.value)}
+                disabled={imageGenerateBusy}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-muted">
+                {t("playground:imageGeneration.modelLabel", "Image model")}
+              </label>
+              <Input
+                value={imageGenerateModel}
+                onChange={(event) => setImageGenerateModel(event.target.value)}
+                disabled={imageGenerateBusy}
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-text-muted">
+              {t(
+                "playground:imageGeneration.negativePromptLabel",
+                "Negative prompt"
+              )}
+            </label>
+            <Input.TextArea
+              value={imageGenerateNegativePrompt}
+              onChange={(event) =>
+                setImageGenerateNegativePrompt(event.target.value)
+              }
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              disabled={imageGenerateBusy}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-text-muted">
+              {t(
+                "playground:imageGeneration.extraParamsLabel",
+                "Extra params (JSON object)"
+              )}
+            </label>
+            <Input.TextArea
+              value={imageGenerateExtraParams}
+              onChange={(event) => setImageGenerateExtraParams(event.target.value)}
+              autoSize={{ minRows: 3, maxRows: 6 }}
+              disabled={imageGenerateBusy}
+              placeholder='{"tiling": false}'
+            />
+          </div>
+        </div>
+      </Modal>
       <Modal
         open={rawRequestModalOpen}
         onCancel={() => setRawRequestModalOpen(false)}
@@ -7173,6 +8712,15 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                 {Math.round(nonMessageContextPercent)}%
               </p>
             )}
+            <p>
+              {t("playground:tokens.truncationRisk", "Projected truncation risk")}:{" "}
+              {tokenBudgetRiskLabel}
+              {tokenBudgetRisk.overflowTokens > 0
+                ? ` (${t("playground:tokens.overflowTokens", "{{count}} tokens over", {
+                    count: tokenBudgetRisk.overflowTokens
+                  } as any)})`
+                : ""}
+            </p>
             {isContextWindowOverrideClamped && (
               <p className="text-warn">
                 {t(
@@ -7191,10 +8739,27 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             onClearPromptContext={clearPromptContext}
             onClearPinnedSourceContext={clearPinnedSourceContext}
             onClearHistoryContext={clearHistoryContext}
+            onCreateSummaryCheckpoint={insertSummaryCheckpointPrompt}
             onReviewCharacterContext={() => setOpenActorSettings(true)}
             onTrimLargestContextContributor={trimLargestContextContributor}
           />
         </div>
+      </Modal>
+      <Modal
+        title={t("playground:insights.modalTitle", "Session insights")}
+        open={sessionInsightsOpen}
+        onCancel={() => setSessionInsightsOpen(false)}
+        destroyOnHidden
+        width={760}
+        footer={
+          <div className="flex justify-end">
+            <Button onClick={() => setSessionInsightsOpen(false)}>
+              {t("common:close", "Close")}
+            </Button>
+          </div>
+        }
+      >
+        <SessionInsightsPanel t={t} insights={sessionInsights} />
       </Modal>
       <Modal
         open={mcpSettingsOpen}

@@ -52,6 +52,10 @@ const smartScrollState = vi.hoisted(() => ({
   }
 }))
 
+const mobileViewportState = vi.hoisted(() => ({
+  value: false
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, defaultValue?: string, options?: Record<string, unknown>) => {
@@ -153,7 +157,7 @@ vi.mock("@plasmohq/storage/hook", () => ({
 }))
 
 vi.mock("@/hooks/useMediaQuery", () => ({
-  useMobile: () => false
+  useMobile: () => mobileViewportState.value
 }))
 
 vi.mock("@/hooks/useLoadLocalConversation", () => ({
@@ -171,6 +175,8 @@ vi.mock("@/hooks/useCharacterGreeting", () => ({
 describe("Playground thread search integration", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mobileViewportState.value = false
+    artifactsState.value.isOpen = false
   })
 
   it("opens in-thread search on Cmd/Ctrl+F and forwards query to PlaygroundChat", () => {
@@ -217,6 +223,29 @@ describe("Playground thread search integration", () => {
       expect(
         screen.getByTestId("playground-shortcuts-help-panel")
       ).toBeInTheDocument()
+    })
+  })
+
+  it("shows mobile artifacts sheet context and returns focus to trigger when closing", async () => {
+    mobileViewportState.value = true
+    artifactsState.value.isOpen = true
+
+    render(<Playground />)
+
+    expect(
+      screen.getByTestId("playground-mobile-artifacts-sheet")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTestId("playground-mobile-artifacts-title")
+    ).toHaveTextContent("Artifacts panel")
+
+    fireEvent.click(screen.getByTestId("playground-mobile-artifacts-return"))
+    expect(artifactsState.value.closeArtifact).toHaveBeenCalledTimes(1)
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByTestId("playground-artifacts-trigger")
+      )
     })
   })
 })

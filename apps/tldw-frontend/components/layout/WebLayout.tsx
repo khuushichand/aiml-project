@@ -120,14 +120,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     useState<BackendUnreachableDetail | null>(null)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
-  const isMediaRoute = location.pathname === "/media"
   const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
   const isWorkspacePlayground = location.pathname === WORKSPACE_PLAYGROUND_PATH
   const isMediaMultiRoute = location.pathname === "/media-multi"
   const isViewportConstrainedRoute =
     isDocumentWorkspace ||
     isWorkspacePlayground ||
-    isMediaRoute ||
     isMediaMultiRoute
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage

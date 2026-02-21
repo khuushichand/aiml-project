@@ -182,12 +182,12 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.queryByText("How do I add my first source?")).not.toBeInTheDocument()
   })
 
-  it("opens settings from ready-state source action", () => {
+  it("opens source selector from ready-state source action", () => {
     renderKnowledgeQa()
 
     fireEvent.click(screen.getByRole("button", { name: "No sources selected" }))
 
-    expect(state.setSettingsPanelOpen).toHaveBeenCalledWith(true)
+    expect(screen.getByRole("menu", { name: "Source selector" })).toBeInTheDocument()
   })
 
   it("restores the newest restorable knowledge session from ready-state", () => {

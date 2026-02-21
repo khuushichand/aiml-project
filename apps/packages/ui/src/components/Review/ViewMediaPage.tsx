@@ -10,7 +10,7 @@ import {
   Download,
   Tags,
   Trash2,
-  X
+  X,
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Storage } from '@plasmohq/storage'
@@ -136,7 +136,8 @@ const MEDIA_RESULTS_FOOTER_PX = 98
 const MEDIA_RESULTS_CONTENT_HEIGHT_STEP_PX = 120
 const MEDIA_RESULTS_CONTENT_CHARS_STEP = 1_300
 const MEDIA_SIDEBAR_CHROME_BUFFER_PX = 420
-const MEDIA_SIDEBAR_MIN_HEIGHT_PX = 900
+const MEDIA_SIDEBAR_MIN_HEIGHT_PX = 960
+const MEDIA_SIDEBAR_END_BUFFER_PX = 15
 
 type MediaCollectionRecord = {
   id: string
@@ -471,7 +472,7 @@ const MediaPageContent: React.FC = () => {
     'url' | 'setting' | null
   >(null)
   const [searchCollapsed, setSearchCollapsed] = useState(false)
-  const [jumpToCollapsed, setJumpToCollapsed] = useState(false)
+  const [jumpToCollapsed, setJumpToCollapsed] = useState(true)
   const [page, setPage] = useState<number>(1)
   const [pageSize, setPageSize] = useState<number>(20)
   const [mediaTotal, setMediaTotal] = useState<number>(0)
@@ -1172,7 +1173,10 @@ const MediaPageContent: React.FC = () => {
       dateEnd: dateRange.endDate,
       searchMode: searchMode,
       exactPhrase: exactPhrase || undefined,
-      fields: searchFields.length > 0 ? searchFields : undefined,
+      fields:
+        searchFields.length > 0 && !hasDefaultMediaSearchFields(searchFields)
+          ? searchFields
+          : undefined,
       page: page,
       pageSize: pageSize
     })
@@ -1795,15 +1799,16 @@ const MediaPageContent: React.FC = () => {
     resultsViewMode === 'compact'
       ? MEDIA_RESULTS_ROW_HEIGHT_COMPACT_PX
       : MEDIA_RESULTS_ROW_HEIGHT_STANDARD_PX
-  const sidebarResultsListMinHeightPx =
+  const computedSidebarResultsListMinHeightPx =
     MEDIA_RESULTS_HEADER_PX + sidebarTargetVisibleRows * sidebarResultsRowHeightPx
-  const sidebarResultsPanelMinHeightPx =
-    sidebarResultsListMinHeightPx + MEDIA_RESULTS_FOOTER_PX
+  const computedSidebarResultsPanelMinHeightPx =
+    computedSidebarResultsListMinHeightPx + MEDIA_RESULTS_FOOTER_PX
+  const sidebarResultsListMinHeightPx = computedSidebarResultsListMinHeightPx
+  const sidebarResultsPanelMinHeightPx = computedSidebarResultsPanelMinHeightPx
   const mediaPageMinHeightPx = Math.max(
     MEDIA_SIDEBAR_MIN_HEIGHT_PX,
     MEDIA_SIDEBAR_CHROME_BUFFER_PX + sidebarResultsPanelMinHeightPx
   )
-
   // Fetch reading progress for visible media items
   useEffect(() => {
     const mediaIds = displayResults
@@ -3249,7 +3254,15 @@ const MediaPageContent: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [hasNext, hasPrevious, page, totalPages, results, searchCollapsed, selectedIndex])
+  }, [
+    hasNext,
+    hasPrevious,
+    page,
+    totalPages,
+    results,
+    searchCollapsed,
+    selectedIndex,
+  ])
 
   const handleChatWithMedia = useCallback(() => {
     if (!selected) return
@@ -3424,7 +3437,7 @@ const MediaPageContent: React.FC = () => {
 
   return (
     <div
-      className="flex h-full min-h-0 bg-bg"
+      className="relative flex min-h-full bg-bg"
       style={{ minHeight: `${mediaPageMinHeightPx}px` }}
     >
       {/* Left Sidebar */}
@@ -3433,11 +3446,12 @@ const MediaPageContent: React.FC = () => {
           sidebarCollapsedValue ? 'w-0' : 'w-full md:w-[22rem] lg:w-[25rem]'
         }`}
         style={{
-          overflow: 'hidden'
+          overflowX: 'hidden',
+          overflowY: 'auto'
         }}
       >
         <div
-          className="flex h-full min-h-0 flex-col overflow-hidden bg-surface"
+          className="flex min-h-full flex-col bg-surface"
           hidden={sidebarCollapsedValue}
           aria-hidden={sidebarCollapsedValue}
         >
@@ -3532,26 +3546,40 @@ const MediaPageContent: React.FC = () => {
             </div>
           </div>
 
+          {/* Controls: Find Media + Jump To + Bulk Toolbar */}
+          <div
+            className="min-h-0 shrink overflow-y-auto border-b border-border/80"
+          >
+
           {/* Find Media */}
-          <div className="min-h-0 shrink border-b border-border/80 bg-surface px-4 py-3.5 space-y-3 overflow-hidden">
+          <div className="bg-surface px-4 py-3.5 space-y-3 border-b border-border/40">
             <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setSearchCollapsed((prev) => !prev)}
-                className="flex w-full items-center justify-between rounded-md px-1 py-1 text-sm font-medium text-text hover:bg-surface2/60"
-                aria-expanded={!searchCollapsed}
-                aria-controls="media-search-panel"
-              >
-                <span>{t('review:mediaPage.findMedia', { defaultValue: 'Find media' })}</span>
+              <span className="px-1 py-1 text-sm font-medium text-text">
+                {t('review:mediaPage.findMedia', { defaultValue: 'Find media' })}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSearchCollapsed((prev) => !prev)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-surface2 hover:text-text"
+                  aria-expanded={!searchCollapsed}
+                  aria-controls="media-search-panel"
+                  aria-label={
+                    searchCollapsed
+                      ? t('review:mediaPage.expandFindMediaPanel', { defaultValue: 'Expand find media panel' })
+                      : t('review:mediaPage.collapseFindMediaPanel', { defaultValue: 'Collapse find media panel' })
+                  }
+                >
                 <ChevronDown
                   className={`w-4 h-4 transition-transform ${searchCollapsed ? '' : 'rotate-180'}`}
                 />
-              </button>
+                </button>
+              </div>
             </div>
             {!searchCollapsed && (
               <div
                 id="media-search-panel"
-                className="max-h-[30dvh] space-y-2.5 overflow-y-auto pr-1 md:max-h-[34dvh]"
+                className="space-y-2.5 pb-1 pr-1"
                 onKeyDown={handleKeyPress}
               >
                 <SearchBar
@@ -3736,51 +3764,9 @@ const MediaPageContent: React.FC = () => {
             )}
           </div>
 
-          {/* Results Section */}
-          <div className="min-h-0 shrink border-b border-border/80 bg-surface px-4 py-3 space-y-2 overflow-hidden">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
-              {t('review:mediaPage.results', { defaultValue: 'Results' })}
-            </div>
-
-            {/* Jump To Navigator */}
-            {hasJumpTo && (
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => setJumpToCollapsed((prev) => !prev)}
-                  className="flex w-full items-center justify-between rounded-md px-1 py-1 text-sm font-medium text-text hover:bg-surface2/60"
-                  aria-expanded={!jumpToCollapsed}
-                  aria-controls="media-jump-panel"
-                >
-                  <span>{t('review:mediaPage.jumpTo', { defaultValue: 'Jump to' })}</span>
-                <ChevronDown
-                  className={`w-4 h-4 transition-transform ${jumpToCollapsed ? '' : 'rotate-180'}`}
-                />
-              </button>
-                {!jumpToCollapsed && (
-                  <div
-                    id="media-jump-panel"
-                    className="mt-2 max-h-[18dvh] overflow-y-auto pr-1 md:max-h-[22dvh]"
-                  >
-                    <JumpToNavigator
-                      results={displayResults.map((r) => ({ id: r.id, title: r.title }))}
-                      selectedId={selected?.id || null}
-                      onSelect={(id) => {
-                        const item = displayResults.find((r) => r.id === id)
-                        if (item) setSelected(item)
-                      }}
-                      maxButtons={12}
-                      showLabel={false}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           {bulkSelectionMode && (
             <div
-              className="shrink-0 max-h-[24dvh] overflow-y-auto border-b border-border bg-surface2 px-4 py-3 space-y-2.5"
+              className="border-b border-border bg-surface2 px-4 py-3 space-y-2.5"
               data-testid="media-bulk-toolbar"
             >
               <div className="flex items-center justify-between gap-2">
@@ -3923,14 +3909,23 @@ const MediaPageContent: React.FC = () => {
             </div>
           )}
 
+          </div>
+          {/* end Controls wrapper */}
+
           {/* Results + pagination flow */}
           <div
-            className="flex min-h-[12rem] flex-1 flex-col bg-surface md:min-h-[14rem]"
-            style={{ minHeight: `${sidebarResultsPanelMinHeightPx}px` }}
+            className="flex min-h-0 flex-1 flex-col bg-surface"
+            data-sidebar-target-min-height={sidebarResultsPanelMinHeightPx}
+            style={{
+              minHeight: `${sidebarResultsPanelMinHeightPx}px`
+            }}
           >
             <div
               className="min-h-0 flex-1 overflow-y-auto"
-              style={{ minHeight: `${sidebarResultsListMinHeightPx}px` }}
+              data-sidebar-target-list-height={sidebarResultsListMinHeightPx}
+              style={{
+                minHeight: `${sidebarResultsListMinHeightPx}px`
+              }}
             >
               <ResultsList
                 results={displayResults}
@@ -4005,6 +4000,40 @@ const MediaPageContent: React.FC = () => {
             </div>
           </div>
 
+          {hasJumpTo && (
+            <div className="shrink-0 border-t border-border bg-surface px-4 py-2.5">
+              <button
+                type="button"
+                onClick={() => setJumpToCollapsed((prev) => !prev)}
+                className="flex w-full items-center justify-between rounded-md px-1 py-1 text-sm font-medium text-text hover:bg-surface2/60"
+                aria-expanded={!jumpToCollapsed}
+                aria-controls="media-jump-bottom-panel"
+              >
+                <span>{t('review:mediaPage.jumpTo', { defaultValue: 'Jump to' })}</span>
+                <ChevronDown
+                  className={`w-4 h-4 transition-transform ${jumpToCollapsed ? '' : 'rotate-180'}`}
+                />
+              </button>
+              {!jumpToCollapsed && (
+                <div
+                  id="media-jump-bottom-panel"
+                  className="mt-2 overflow-y-auto pr-1"
+                >
+                  <JumpToNavigator
+                    results={displayResults.map((r) => ({ id: r.id, title: r.title }))}
+                    selectedId={selected?.id || null}
+                    onSelect={(id) => {
+                      const item = displayResults.find((r) => r.id === id)
+                      if (item) setSelected(item)
+                    }}
+                    maxButtons={12}
+                    showLabel={false}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           <div
             className="shrink-0 border-t border-border bg-surface"
             data-testid="media-sidebar-bottom-utilities"
@@ -4038,13 +4067,19 @@ const MediaPageContent: React.FC = () => {
               </div>
             )}
           </div>
+          <div
+            className="shrink-0 border-t border-border/50 bg-surface2/40"
+            style={{ height: `${MEDIA_SIDEBAR_END_BUFFER_PX}px` }}
+            aria-hidden="true"
+            data-testid="media-sidebar-end-buffer"
+          />
         </div>
       </div>
 
       {/* Collapse Button */}
       <button
         onClick={() => setSidebarCollapsed(!sidebarCollapsedValue)}
-        className="relative w-6 bg-surface border-r border-border hover:bg-surface2 flex items-center justify-center group transition-colors"
+        className="relative w-6 self-stretch bg-surface border-r border-border hover:bg-surface2 flex items-center justify-center group transition-colors"
         aria-label={sidebarCollapsedValue ? 'Expand sidebar' : 'Collapse sidebar'}
       >
         <div className="flex items-center justify-center w-full h-full">

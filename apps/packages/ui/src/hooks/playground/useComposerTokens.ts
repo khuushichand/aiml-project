@@ -1,6 +1,7 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { tldwChat, type ChatMessage } from "@/services/tldw"
+import { isImageGenerationMessageType } from "@/utils/image-generation-chat"
 
 export type UseComposerTokensParams = {
   message: string
@@ -54,6 +55,9 @@ export function useComposerTokens({
       convoMessages.push({ role: "system", content: trimmedSystem })
     }
     messages.forEach((msg: any) => {
+      if (isImageGenerationMessageType(msg?.messageType)) {
+        return
+      }
       const content = typeof msg.message === "string" ? msg.message.trim() : ""
       if (!content) return
       if (msg.isBot) {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 
 from fastapi import (
     APIRouter,
@@ -303,14 +304,63 @@ def process_videos(*args, **kwargs):
     impl = _load_process_videos_core()
     if impl is None:
         raise RuntimeError("Video processing backend is unavailable")
-    return impl(*args, **kwargs)
+    return _invoke_core_with_supported_kwargs(impl, *args, **kwargs)
 
 
 def process_audio_files(*args, **kwargs):
     impl = _load_process_audio_files_core()
     if impl is None:
         raise RuntimeError("Audio processing backend is unavailable")
-    return impl(*args, **kwargs)
+    return _invoke_core_with_supported_kwargs(impl, *args, **kwargs)
+
+
+def _invoke_core_with_supported_kwargs(impl, *args, **kwargs):
+    """
+    Forward only kwargs accepted by the current core callable.
+
+    The endpoint-level shims intentionally keep permissive `*args, **kwargs`
+    signatures for test/legacy patch points. When callers send compatibility
+    kwargs that the current core callable does not support (for example
+    `chunk_options`), filter those keys here instead of raising `TypeError`.
+    """
+    if not kwargs:
+        return impl(*args, **kwargs)
+
+    try:
+        signature = inspect.signature(impl)
+    except (TypeError, ValueError):
+        return impl(*args, **kwargs)
+
+    parameters = signature.parameters
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return impl(*args, **kwargs)
+
+    supported_keyword_names = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    }
+    dropped_keywords = sorted(set(kwargs) - supported_keyword_names)
+    if dropped_keywords:
+        logger.debug(
+            "Dropping unsupported kwargs for {}: {}",
+            getattr(impl, "__name__", repr(impl)),
+            dropped_keywords,
+        )
+
+    filtered_kwargs = {
+        key: value
+        for key, value in kwargs.items()
+        if key in supported_keyword_names
+    }
+    return impl(*args, **filtered_kwargs)
 
 
 __all__ = [

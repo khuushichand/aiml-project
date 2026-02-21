@@ -27,6 +27,12 @@ import type {
   MessageSteeringFlags,
   MessageSteeringPromptTemplates
 } from "@/types/message-steering"
+import {
+  IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+  IMAGE_GENERATION_USER_MESSAGE_TYPE,
+  normalizeImageGenerationVariantBundle,
+  type ImageGenerationEventSyncPolicy
+} from "@/utils/image-generation-chat"
 
 const STREAMING_UPDATE_INTERVAL_MS = 80
 let didLogPipelineSetHistoryMissing = false
@@ -58,6 +64,7 @@ export type ChatModeParamsBase = {
   regenerateFromMessage?: Message
   messageSteering?: MessageSteeringFlags
   messageSteeringPrompts?: MessageSteeringPromptTemplates
+  imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
 }
 
 export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
@@ -96,6 +103,7 @@ export type ChatModePreflightResult = {
   promptContent?: string
   saveToDb?: boolean
   conversationId?: string
+  skipHistoryAppend?: boolean
 }
 
 export type ChatModeMessageSetup = {
@@ -158,7 +166,8 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     userParentMessageId,
     assistantParentMessageId,
     documents,
-    regenerateFromMessage
+    regenerateFromMessage,
+    imageEventSyncPolicy
   } = params
 
   const resolvedAssistantMessageId = assistantMessageId ?? generateID()
@@ -169,6 +178,9 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
   const modelInfo = await getModelNicknameByID(selectedModel)
 
   const isSharedCompareUser = userMessageType === "compare:user"
+  const isImageGenerationTurn =
+    userMessageType === IMAGE_GENERATION_USER_MESSAGE_TYPE ||
+    assistantMessageType === IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
   const resolvedModelId = modelIdOverride || selectedModel
   const userModelId = isSharedCompareUser ? undefined : resolvedModelId
   const fallbackParentMessageId = getLastUserMessageId(messages)
@@ -233,6 +245,55 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
         setHistoryType: typeof setHistory
       })
     }
+  }
+
+  const normalizeImageVariantsForMessage = (messageEntry: Message): Message => {
+    if (!isImageGenerationTurn) {
+      return messageEntry
+    }
+
+    const variants = Array.isArray(messageEntry.variants)
+      ? (messageEntry.variants as MessageVariant[])
+      : []
+    const normalized = normalizeImageGenerationVariantBundle({
+      messageId: messageEntry.id,
+      messageGenerationInfo: messageEntry.generationInfo,
+      variants,
+      activeVariantIndex:
+        typeof messageEntry.activeVariantIndex === "number"
+          ? messageEntry.activeVariantIndex
+          : undefined,
+      fallbackCreatedAt: createdAt,
+      hasVisibleVariant:
+        variants.length > 0 ||
+        (Array.isArray(messageEntry.images) && messageEntry.images.length > 0)
+    })
+
+    if (variants.length === 0) {
+      return {
+        ...messageEntry,
+        generationInfo: normalized.generationInfo ?? messageEntry.generationInfo
+      }
+    }
+
+    const activeVariant = normalized.variants[
+      normalized.activeVariantIndex
+    ] as MessageVariant | undefined
+    const withNormalizedVariants: Message = {
+      ...messageEntry,
+      variants: normalized.variants as MessageVariant[],
+      activeVariantIndex: normalized.activeVariantIndex,
+      generationInfo: normalized.generationInfo ?? messageEntry.generationInfo
+    }
+    if (!activeVariant) {
+      return withNormalizedVariants
+    }
+
+    return applyVariantToMessage(
+      withNormalizedVariants,
+      activeVariant,
+      normalized.activeVariantIndex
+    )
   }
 
   const flushStreamingUpdate = () => {
@@ -301,11 +362,11 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
             ...regenerateVariants,
             buildMessageVariant(stub)
           ]
-          next[lastIndex] = {
+          next[lastIndex] = normalizeImageVariantsForMessage({
             ...stub,
             variants,
             activeVariantIndex: variants.length - 1
-          }
+          })
         }
         return next
       })
@@ -322,23 +383,52 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       applyMcpModuleDisclosureFromToolCalls(toolCalls)
       const nextHistory = mode.updateHistory
         ? mode.updateHistory(context, fullText)
+        : preflight.skipHistoryAppend
+          ? history
         : ([
             ...history,
             { role: "user", content: message, image },
             { role: "assistant", content: fullText }
           ] as ChatHistory)
+      const preflightGenerationInfoForSave = (() => {
+        if (!isImageGenerationTurn) {
+          return preflight.generationInfo
+        }
+
+        const normalizedBundle = normalizeImageGenerationVariantBundle({
+          messageId: resolvedAssistantMessageId,
+          messageGenerationInfo: preflight.generationInfo,
+          variants:
+            regenerateVariants.length > 0
+              ? [
+                  ...regenerateVariants,
+                  {
+                    id: resolvedAssistantMessageId,
+                    generationInfo: preflight.generationInfo
+                  }
+                ]
+              : [],
+          activeVariantIndex:
+            regenerateVariants.length > 0 ? regenerateVariants.length : 0,
+          fallbackCreatedAt: createdAt,
+          hasVisibleVariant: images.length > 0
+        })
+        return normalizedBundle.generationInfo ?? preflight.generationInfo
+      })()
 
       setMessagesWithTransition((prev) =>
         prev.map((msg) =>
           msg.id === generateMessageId
-            ? updateActiveVariant(msg, {
-                message: fullText,
-                sources,
-                images,
-                generationInfo: preflight.generationInfo,
-                toolCalls,
-                reasoning_time_taken: timetaken
-              })
+            ? normalizeImageVariantsForMessage(
+                updateActiveVariant(msg, {
+                  message: fullText,
+                  sources,
+                  images,
+                  generationInfo: preflightGenerationInfoForSave,
+                  toolCalls,
+                  reasoning_time_taken: timetaken
+                })
+              )
             : msg
         )
       )
@@ -365,12 +455,13 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
         assistantParentMessageId: resolvedAssistantParentMessageId ?? null,
         documents,
         isContinue: mode.isContinue,
-        generationInfo: preflight.generationInfo as any,
+        generationInfo: preflightGenerationInfoForSave as any,
         prompt_content: preflight.promptContent,
         prompt_id: preflight.promptId,
         reasoning_time_taken: timetaken,
         saveToDb: preflight.saveToDb ?? false,
-        conversationId: preflight.conversationId
+        conversationId: preflight.conversationId,
+        imageEventSyncPolicy
       })
 
       setIsProcessing(false)
@@ -465,13 +556,15 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     setMessagesWithTransition((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId
-          ? updateActiveVariant(msg, {
-              message: fullText,
-              sources,
-              generationInfo,
-              toolCalls,
-              reasoning_time_taken: timetaken
-            })
+          ? normalizeImageVariantsForMessage(
+              updateActiveVariant(msg, {
+                message: fullText,
+                sources,
+                generationInfo,
+                toolCalls,
+                reasoning_time_taken: timetaken
+              })
+            )
           : msg
       )
     )
@@ -511,7 +604,8 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       prompt_id: promptId,
       reasoning_time_taken: timetaken,
       saveToDb: Boolean(modelClient.saveToDb),
-      conversationId: modelClient.conversationId
+      conversationId: modelClient.conversationId,
+      imageEventSyncPolicy
     })
 
     setIsProcessing(false)
@@ -526,15 +620,17 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     setMessagesWithTransition((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId
-          ? updateActiveVariant(msg, {
-              message: assistantContent,
-              generationInfo: {
-                ...(msg.generationInfo || {}),
-                interrupted: true,
-                interruptionReason,
-                interruptedAt: Date.now()
-              }
-            })
+          ? normalizeImageVariantsForMessage(
+              updateActiveVariant(msg, {
+                message: assistantContent,
+                generationInfo: {
+                  ...(msg.generationInfo || {}),
+                  interrupted: true,
+                  interruptionReason,
+                  interruptedAt: Date.now()
+                }
+              })
+            )
           : msg
       )
     )

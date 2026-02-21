@@ -76,6 +76,7 @@ interface ResultsListProps {
   readingProgress?: Map<string, number>
   viewMode?: ResultsViewMode
   onViewModeChange?: (mode: ResultsViewMode) => void
+  stickyHeader?: boolean
 }
 
 export function ResultsList({
@@ -97,7 +98,8 @@ export function ResultsList({
   onToggleSelected,
   readingProgress,
   viewMode = 'standard',
-  onViewModeChange
+  onViewModeChange,
+  stickyHeader = true
 }: ResultsListProps) {
   const { t } = useTranslation(['review'])
   const hasSearchQuery = searchQuery.trim().length > 0
@@ -215,7 +217,13 @@ export function ResultsList({
   return (
     <div>
       {/* Results Header */}
-      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface2/70 px-4 py-2.5 backdrop-blur-[1px]">
+      <div
+        className={`flex items-center justify-between border-b border-border px-4 py-2.5 ${
+          stickyHeader
+            ? 'sticky top-0 z-10 bg-surface2/70 backdrop-blur-[1px]'
+            : 'bg-surface'
+        }`}
+      >
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
             {t('mediaPage.results', 'Results')}

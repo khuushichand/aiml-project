@@ -20,6 +20,7 @@ import {
   runChatPipeline,
   type ChatModeDefinition
 } from "./chatModePipeline"
+import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 interface RagDocumentMetadata {
   filename?: string
@@ -60,6 +61,7 @@ type DocumentChatModeParams = {
   setHistoryId: (id: string) => void
   fileRetrievalEnabled: boolean
   setActionInfo: (actionInfo: string | null) => void
+  systemPromptAppendix?: string
   actorSettings?: ActorSettings
   clusterId?: string
   userMessageType?: string
@@ -115,6 +117,10 @@ const documentChatModeDefinition: ChatModeDefinition<DocumentChatModeParams> = {
     let query = ctx.message
     const { ragPrompt: systemPrompt, ragQuestionPrompt: questionPrompt } =
       await promptForRag()
+    const resolvedSystemPrompt = appendSystemPromptSuffix(
+      systemPrompt,
+      ctx.systemPromptAppendix
+    )
     const contextMessages = ctx.isRegenerate
       ? ctx.messages
       : [
@@ -242,7 +248,7 @@ const documentChatModeDefinition: ChatModeDefinition<DocumentChatModeParams> = {
     const humanMessage = await humanMessageFormatter({
       content: [
         {
-          text: systemPrompt
+          text: resolvedSystemPrompt
             .replace("{context}", context)
             .replace("{question}", ctx.message),
           type: "text"

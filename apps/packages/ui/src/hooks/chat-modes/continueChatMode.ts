@@ -11,6 +11,7 @@ import {
   runChatPipeline,
   type ChatModeDefinition
 } from "./chatModePipeline"
+import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 type ContinueChatModeParams = {
   selectedModel: string
@@ -28,6 +29,7 @@ type ContinueChatModeParams = {
   historyId: string | null
   setHistoryId: (id: string) => void
   actorSettings?: ActorSettings
+  systemPromptAppendix?: string
   assistantMessageId?: string
   assistantParentMessageId?: string | null
 }
@@ -67,13 +69,18 @@ const continueChatModeDefinition: ChatModeDefinition<ContinueChatModeParams> = {
       ctx.history,
       ctx.selectedModel
     )
+    const resolvePromptWithAppendix = (content?: string | null) =>
+      appendSystemPromptSuffix(content || "", ctx.systemPromptAppendix)
 
-    if (prompt && !selectedPrompt) {
-      applicationChatHistory.unshift(
-        await systemPromptFormatter({
-          content: prompt
-        })
-      )
+    if (!selectedPrompt) {
+      const resolvedDefaultPrompt = resolvePromptWithAppendix(prompt)
+      if (resolvedDefaultPrompt) {
+        applicationChatHistory.unshift(
+          await systemPromptFormatter({
+            content: resolvedDefaultPrompt
+          })
+        )
+      }
     }
 
     const isTempSystemprompt =
@@ -83,21 +90,26 @@ const continueChatModeDefinition: ChatModeDefinition<ContinueChatModeParams> = {
     if (!isTempSystemprompt && selectedPrompt) {
       const selectedPromptContent =
         selectedPrompt.system_prompt ?? selectedPrompt.content
+      const resolvedSelectedPrompt =
+        resolvePromptWithAppendix(selectedPromptContent)
       applicationChatHistory.unshift(
         await systemPromptFormatter({
-          content: selectedPromptContent
+          content: resolvedSelectedPrompt
         })
       )
-      promptContent = selectedPromptContent
+      promptContent = resolvedSelectedPrompt
     }
 
     if (isTempSystemprompt) {
+      const resolvedTemporaryPrompt = resolvePromptWithAppendix(
+        ctx.currentChatModelSettings.systemPrompt
+      )
       applicationChatHistory.unshift(
         await systemPromptFormatter({
-          content: ctx.currentChatModelSettings.systemPrompt
+          content: resolvedTemporaryPrompt
         })
       )
-      promptContent = ctx.currentChatModelSettings.systemPrompt
+      promptContent = resolvedTemporaryPrompt
     }
 
     const templatesActive = !!ctx.selectedSystemPrompt

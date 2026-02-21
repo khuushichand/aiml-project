@@ -548,6 +548,12 @@ export const Playground = () => {
     : activeArtifact
       ? t("playground:regions.artifactsAvailable", "Artifacts ready")
       : t("playground:regions.artifactsClosed", "Artifacts panel closed")
+  const closeArtifactsWithFocusReturn = React.useCallback(() => {
+    closeArtifacts()
+    requestAnimationFrame(() => {
+      artifactsTriggerRef.current?.focus()
+    })
+  }, [closeArtifacts])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -1056,13 +1062,47 @@ export const Playground = () => {
             <div className="lg:hidden">
               <button
                 type="button"
-                aria-label={t("common:close", "Close")}
-                title={t("common:close", "Close") as string}
-                onClick={closeArtifacts}
+                aria-label={
+                  t(
+                    "playground:regions.closeArtifactsDrawer",
+                    "Close artifacts drawer"
+                  ) as string
+                }
+                title={
+                  t(
+                    "playground:regions.closeArtifactsDrawer",
+                    "Close artifacts drawer"
+                  ) as string
+                }
+                onClick={closeArtifactsWithFocusReturn}
                 className="fixed inset-0 z-40 bg-black/40"
               />
-              <div className="fixed inset-y-0 right-0 z-50 w-full max-w-[520px]">
-                <ArtifactsPanel />
+              <div
+                data-testid="playground-mobile-artifacts-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-label={t("playground:regions.artifacts", "Artifacts panel")}
+                className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-border bg-surface"
+              >
+                <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs text-text">
+                  <span
+                    data-testid="playground-mobile-artifacts-title"
+                    className="font-semibold"
+                  >
+                    {t("playground:regions.artifacts", "Artifacts panel")}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="playground-mobile-artifacts-return"
+                    onClick={closeArtifactsWithFocusReturn}
+                    className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] font-medium text-text hover:bg-surface"
+                  >
+                    {t("playground:regions.returnToTimeline", "Back to timeline")}
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <ArtifactsPanel />
+                </div>
               </div>
             </div>
           </>

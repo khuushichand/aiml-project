@@ -91,7 +91,10 @@ def load_safe_config() -> dict:
             'mistral_api_key': 'Mistral',
             'deepseek_api_key': 'DeepSeek',
             'huggingface_api_key': 'HuggingFace',
-            'openrouter_api_key': 'OpenRouter'
+            'openrouter_api_key': 'OpenRouter',
+            'novita_api_key': 'Novita',
+            'poe_api_key': 'Poe',
+            'together_api_key': 'Together',
         }
 
         for key_name, provider_name in provider_keys.items():

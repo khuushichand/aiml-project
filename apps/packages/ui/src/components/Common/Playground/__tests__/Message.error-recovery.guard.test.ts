@@ -21,5 +21,8 @@ describe("PlaygroundMessage error recovery guard", () => {
     expect(source).toContain("tldw:open-model-settings")
     expect(source).toContain("playground:sources.askWithSources")
     expect(source).toContain("pinnedState")
+    expect(source).toContain("message-fallback-audit")
+    expect(source).toContain("playground:routing.policyAuto")
+    expect(source).toContain("playground:routing.attempts")
   })
 })

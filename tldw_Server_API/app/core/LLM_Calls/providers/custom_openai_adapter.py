@@ -26,6 +26,9 @@ http_client_factory = _hc_create_client
 
 class CustomOpenAIAdapter(ChatProvider):
     name = "custom-openai-api"
+    config_section = "custom_openai_api"
+    default_base_url = "http://127.0.0.1:11434/v1"
+    default_base_url_env: tuple[str, ...] = ("CUSTOM_OPENAI_API_IP_1",)
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -85,19 +88,32 @@ class CustomOpenAIAdapter(ChatProvider):
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _resolve_base(self, request: dict[str, Any], cfg_section: str) -> str:
+    def _resolve_base(self, request: dict[str, Any]) -> str:
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip().rstrip("/")
+
         cfg = request.get("app_config") or {}
-        section = cfg.get(cfg_section) or {}
-        base = section.get("api_ip") or os.getenv("CUSTOM_OPENAI_API_IP_1")
-        if cfg_section.endswith("_2"):
-            base = section.get("api_ip") or os.getenv("CUSTOM_OPENAI_API_IP_2") or base
+        section = cfg.get(self.config_section) or {}
+        base = section.get("api_ip") or section.get("api_base_url")
         if not base:
-            # default to local typical value
-            base = "http://127.0.0.1:11434/v1"
+            for env_key in self.default_base_url_env:
+                env_val = os.getenv(env_key)
+                if isinstance(env_val, str) and env_val.strip():
+                    base = env_val.strip()
+                    break
+        if not base:
+            base = self.default_base_url
         return str(base).rstrip("/")
+
+    @staticmethod
+    def _build_chat_completions_url(base: str) -> str:
+        lower = base.lower()
+        if lower.endswith("/v1"):
+            return f"{base}/chat/completions"
+        if lower.endswith("/chat/completions"):
+            return base
+        return f"{base}/v1/chat/completions"
 
     def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
         messages: list[dict[str, Any]] = request.get("messages") or []
@@ -147,15 +163,8 @@ class CustomOpenAIAdapter(ChatProvider):
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
-            base = self._resolve_base(request, "custom_openai_api")
-            # Respect servers that already include /chat/completions
-            lower = base.lower()
-            if lower.endswith("/v1"):
-                url = f"{base}/chat/completions"
-            elif lower.endswith("/chat/completions"):
-                url = base
-            else:
-                url = f"{base}/v1/chat/completions"
+            base = self._resolve_base(request)
+            url = self._build_chat_completions_url(base)
             payload = self._build_payload(request)
             payload["stream"] = False
             payload = merge_extra_body(payload, request)
@@ -174,14 +183,8 @@ class CustomOpenAIAdapter(ChatProvider):
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
-            base = self._resolve_base(request, "custom_openai_api")
-            lower = base.lower()
-            if lower.endswith("/v1"):
-                url = f"{base}/chat/completions"
-            elif lower.endswith("/chat/completions"):
-                url = base
-            else:
-                url = f"{base}/v1/chat/completions"
+            base = self._resolve_base(request)
+            url = self._build_chat_completions_url(base)
             payload = self._build_payload(request)
             payload["stream"] = True
             payload = merge_extra_body(payload, request)
@@ -264,72 +267,26 @@ class CustomOpenAIAdapter(ChatProvider):
 
 class CustomOpenAIAdapter2(CustomOpenAIAdapter):
     name = "custom-openai-api-2"
+    config_section = "custom_openai_api_2"
+    default_base_url_env = ("CUSTOM_OPENAI_API_IP_2", "CUSTOM_OPENAI_API_IP_1")
 
-    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
-        request = validate_payload(self.name, request or {})
-        if self._use_native_http():
-            api_key = request.get("api_key")
-            headers = self._headers(api_key)
-            base = self._resolve_base(request, "custom_openai_api_2")
-            lower = base.lower()
-            if lower.endswith("/v1"):
-                url = f"{base}/chat/completions"
-            elif lower.endswith("/chat/completions"):
-                url = base
-            else:
-                url = f"{base}/v1/chat/completions"
-            payload = self._build_payload(request)
-            payload["stream"] = False
-            payload = merge_extra_body(payload, request)
-            headers = merge_extra_headers(headers, request)
-            try:
-                with http_client_factory(timeout=timeout or 120.0) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    return self._normalize_response(resp.json())
-            except Exception as e:
-                raise self.normalize_error(e) from e
-        raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")
 
-    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
-        request = validate_payload(self.name, request or {})
-        if self._use_native_http():
-            api_key = request.get("api_key")
-            headers = self._headers(api_key)
-            base = self._resolve_base(request, "custom_openai_api_2")
-            lower = base.lower()
-            if lower.endswith("/v1"):
-                url = f"{base}/chat/completions"
-            elif lower.endswith("/chat/completions"):
-                url = base
-            else:
-                url = f"{base}/v1/chat/completions"
-            payload = self._build_payload(request)
-            payload["stream"] = True
-            payload = merge_extra_body(payload, request)
-            headers = merge_extra_headers(headers, request)
-            try:
-                with http_client_factory(timeout=timeout or 120.0) as client:
-                    with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        resp.raise_for_status()
-                        seen_done = False
-                        for raw in resp.iter_lines():
-                            if not raw:
-                                continue
-                            try:
-                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if is_done_line(line):
-                                if not seen_done:
-                                    seen_done = True
-                                    yield sse_done()
-                                continue
-                            normalized = normalize_provider_line(line)
-                            if normalized is not None:
-                                yield normalized
-                        yield from finalize_stream(response=resp, done_already=seen_done)
-                return
-            except Exception as e:
-                raise self.normalize_error(e) from e
-        raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")
+class NovitaAdapter(CustomOpenAIAdapter):
+    name = "novita"
+    config_section = "novita_api"
+    default_base_url = "https://api.novita.ai/openai"
+    default_base_url_env = ("NOVITA_BASE_URL", "NOVITA_API_BASE_URL")
+
+
+class PoeAdapter(CustomOpenAIAdapter):
+    name = "poe"
+    config_section = "poe_api"
+    default_base_url = "https://api.poe.com/v1"
+    default_base_url_env = ("POE_BASE_URL", "POE_API_BASE_URL")
+
+
+class TogetherAdapter(CustomOpenAIAdapter):
+    name = "together"
+    config_section = "together_api"
+    default_base_url = "https://api.together.xyz/v1"
+    default_base_url_env = ("TOGETHER_BASE_URL", "TOGETHER_API_BASE_URL")

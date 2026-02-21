@@ -108,11 +108,13 @@ export const saveMessageOnError = async ({
       {
         role: "user",
         content: userMessage,
-        image
+        image,
+        messageType: userMessageType ?? message_type
       },
       {
         role: "assistant",
-        content: assistantContent
+        content: assistantContent,
+        messageType: assistantMessageType ?? message_type
       }
     ])
 
@@ -217,11 +219,13 @@ export const saveMessageOnError = async ({
     {
       role: "user",
       content: userMessage,
-      image
+      image,
+      messageType: userMessageType ?? message_type
     },
     {
       role: "assistant",
-      content: assistantContent
+      content: assistantContent,
+      messageType: assistantMessageType ?? message_type
     }
   ])
 

@@ -12,6 +12,9 @@ PROVIDER_REQUIRES_KEY: dict[str, bool] = {
     "groq": True,
     "qwen": True,
     "openrouter": True,
+    "novita": True,
+    "poe": True,
+    "together": True,
     "deepseek": True,
     "mistral": True,
     "google": True,
@@ -36,6 +39,9 @@ DEFAULT_BYOK_ALLOWED_FIELDS: set[str] = {"org_id", "project_id"}
 BYOK_CREDENTIAL_FIELDS: dict[str, dict[str, set[str]]] = {
     "openai": {"allowed": {"org_id", "project_id"}, "required": set()},
     "openrouter": {"allowed": {"org_id", "project_id"}, "required": set()},
+    "novita": {"allowed": {"org_id", "project_id"}, "required": set()},
+    "poe": {"allowed": {"org_id", "project_id"}, "required": set()},
+    "together": {"allowed": {"org_id", "project_id"}, "required": set()},
     "custom-openai-api": {"allowed": {"org_id", "project_id"}, "required": set()},
     "custom-openai-api-2": {"allowed": {"org_id", "project_id"}, "required": set()},
 }
@@ -95,6 +101,24 @@ PROVIDER_CAPABILITIES: dict[str, dict[str, Any]] = {
         "max_output_tokens_default": 4096,
     },
     "openrouter": {
+        "supports_streaming": True,
+        "supports_tools": True,
+        "default_timeout_seconds": 90,
+        "max_output_tokens_default": 8192,
+    },
+    "novita": {
+        "supports_streaming": True,
+        "supports_tools": True,
+        "default_timeout_seconds": 90,
+        "max_output_tokens_default": 8192,
+    },
+    "poe": {
+        "supports_streaming": True,
+        "supports_tools": True,
+        "default_timeout_seconds": 90,
+        "max_output_tokens_default": 8192,
+    },
+    "together": {
         "supports_streaming": True,
         "supports_tools": True,
         "default_timeout_seconds": 90,

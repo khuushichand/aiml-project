@@ -32,7 +32,7 @@ export function KnowledgeReadyState({
         </p>
       </div>
 
-      <div className="mx-auto max-w-2xl rounded-lg border border-border bg-muted/20 px-4 py-3 text-left">
+      <div className="mx-auto max-w-2xl rounded-lg border border-border/80 bg-surface2/60 px-4 py-3 text-left">
         <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
           How it works
         </p>
@@ -55,7 +55,7 @@ export function KnowledgeReadyState({
             key={prompt}
             type="button"
             onClick={() => onPromptClick(prompt)}
-            className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-primary hover:bg-surface2"
+            className="rounded-md border border-border/80 bg-surface2/70 px-3 py-1.5 text-[11px] text-text transition-colors hover:border-primary/40 hover:bg-surface2"
           >
             {prompt}
           </button>
@@ -84,10 +84,10 @@ export function KnowledgeReadyState({
           onClick={onContinueRecent}
           disabled={!hasRecentSession}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm transition-colors",
+            "inline-flex h-8 items-center gap-1 rounded-md border px-3 text-sm transition-colors",
             hasRecentSession
-              ? "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
-              : "border-border bg-surface text-text-subtle cursor-not-allowed opacity-70"
+              ? "border-border text-text hover:bg-surface2"
+              : "border-border text-text-subtle cursor-not-allowed opacity-70"
           )}
         >
           <Clock3 className="h-4 w-4" />
@@ -97,9 +97,9 @@ export function KnowledgeReadyState({
           type="button"
           onClick={onSelectSources}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-sm transition-colors",
+            "inline-flex h-8 items-center gap-1 rounded-md border px-3 text-sm transition-colors",
             hasSources
-              ? "border-border bg-surface text-text-subtle hover:bg-hover hover:text-text"
+              ? "border-border text-text hover:bg-surface2"
               : "border-warn/40 bg-warn/10 text-warn hover:bg-warn/20"
           )}
         >

@@ -951,7 +951,17 @@ def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
             "tool_use": False,
             "json_mode": False,
             "function_calling": False,
-            "streaming": provider in {"openai", "anthropic", "google", "mistral", "groq", "openrouter"},
+            "streaming": provider in {
+                "openai",
+                "anthropic",
+                "google",
+                "mistral",
+                "groq",
+                "openrouter",
+                "novita",
+                "poe",
+                "together",
+            },
             "thinking": False,
         },
         "modalities": {"input": ["text"], "output": ["text"]},
@@ -1419,6 +1429,27 @@ def get_configured_providers(
                 'display_name': 'OpenRouter',
                 'api_key_field': 'openrouter_api_key',
                 'model_field': 'openrouter_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'novita': {
+                'display_name': 'Novita',
+                'api_key_field': 'novita_api_key',
+                'model_field': 'novita_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'poe': {
+                'display_name': 'Poe',
+                'api_key_field': 'poe_api_key',
+                'model_field': 'poe_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
+            'together': {
+                'display_name': 'Together',
+                'api_key_field': 'together_api_key',
+                'model_field': 'together_model',
                 'type': 'commercial',
                 'section': 'API'
             },

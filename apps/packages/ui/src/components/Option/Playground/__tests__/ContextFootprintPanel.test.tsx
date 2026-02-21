@@ -13,6 +13,7 @@ describe("ContextFootprintPanel", () => {
     const onClearPromptContext = vi.fn()
     const onClearPinnedSourceContext = vi.fn()
     const onClearHistoryContext = vi.fn()
+    const onCreateSummaryCheckpoint = vi.fn()
     const onReviewCharacterContext = vi.fn()
     const onTrimLargestContextContributor = vi.fn()
 
@@ -29,6 +30,7 @@ describe("ContextFootprintPanel", () => {
         onClearPromptContext={onClearPromptContext}
         onClearPinnedSourceContext={onClearPinnedSourceContext}
         onClearHistoryContext={onClearHistoryContext}
+        onCreateSummaryCheckpoint={onCreateSummaryCheckpoint}
         onReviewCharacterContext={onReviewCharacterContext}
         onTrimLargestContextContributor={onTrimLargestContextContributor}
       />
@@ -48,6 +50,9 @@ describe("ContextFootprintPanel", () => {
       screen.getByRole("button", { name: "Clear pinned sources" })
     )
     await user.click(screen.getByRole("button", { name: "Clear history" }))
+    await user.click(
+      screen.getByRole("button", { name: "Create checkpoint summary" })
+    )
     await user.click(screen.getByRole("button", { name: "Review character" }))
     await user.click(
       screen.getByRole("button", { name: "Trim largest contributor" })
@@ -56,6 +61,7 @@ describe("ContextFootprintPanel", () => {
     expect(onClearPromptContext).toHaveBeenCalledTimes(1)
     expect(onClearPinnedSourceContext).toHaveBeenCalledTimes(1)
     expect(onClearHistoryContext).toHaveBeenCalledTimes(1)
+    expect(onCreateSummaryCheckpoint).toHaveBeenCalledTimes(1)
     expect(onReviewCharacterContext).toHaveBeenCalledTimes(1)
     expect(onTrimLargestContextContributor).toHaveBeenCalledTimes(1)
   })
@@ -74,6 +80,7 @@ describe("ContextFootprintPanel", () => {
         onClearPromptContext={vi.fn()}
         onClearPinnedSourceContext={vi.fn()}
         onClearHistoryContext={vi.fn()}
+        onCreateSummaryCheckpoint={vi.fn()}
         onReviewCharacterContext={vi.fn()}
         onTrimLargestContextContributor={vi.fn()}
       />

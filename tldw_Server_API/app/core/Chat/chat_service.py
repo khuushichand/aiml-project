@@ -266,9 +266,9 @@ def is_model_known_for_provider(provider: str, model: str) -> bool | None:
         return None
 
     # Most providers use flat model IDs; keep strict exact matching there.
-    # OpenRouter and Hugging Face commonly use namespaced IDs (vendor/model),
+    # Some providers commonly use namespaced IDs (vendor/model),
     # so treat namespaced and non-namespaced forms as equivalent.
-    if provider_key not in {"openrouter", "huggingface"}:
+    if provider_key not in {"openrouter", "huggingface", "novita", "poe", "together"}:
         known_lower = {str(item).strip().lower() for item in known_models}
         return model_key in known_lower
 
@@ -870,11 +870,11 @@ def normalize_request_provider_and_model(
                 # In this case, strip the inline provider prefix from the model
                 request_data.model = actual_model
             else:
-                # api_provider is explicitly set on the request. For OpenRouter and
-                # Hugging Face, many valid model IDs include a namespace
+                # api_provider is explicitly set on the request. For some providers,
+                # many valid model IDs include a namespace
                 # (e.g., "openai/gpt-4o-mini", "z-ai/glm-4.6"). Preserve the full
                 # namespaced model id unless the inline namespace matches "openrouter".
-                if provider in {"openrouter", "huggingface"}:
+                if provider in {"openrouter", "huggingface", "novita", "poe", "together"}:
                     if provider == "openrouter" and inline_provider_lower == "openrouter":
                         request_data.model = actual_model
                     else:

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   aggregateSessionUsage,
   projectTokenBudget,
+  resolveTokenBudgetRisk,
   resolveGenerationUsage
 } from "../usage-metrics"
 
@@ -61,5 +62,46 @@ describe("usage-metrics", () => {
     })
     expect(overLimit.isOverLimit).toBe(true)
     expect(overLimit.remainingTokens).toBeLessThan(0)
+  })
+
+  it("derives truncation risk labels from projected budget", () => {
+    expect(
+      resolveTokenBudgetRisk({
+        projectedTotalTokens: 1600,
+        remainingTokens: 2400,
+        utilizationPercent: 40,
+        isNearLimit: false,
+        isOverLimit: false
+      })
+    ).toEqual({
+      level: "low",
+      overflowTokens: 0
+    })
+
+    expect(
+      resolveTokenBudgetRisk({
+        projectedTotalTokens: 3400,
+        remainingTokens: 696,
+        utilizationPercent: 83,
+        isNearLimit: false,
+        isOverLimit: false
+      })
+    ).toEqual({
+      level: "medium",
+      overflowTokens: 0
+    })
+
+    expect(
+      resolveTokenBudgetRisk({
+        projectedTotalTokens: 4400,
+        remainingTokens: -304,
+        utilizationPercent: 107,
+        isNearLimit: false,
+        isOverLimit: true
+      })
+    ).toEqual({
+      level: "critical",
+      overflowTokens: 304
+    })
   })
 })

@@ -94,6 +94,7 @@ export const useCharacterGreeting = ({
 
   React.useEffect(() => {
     if (!playgroundReady) return
+    if (serverChatId != null) return
     let cancelled = false
     const syncSelection = async () => {
       try {
@@ -117,7 +118,7 @@ export const useCharacterGreeting = ({
     return () => {
       cancelled = true
     }
-  }, [playgroundReady, selectedCharacter?.id, setSelectedCharacter])
+  }, [playgroundReady, selectedCharacter?.id, serverChatId, setSelectedCharacter])
 
   React.useEffect(() => {
     const isEmpty = messagesLength === 0
@@ -135,6 +136,12 @@ export const useCharacterGreeting = ({
 
   React.useEffect(() => {
     if (!playgroundReady) return
+    if (serverChatId != null) {
+      selectedCharacterIdRef.current = null
+      greetingFetchRef.current = null
+      greetingTemplateRef.current = null
+      return
+    }
     if (!selectedCharacter?.id) {
       selectedCharacterIdRef.current = null
       return

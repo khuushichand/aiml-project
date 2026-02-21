@@ -8,7 +8,7 @@ import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
 import { Clock, DollarSign, Hash } from "lucide-react"
-import { generateID } from "@/db/dexie/helpers"
+import { generateID, updateMessageMedia } from "@/db/dexie/helpers"
 import { decodeChatErrorPayload } from "@/utils/chat-error-message"
 import { humanizeMilliseconds } from "@/utils/humanize-milliseconds"
 import { trackCompareMetric } from "@/utils/compare-metrics"
@@ -25,6 +25,13 @@ import { computeResponseDiffPreview } from "./compare-response-diff"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
+import {
+  IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+  IMAGE_GENERATION_USER_MESSAGE_TYPE,
+  isImageGenerationMessageType,
+  normalizeImageGenerationVariantBundle,
+  type ImageGenerationRequestSnapshot
+} from "@/utils/image-generation-chat"
 
 type TimelineBlock =
   | { kind: "single"; index: number }
@@ -34,6 +41,19 @@ type TimelineBlock =
       assistantIndices: number[]
       clusterId: string
     }
+
+type TimelineMessageShape = {
+  messageType?: string
+  message_type?: string
+  clusterId?: string
+}
+
+const resolveTimelineMessageType = (
+  message: TimelineMessageShape
+): string | undefined => message.messageType ?? message.message_type
+
+const shouldHideTimelineMessage = (message: TimelineMessageShape): boolean =>
+  resolveTimelineMessageType(message) === IMAGE_GENERATION_USER_MESSAGE_TYPE
 
 type PlaygroundChatProps = {
   searchQuery?: string
@@ -88,18 +108,28 @@ const PerModelMiniComposer: React.FC<{
   )
 }
 
-const buildBlocks = (messages: { messageType?: string; clusterId?: string }[]): TimelineBlock[] => {
+const buildBlocks = (messages: TimelineMessageShape[]): TimelineBlock[] => {
   const blocks: TimelineBlock[] = []
   const used = new Set<number>()
 
   messages.forEach((msg, idx) => {
     if (used.has(idx)) return
+    if (shouldHideTimelineMessage(msg)) {
+      used.add(idx)
+      return
+    }
+    const messageType = resolveTimelineMessageType(msg)
 
-    if (msg.messageType === "compare:user" && msg.clusterId) {
+    if (messageType === "compare:user" && msg.clusterId) {
       const assistants: number[] = []
       messages.forEach((m, j) => {
-        if (j !== idx && m.clusterId === msg.clusterId) {
-          if (m.messageType === "compare:reply") {
+        if (j === idx || used.has(j)) return
+        if (shouldHideTimelineMessage(m)) {
+          used.add(j)
+          return
+        }
+        if (m.clusterId === msg.clusterId) {
+          if (resolveTimelineMessageType(m) === "compare:reply") {
             assistants.push(j)
           }
           used.add(j)
@@ -243,6 +273,417 @@ export const PlaygroundChat = ({
     },
     [messageSteeringForceNarrate, onSubmit]
   )
+  const handleRegenerateGeneratedImage = React.useCallback(
+    async (payload: {
+      messageId?: string
+      request: ImageGenerationRequestSnapshot | null
+    }) => {
+      const request = payload.request
+      if (!request?.prompt || !request?.backend) {
+        notification.warning({
+          message: t("warning", { defaultValue: "Warning" }),
+          description: t(
+            "playground:imageGeneration.regenUnavailable",
+            "Original image prompt metadata is unavailable for regeneration."
+          )
+        })
+        return
+      }
+      const regenerateFromMessage =
+        payload.messageId && payload.messageId.length > 0
+          ? messages.find((entry) => entry.id === payload.messageId)
+          : undefined
+      const nextMessages =
+        regenerateFromMessage?.id && messages.length > 0
+          ? messages.filter((entry) => entry.id !== regenerateFromMessage.id)
+          : messages
+
+      if (regenerateFromMessage?.id) {
+        setMessages(nextMessages)
+      }
+
+      await onSubmit({
+        message: request.prompt,
+        image: "",
+        docs: [],
+        isRegenerate: Boolean(regenerateFromMessage),
+        regenerateFromMessage,
+        messages: nextMessages,
+        imageBackendOverride: request.backend,
+        userMessageType: IMAGE_GENERATION_USER_MESSAGE_TYPE,
+        assistantMessageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
+        imageGenerationRequest: request,
+        imageGenerationSource: "message-regen"
+      })
+    },
+    [messages, notification, onSubmit, setMessages, t]
+  )
+  const normalizeImageVariantState = React.useCallback(
+    (
+      entry: any,
+      variants: any[],
+      activeVariantIndex: number,
+      options?: {
+        hasVisibleVariant?: boolean
+        generationInfo?: unknown
+      }
+    ) => {
+      const normalized = normalizeImageGenerationVariantBundle({
+        messageId: entry.id,
+        messageGenerationInfo:
+          options?.generationInfo !== undefined
+            ? options.generationInfo
+            : entry.generationInfo,
+        variants,
+        activeVariantIndex,
+        fallbackCreatedAt: Date.now(),
+        hasVisibleVariant: options?.hasVisibleVariant ?? true
+      })
+
+      if (variants.length === 0) {
+        return {
+          ...entry,
+          variants: [],
+          activeVariantIndex: normalized.activeVariantIndex,
+          generationInfo: normalized.generationInfo ?? entry.generationInfo
+        }
+      }
+
+      const activeVariant = normalized.variants[normalized.activeVariantIndex]
+      if (!activeVariant) {
+        return {
+          ...entry,
+          variants: normalized.variants,
+          activeVariantIndex: normalized.activeVariantIndex,
+          generationInfo: normalized.generationInfo ?? entry.generationInfo
+        }
+      }
+
+      return applyVariantToMessage(
+        {
+          ...entry,
+          variants: normalized.variants,
+          activeVariantIndex: normalized.activeVariantIndex,
+          generationInfo: normalized.generationInfo ?? entry.generationInfo
+        },
+        activeVariant,
+        normalized.activeVariantIndex
+      )
+    },
+    []
+  )
+  const handleDeleteGeneratedImage = React.useCallback(
+    (payload: { messageId?: string; imageIndex: number }) => {
+      if (!payload.messageId) return
+      let nextImages: string[] | null = null
+      let nextGenerationInfo: unknown = undefined
+      setMessages((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== payload.messageId) return entry
+          const variants = Array.isArray(entry.variants) ? entry.variants : []
+          if (
+            variants.length > 0 &&
+            typeof entry.activeVariantIndex === "number"
+          ) {
+            const activeVariantIndex = Math.max(
+              0,
+              Math.min(entry.activeVariantIndex, variants.length - 1)
+            )
+            const currentVariant = variants[activeVariantIndex]
+            const currentVariantImages = Array.isArray(currentVariant?.images)
+              ? currentVariant.images
+              : []
+            const remainingVariantImages = currentVariantImages.filter(
+              (_, idx) => idx !== payload.imageIndex
+            )
+
+            if (remainingVariantImages.length > 0) {
+              const nextVariants = [...variants]
+              nextVariants[activeVariantIndex] = {
+                ...currentVariant,
+                images: remainingVariantImages
+              }
+              const updatedEntry = normalizeImageVariantState(
+                {
+                  ...entry,
+                  variants: nextVariants,
+                  activeVariantIndex
+                },
+                nextVariants,
+                activeVariantIndex
+              )
+              nextImages = Array.isArray(updatedEntry.images)
+                ? updatedEntry.images
+                : []
+              nextGenerationInfo = updatedEntry.generationInfo
+              return updatedEntry
+            }
+
+            const nextVariants = variants.filter(
+              (_, idx) => idx !== activeVariantIndex
+            )
+            if (nextVariants.length > 0) {
+              const nextActiveIndex = Math.max(
+                0,
+                Math.min(activeVariantIndex, nextVariants.length - 1)
+              )
+              const updatedEntry = normalizeImageVariantState(
+                {
+                  ...entry,
+                  variants: nextVariants,
+                  activeVariantIndex: nextActiveIndex
+                },
+                nextVariants,
+                nextActiveIndex
+              )
+              nextImages = Array.isArray(updatedEntry.images)
+                ? updatedEntry.images
+                : []
+              nextGenerationInfo = updatedEntry.generationInfo
+              return updatedEntry
+            }
+
+            nextImages = []
+            const updatedEntry = normalizeImageVariantState(
+              {
+                ...entry,
+                images: [],
+                variants: [],
+                activeVariantIndex: 0
+              },
+              [],
+              0,
+              { hasVisibleVariant: false }
+            )
+            nextGenerationInfo = updatedEntry.generationInfo
+            return updatedEntry
+          }
+          const current = Array.isArray(entry.images) ? entry.images : []
+          const remainingImages = current.filter((_, idx) => idx !== payload.imageIndex)
+          const updatedEntry = normalizeImageVariantState(
+            {
+              ...entry,
+              images: remainingImages
+            },
+            [],
+            0,
+            { hasVisibleVariant: remainingImages.length > 0 }
+          )
+          nextImages = Array.isArray(updatedEntry.images)
+            ? updatedEntry.images
+            : remainingImages
+          nextGenerationInfo = updatedEntry.generationInfo
+          return updatedEntry
+        })
+      )
+      if (nextImages !== null && stableHistoryId) {
+        const updates: { images?: string[]; generationInfo?: any } = {
+          images: nextImages
+        }
+        if (nextGenerationInfo !== undefined) {
+          updates.generationInfo = nextGenerationInfo
+        }
+        void updateMessageMedia(payload.messageId, updates).catch(() => null)
+      }
+    },
+    [normalizeImageVariantState, setMessages, stableHistoryId]
+  )
+  const handleSelectGeneratedImageVariant = React.useCallback(
+    (payload: { messageId?: string; variantIndex: number }) => {
+      if (!payload.messageId) return
+      let nextImages: string[] | null = null
+      let nextGenerationInfo: unknown = undefined
+      setMessages((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== payload.messageId) return entry
+          const variants = Array.isArray(entry.variants) ? entry.variants : []
+          if (variants.length === 0) return entry
+          if (
+            payload.variantIndex < 0 ||
+            payload.variantIndex >= variants.length
+          ) {
+            return entry
+          }
+          const updatedEntry = normalizeImageVariantState(
+            {
+              ...entry,
+              variants,
+              activeVariantIndex: payload.variantIndex
+            },
+            variants,
+            payload.variantIndex
+          )
+          nextImages = Array.isArray(updatedEntry.images)
+            ? updatedEntry.images
+            : []
+          nextGenerationInfo = updatedEntry.generationInfo
+          return updatedEntry
+        })
+      )
+      if (nextImages !== null && stableHistoryId) {
+        const updates: { images?: string[]; generationInfo?: any } = {
+          images: nextImages
+        }
+        if (nextGenerationInfo !== undefined) {
+          updates.generationInfo = nextGenerationInfo
+        }
+        void updateMessageMedia(payload.messageId, updates).catch(() => null)
+      }
+    },
+    [normalizeImageVariantState, setMessages, stableHistoryId]
+  )
+  const handleKeepGeneratedImageVariant = React.useCallback(
+    (payload: { messageId?: string; variantIndex: number }) => {
+      if (!payload.messageId) return
+      let nextImages: string[] | null = null
+      let nextGenerationInfo: unknown = undefined
+      setMessages((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== payload.messageId) return entry
+          const variants = Array.isArray(entry.variants) ? entry.variants : []
+          if (variants.length === 0) return entry
+          const targetIndex = Math.max(
+            0,
+            Math.min(payload.variantIndex, variants.length - 1)
+          )
+          const targetVariant = variants[targetIndex]
+          const nextVariants = [
+            ...variants.filter((_, idx) => idx !== targetIndex),
+            targetVariant
+          ]
+          const nextActiveIndex = nextVariants.length - 1
+          const updatedEntry = normalizeImageVariantState(
+            {
+              ...entry,
+              variants: nextVariants,
+              activeVariantIndex: nextActiveIndex
+            },
+            nextVariants,
+            nextActiveIndex
+          )
+          nextImages = Array.isArray(updatedEntry.images)
+            ? updatedEntry.images
+            : []
+          nextGenerationInfo = updatedEntry.generationInfo
+          return updatedEntry
+        })
+      )
+      if (nextImages !== null && stableHistoryId) {
+        const updates: { images?: string[]; generationInfo?: any } = {
+          images: nextImages
+        }
+        if (nextGenerationInfo !== undefined) {
+          updates.generationInfo = nextGenerationInfo
+        }
+        void updateMessageMedia(payload.messageId, updates).catch(() => null)
+      }
+    },
+    [normalizeImageVariantState, setMessages, stableHistoryId]
+  )
+  const handleDeleteGeneratedImageVariant = React.useCallback(
+    (payload: { messageId?: string; variantIndex: number }) => {
+      if (!payload.messageId) return
+      let nextImages: string[] | null = null
+      let nextGenerationInfo: unknown = undefined
+      setMessages((prev) =>
+        prev.map((entry) => {
+          if (entry.id !== payload.messageId) return entry
+          const variants = Array.isArray(entry.variants) ? entry.variants : []
+          if (variants.length === 0) return entry
+          if (
+            payload.variantIndex < 0 ||
+            payload.variantIndex >= variants.length
+          ) {
+            return entry
+          }
+          const nextVariants = variants.filter(
+            (_, idx) => idx !== payload.variantIndex
+          )
+          if (nextVariants.length === 0) {
+            nextImages = []
+            const updatedEntry = normalizeImageVariantState(
+              {
+                ...entry,
+                images: [],
+                variants: [],
+                activeVariantIndex: 0
+              },
+              [],
+              0,
+              { hasVisibleVariant: false }
+            )
+            nextGenerationInfo = updatedEntry.generationInfo
+            return updatedEntry
+          }
+          const nextActiveIndex = Math.max(
+            0,
+            Math.min(payload.variantIndex, nextVariants.length - 1)
+          )
+          const updatedEntry = normalizeImageVariantState(
+            {
+              ...entry,
+              variants: nextVariants,
+              activeVariantIndex: nextActiveIndex
+            },
+            nextVariants,
+            nextActiveIndex
+          )
+          nextImages = Array.isArray(updatedEntry.images)
+            ? updatedEntry.images
+            : []
+          nextGenerationInfo = updatedEntry.generationInfo
+          return updatedEntry
+        })
+      )
+      if (nextImages !== null && stableHistoryId) {
+        const updates: { images?: string[]; generationInfo?: any } = {
+          images: nextImages
+        }
+        if (nextGenerationInfo !== undefined) {
+          updates.generationInfo = nextGenerationInfo
+        }
+        void updateMessageMedia(payload.messageId, updates).catch(() => null)
+      }
+    },
+    [normalizeImageVariantState, setMessages, stableHistoryId]
+  )
+  const handleDeleteAllGeneratedImageVariants = React.useCallback(
+    (payload: { messageId?: string }) => {
+      if (!payload.messageId) return
+      let nextGenerationInfo: unknown = undefined
+      setMessages((prev) =>
+        prev.map((entry) =>
+          entry.id === payload.messageId
+            ? (() => {
+                const updatedEntry = normalizeImageVariantState(
+                  {
+                    ...entry,
+                    images: [],
+                    variants: [],
+                    activeVariantIndex: 0
+                  },
+                  [],
+                  0,
+                  { hasVisibleVariant: false }
+                )
+                nextGenerationInfo = updatedEntry.generationInfo
+                return updatedEntry
+              })()
+            : entry
+        )
+      )
+      if (stableHistoryId) {
+        const updates: { images?: string[]; generationInfo?: any } = {
+          images: []
+        }
+        if (nextGenerationInfo !== undefined) {
+          updates.generationInfo = nextGenerationInfo
+        }
+        void updateMessageMedia(payload.messageId, updates).catch(() => null)
+      }
+    },
+    [normalizeImageVariantState, setMessages, stableHistoryId]
+  )
   const selectedGreeting = React.useMemo(() => {
     if (!selectedCharacter || typeof selectedCharacter.greeting !== "string") {
       return ""
@@ -319,7 +760,12 @@ export const PlaygroundChat = ({
     (index: number) => {
       for (let i = index - 1; i >= 0; i--) {
         const candidate = messages[i]
-        if (!candidate?.isBot) {
+        if (
+          !candidate?.isBot &&
+          !isImageGenerationMessageType(
+            candidate?.messageType ?? candidate?.message_type
+          )
+        ) {
           return candidate
         }
       }
@@ -413,6 +859,9 @@ export const PlaygroundChat = ({
           if (block.kind === "single") {
             const message = messages[block.index]
             const previousUserMessage = getPreviousUserMessage(block.index)
+            const resolvedMessageType = resolveMessageType(message, block.index)
+            const isImageGenerationAssistantEvent =
+              resolvedMessageType === IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
             return (
               <PlaygroundMessage
                 key={`m-${blockIndex}`}
@@ -424,6 +873,14 @@ export const PlaygroundChat = ({
                 currentMessageIndex={block.index}
                 totalMessages={messages.length}
                 onRegenerate={regenerateLastMessage}
+                onRegenerateImage={(payload) => {
+                  void handleRegenerateGeneratedImage(payload)
+                }}
+                onDeleteImage={handleDeleteGeneratedImage}
+                onSelectImageVariant={handleSelectGeneratedImageVariant}
+                onKeepImageVariant={handleKeepGeneratedImageVariant}
+                onDeleteImageVariant={handleDeleteGeneratedImageVariant}
+                onDeleteAllImageVariants={handleDeleteAllGeneratedImageVariants}
                 isProcessing={isProcessing}
                 isSearchingInternet={isSearchingInternet}
                 sources={message.sources}
@@ -473,7 +930,7 @@ export const PlaygroundChat = ({
                 moodTopic={message.moodTopic ?? null}
                 searchQuery={normalizedSearchQuery || undefined}
                 searchMatch={resolveSearchMatch(block.index)}
-                message_type={resolveMessageType(message, block.index)}
+                message_type={resolvedMessageType}
                 variants={message.variants}
                 activeVariantIndex={message.activeVariantIndex}
                 onSwipePrev={() => handleVariantSwipe(message.id, "prev")}
@@ -483,6 +940,8 @@ export const PlaygroundChat = ({
                 messageSteeringForceNarrate={messageSteeringForceNarrate}
                 onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
                 onClearMessageSteering={clearMessageSteering}
+                hideEditAndRegenerate={isImageGenerationAssistantEvent}
+                hideContinue={isImageGenerationAssistantEvent}
               />
             )
           }
@@ -705,6 +1164,14 @@ export const PlaygroundChat = ({
                 currentMessageIndex={block.userIndex}
                 totalMessages={messages.length}
                 onRegenerate={regenerateLastMessage}
+                onRegenerateImage={(payload) => {
+                  void handleRegenerateGeneratedImage(payload)
+                }}
+                onDeleteImage={handleDeleteGeneratedImage}
+                onSelectImageVariant={handleSelectGeneratedImageVariant}
+                onKeepImageVariant={handleKeepGeneratedImageVariant}
+                onDeleteImageVariant={handleDeleteGeneratedImageVariant}
+                onDeleteAllImageVariants={handleDeleteAllGeneratedImageVariants}
                 isProcessing={isProcessing}
                 isSearchingInternet={isSearchingInternet}
                 sources={userMessage.sources}
@@ -1317,6 +1784,14 @@ export const PlaygroundChat = ({
                         currentMessageIndex={index}
                         totalMessages={messages.length}
                         onRegenerate={regenerateLastMessage}
+                        onRegenerateImage={(payload) => {
+                          void handleRegenerateGeneratedImage(payload)
+                        }}
+                        onDeleteImage={handleDeleteGeneratedImage}
+                        onSelectImageVariant={handleSelectGeneratedImageVariant}
+                        onKeepImageVariant={handleKeepGeneratedImageVariant}
+                        onDeleteImageVariant={handleDeleteGeneratedImageVariant}
+                        onDeleteAllImageVariants={handleDeleteAllGeneratedImageVariants}
                         isProcessing={isProcessing}
                         isSearchingInternet={isSearchingInternet}
                         sources={message.sources}

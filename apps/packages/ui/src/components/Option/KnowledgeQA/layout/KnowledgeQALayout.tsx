@@ -33,6 +33,18 @@ function normalizeSourceSet(values: string[]): string {
   return [...values].sort((left, right) => left.localeCompare(right)).join("|")
 }
 
+function normalizeIdentifierSet(values: Array<string | number | null | undefined>): string {
+  return values
+    .map((value) => {
+      if (typeof value === "string") return value.trim()
+      if (typeof value === "number" && Number.isFinite(value)) return String(Math.round(value))
+      return ""
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|")
+}
+
 function hasConversationId(item: { conversationId?: string }): boolean {
   return (
     typeof item.conversationId === "string" &&
@@ -59,6 +71,8 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     sources: [],
     enable_web_fallback: true,
     top_k: 10,
+    include_media_ids: [],
+    include_note_ids: [],
   }
   const updateSetting =
     knowledgeQa.updateSetting ??
@@ -111,9 +125,22 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     return (
       lastSearchScope.preset !== preset ||
       lastSearchScope.webFallback !== settings.enable_web_fallback ||
-      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources)
+      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources) ||
+      normalizeIdentifierSet(
+        Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []
+      ) !== "" ||
+      normalizeIdentifierSet(
+        Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []
+      ) !== ""
     )
-  }, [lastSearchScope, preset, settings.enable_web_fallback, settings.sources])
+  }, [
+    lastSearchScope,
+    preset,
+    settings.enable_web_fallback,
+    settings.include_media_ids,
+    settings.include_note_ids,
+    settings.sources,
+  ])
 
   useEffect(() => {
     if (hasResults && !evidenceRailOpen) {
@@ -161,6 +188,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   }
 
   const handleOpenSourceSelector = () => {
+    const sourceSelectorButton = document.getElementById(
+      "knowledge-source-selector-toggle"
+    ) as HTMLButtonElement | null
+    if (sourceSelectorButton) {
+      sourceSelectorButton.focus()
+      sourceSelectorButton.click()
+      return
+    }
     setSettingsPanelOpen(true)
   }
 
@@ -194,6 +229,21 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                 onPresetChange={setPreset}
                 sources={settings.sources}
                 onSourcesChange={(sources) => updateSetting("sources", sources)}
+                includeMediaIds={Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []}
+                onIncludeMediaIdsChange={(ids) => updateSetting("include_media_ids", ids)}
+                includeNoteIds={
+                  Array.isArray(settings.include_note_ids)
+                    ? settings.include_note_ids.map((value) =>
+                        typeof value === "string" ? value : String(value)
+                      )
+                    : []
+                }
+                onIncludeNoteIdsChange={(ids) =>
+                  updateSetting(
+                    "include_note_ids",
+                    ids as unknown as typeof settings.include_note_ids
+                  )
+                }
                 webEnabled={settings.enable_web_fallback}
                 onToggleWeb={() =>
                   updateSetting("enable_web_fallback", !settings.enable_web_fallback)

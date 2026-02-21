@@ -42,7 +42,7 @@ function Markdown({
   message: string
   className?: string
   searchQuery?: string
-  codeBlockVariant?: "default" | "plain" | "compact"
+  codeBlockVariant?: "default" | "plain" | "compact" | "github"
   allowExternalImages?: boolean
   richTextModeOverride?: ChatRichTextMode
 }) {
@@ -155,7 +155,9 @@ function Markdown({
     ]
   )
   const paragraphClass =
-    codeBlockVariant === "plain" || codeBlockVariant === "compact"
+    codeBlockVariant === "plain" ||
+    codeBlockVariant === "compact" ||
+    codeBlockVariant === "github"
       ? "mb-2 last:mb-0 whitespace-pre-wrap"
       : "mb-2 last:mb-0"
   const renderHighlightedChildren = React.useCallback(
@@ -205,7 +207,13 @@ function Markdown({
         components={{
           pre({ children, ...props }) {
             const childArray = React.Children.toArray(children)
-            const codeChild = childArray.find((child) => React.isValidElement(child) && child.type === "code") as React.ReactElement | undefined
+            const codeChild = childArray.find((child) => {
+              if (!React.isValidElement(child)) return false
+              const element = child as React.ReactElement
+              const className = element.props?.className as string | undefined
+              const nodeTag = element.props?.node?.tagName
+              return Boolean(className || nodeTag === "code")
+            }) as React.ReactElement | undefined
 
             if (!codeChild) {
               return <pre {...props}>{children}</pre>
@@ -222,7 +230,7 @@ function Markdown({
             if (codeBlockVariant === "compact") {
               const rawLanguage = match ? match[1] : ""
               const normalizedLanguage = normalizeLanguage(rawLanguage)
-              const highlightLanguage = rawLanguage ? normalizedLanguage : "markdown"
+              const highlightLanguage = rawLanguage ? normalizedLanguage : "plaintext"
               return (
                 <div className="not-prose my-2 rounded-lg border border-border bg-surface2/70 px-3 py-2 overflow-x-auto">
                   <Highlight code={value} language={safeLanguage(highlightLanguage)} theme={resolveTheme(codeTheme || "dracula")}>
@@ -233,6 +241,44 @@ function Markdown({
                           ...style,
                           backgroundColor: "transparent",
                           fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {tokens.map((line, i) => (
+                          <div key={i} {...getLineProps({ line, key: i })}>
+                            {line.map((token, key) => (
+                              <span key={key} {...getTokenProps({ token, key })} />
+                            ))}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
+                  </Highlight>
+                </div>
+              )
+            }
+            if (codeBlockVariant === "github") {
+              const rawLanguage = match ? match[1] : ""
+              const normalizedLanguage = normalizeLanguage(rawLanguage)
+              return (
+                <div className="not-prose my-2 overflow-x-auto rounded-md border border-border/80 bg-surface2/70 px-4 py-3">
+                  <Highlight
+                    code={value}
+                    language={safeLanguage(normalizedLanguage)}
+                    theme={resolveTheme("auto")}
+                  >
+                    {({
+                      className: highlightClassName,
+                      style,
+                      tokens,
+                      getLineProps,
+                      getTokenProps
+                    }) => (
+                      <pre
+                        className={`${highlightClassName} m-0 text-xs font-mono leading-relaxed`}
+                        style={{
+                          ...style,
+                          backgroundColor: "transparent",
+                          fontFamily: "var(--font-mono)"
                         }}
                       >
                         {tokens.map((line, i) => (

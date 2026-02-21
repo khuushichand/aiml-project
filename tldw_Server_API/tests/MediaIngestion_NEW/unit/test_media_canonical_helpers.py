@@ -77,3 +77,67 @@ async def test_document_like_shim_delegates_to_core(monkeypatch: pytest.MonkeyPa
     assert called, "Expected core persistence.process_document_like_item to be called"
     assert result.get("status") == "Success"
     assert result.get("input_ref") == "input-ref"
+
+
+def test_process_videos_wrapper_drops_unsupported_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_process_videos(
+        *,
+        inputs: list[str],
+        perform_chunking: bool = True,
+    ) -> dict[str, Any]:
+        called["inputs"] = inputs
+        called["perform_chunking"] = perform_chunking
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        media_mod,
+        "_process_videos_core",
+        fake_process_videos,
+        raising=True,
+    )
+
+    result = media_mod.process_videos(
+        inputs=["https://example.com/video"],
+        perform_chunking=True,
+        chunk_options={"method": "sentences", "max_size": 300},
+    )
+
+    assert result == {"status": "ok"}
+    assert called["inputs"] == ["https://example.com/video"]
+    assert called["perform_chunking"] is True
+
+
+def test_process_audio_wrapper_drops_unsupported_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_process_audio_files(
+        *,
+        inputs: list[str],
+        perform_chunking: bool = True,
+    ) -> dict[str, Any]:
+        called["inputs"] = inputs
+        called["perform_chunking"] = perform_chunking
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        media_mod,
+        "_process_audio_files_core",
+        fake_process_audio_files,
+        raising=True,
+    )
+
+    result = media_mod.process_audio_files(
+        inputs=["/tmp/audio.wav"],
+        perform_chunking=False,
+        chunk_options={"method": "sentences", "max_size": 300},
+    )
+
+    assert result == {"status": "ok"}
+    assert called["inputs"] == ["/tmp/audio.wav"]
+    assert called["perform_chunking"] is False

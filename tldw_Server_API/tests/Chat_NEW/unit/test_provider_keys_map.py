@@ -5,7 +5,18 @@ def test_provider_requires_key_map_basic():
     from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
     # Commercial providers should require keys
-    for prov in ["openai", "anthropic", "google", "mistral", "cohere", "groq", "openrouter"]:
+    for prov in [
+        "openai",
+        "anthropic",
+        "google",
+        "mistral",
+        "cohere",
+        "groq",
+        "openrouter",
+        "novita",
+        "poe",
+        "together",
+    ]:
         assert provider_requires_api_key(prov) is True
 
     # Local providers typically do not require keys

@@ -101,6 +101,14 @@ export const updateMessage = async (
   await db.updateMessage(history_id, message_id, content)
 }
 
+export const updateMessageMedia = async (
+  message_id: string,
+  updates: { images?: string[]; generationInfo?: any }
+) => {
+  const db = new PageAssistDatabase()
+  await db.updateMessageMedia(message_id, updates)
+}
+
 export const updateMessageDiscoSkillComment = async (
   message_id: string,
   discoSkillComment: Message["discoSkillComment"] | null

@@ -52,7 +52,7 @@ sd_cpp_timeout_seconds = 120
 
 # SwarmUI backend settings
 # Base URL for SwarmUI (eg http://localhost:7801)
-swarmui_base_url =
+swarmui_base_url = http://127.0.0.1:7801
 # Optional default model to use when payload.model is omitted.
 swarmui_default_model =
 # Optional swarm_token cookie value for authenticated SwarmUI instances.
@@ -61,6 +61,28 @@ swarmui_swarm_token =
 # Empty list disables extra_params passthrough.
 swarmui_allowed_extra_params = []
 swarmui_timeout_seconds = 120
+
+# OpenRouter image backend settings
+openrouter_image_base_url = https://openrouter.ai/api/v1
+openrouter_image_api_key =
+openrouter_image_default_model = openai/gpt-image-1
+openrouter_image_allowed_extra_params = []
+openrouter_image_timeout_seconds = 120
+
+# Novita image backend settings
+novita_image_base_url = https://api.novita.ai
+novita_image_api_key =
+novita_image_default_model = sd_xl_base_1.0.safetensors
+novita_image_allowed_extra_params = []
+novita_image_timeout_seconds = 180
+novita_image_poll_interval_seconds = 2
+
+# Together image backend settings
+together_image_base_url = https://api.together.xyz/v1
+together_image_api_key =
+together_image_default_model = black-forest-labs/FLUX.1-schnell-Free
+together_image_allowed_extra_params = []
+together_image_timeout_seconds = 120
 
 [ACP]
 # Command used to launch the ACP runner (tldw-agent-acp).

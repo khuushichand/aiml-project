@@ -303,6 +303,21 @@ export class PageAssistDatabase {
     await db.messages.where('id').equals(message_id).modify({ content });
   }
 
+  async updateMessageMedia(
+    message_id: string,
+    updates: { images?: string[]; generationInfo?: any }
+  ) {
+    const patch: Record<string, unknown> = {}
+    if (Array.isArray(updates.images)) {
+      patch.images = updates.images
+    }
+    if (updates.generationInfo !== undefined) {
+      patch.generationInfo = updates.generationInfo
+    }
+    if (Object.keys(patch).length === 0) return
+    await db.messages.where("id").equals(message_id).modify(patch)
+  }
+
   async updateMessageDiscoSkillComment(
     message_id: string,
     discoSkillComment: Message["discoSkillComment"] | null

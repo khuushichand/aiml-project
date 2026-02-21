@@ -476,11 +476,12 @@ export function MessageActionsBar({
           <div className="inline-flex items-center gap-1 rounded-full border border-border bg-surface2 px-1.5 py-0.5 text-xs text-text-muted">
             <button
               type="button"
+              data-testid="variant-prev-button"
               aria-label={t("playground:actions.previousVariant", "Previous response") as string}
               title={t("playground:actions.previousVariant", "Previous response") as string}
               onClick={() => canSwipePrev && onSwipePrev?.()}
               disabled={!canSwipePrev}
-              className={`flex h-4 w-4 items-center justify-center rounded-full transition-colors ${
+              className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-colors sm:h-4 sm:w-4 sm:min-h-0 sm:min-w-0 ${
                 canSwipePrev ? "text-text-subtle hover:text-text" : "text-text-muted/50"
               }`}
             >
@@ -491,11 +492,12 @@ export function MessageActionsBar({
             </span>
             <button
               type="button"
+              data-testid="variant-next-button"
               aria-label={t("playground:actions.nextVariant", "Next response") as string}
               title={t("playground:actions.nextVariant", "Next response") as string}
               onClick={() => canSwipeNext && onSwipeNext?.()}
               disabled={!canSwipeNext}
-              className={`flex h-4 w-4 items-center justify-center rounded-full transition-colors ${
+              className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full transition-colors sm:h-4 sm:w-4 sm:min-h-0 sm:min-w-0 ${
                 canSwipeNext ? "text-text-subtle hover:text-text" : "text-text-muted/50"
               }`}
             >
@@ -507,9 +509,10 @@ export function MessageActionsBar({
         {/* Collapsed "..." trigger (shows when action row is hidden) */}
         <button
           type="button"
+          data-testid="message-actions-overflow-chip"
           aria-label={t("common:moreActions", "More actions") as string}
           title={t("common:moreActions", "More actions") as string}
-          className={`${overflowChipVisibility} rounded-full border border-border bg-surface2 px-2 py-0.5 text-xs text-text-muted transition-colors hover:text-text`}
+          className={`${overflowChipVisibility} inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-border bg-surface2 px-3 py-0.5 text-xs text-text-muted transition-colors hover:text-text sm:min-h-0 sm:min-w-0 sm:px-2`}
         >
           •••
         </button>

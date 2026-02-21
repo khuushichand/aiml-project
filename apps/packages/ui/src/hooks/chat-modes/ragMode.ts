@@ -23,6 +23,7 @@ import {
   runChatPipeline,
   type ChatModeDefinition
 } from "./chatModePipeline"
+import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 const RAG_STRING_ARRAY_KEYS = new Set([
   "sources",
@@ -190,6 +191,7 @@ type RagModeParams = {
   ragEnableCitations: boolean
   ragSources: string[]
   ragAdvancedOptions?: Record<string, unknown>
+  systemPromptAppendix?: string
   actorSettings?: ActorSettings
   clusterId?: string
   userMessageType?: string
@@ -236,6 +238,10 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
     let query = ctx.message
     const { ragPrompt: systemPrompt, ragQuestionPrompt: questionPrompt } =
       await promptForRag()
+    const resolvedSystemPrompt = appendSystemPromptSuffix(
+      systemPrompt,
+      ctx.systemPromptAppendix
+    )
     const contextMessages = ctx.isRegenerate
       ? ctx.messages
       : [
@@ -362,7 +368,7 @@ const ragModeDefinition: ChatModeDefinition<RagModeParams> = {
     const humanMessage = await humanMessageFormatter({
       content: [
         {
-          text: systemPrompt
+          text: resolvedSystemPrompt
             .replace("{context}", context)
             .replace("{question}", ctx.message),
           type: "text"

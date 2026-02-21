@@ -12,6 +12,7 @@ import {
   runChatPipeline,
   type ChatModeDefinition
 } from "./chatModePipeline"
+import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 type TabChatModeParams = {
   selectedModel: string
@@ -27,6 +28,7 @@ type TabChatModeParams = {
   setAbortController: (controller: AbortController | null) => void
   historyId: string | null
   setHistoryId: (id: string) => void
+  systemPromptAppendix?: string
   actorSettings?: ActorSettings
   clusterId?: string
   userMessageType?: string
@@ -73,12 +75,16 @@ const tabChatModeDefinition: ChatModeDefinition<TabChatModeParams> = {
   }),
   preparePrompt: async (ctx) => {
     const { ragPrompt: systemPrompt } = await promptForRag()
+    const resolvedSystemPrompt = appendSystemPromptSuffix(
+      systemPrompt,
+      ctx.systemPromptAppendix
+    )
     const context = await getTabContents(ctx.documents)
 
     let humanMessage = await humanMessageFormatter({
       content: [
         {
-          text: systemPrompt
+          text: resolvedSystemPrompt
             .replace("{context}", context)
             .replace("{question}", ctx.message),
           type: "text"

@@ -1,5 +1,6 @@
 import type { ChatHistory } from "~/store/option"
 import type { ChatDocuments } from "@/models/ChatTypes"
+import type { ImageGenerationEventSyncPolicy } from "@/utils/image-generation-chat"
 
 export interface SaveMessageBase {
   historyId: string | null
@@ -18,6 +19,7 @@ export interface SaveMessageBase {
   documents?: ChatDocuments
   saveToDb?: boolean
   conversationId?: string
+  imageEventSyncPolicy?: ImageGenerationEventSyncPolicy
 }
 
 export interface SaveMessageData extends SaveMessageBase {

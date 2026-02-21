@@ -13,6 +13,7 @@ from loguru import logger
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest, ImageGenResult
 from tldw_Server_API.app.core.Image_Generation.config import (
+    DEFAULT_SWARMUI_BASE_URL,
     DEFAULT_SWARMUI_TIMEOUT_SECONDS,
     get_image_generation_config,
 )
@@ -61,7 +62,7 @@ class SwarmUIAdapter:
         return ImageGenResult(content=content, content_type=content_type, bytes_len=len(content))
 
     def _resolve_base_url(self) -> str:
-        raw = (self._config.swarmui_base_url or "").strip()
+        raw = (self._config.swarmui_base_url or DEFAULT_SWARMUI_BASE_URL or "").strip()
         if not raw:
             raise ImageBackendUnavailableError("swarmui_base_url is not configured")
         if not raw.startswith("http://") and not raw.startswith("https://"):

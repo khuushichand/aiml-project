@@ -3,12 +3,22 @@ import { useTranslation } from "react-i18next"
 import { PageShell } from "@/components/Common/PageShell"
 import { PromptBody } from "."
 import { PromptPageErrorBoundary } from "./PromptPageErrorBoundary"
+import { useLayoutUiStore } from "@/store/layout-ui"
 
 export const PromptsWorkspace: React.FC = () => {
   const { t } = useTranslation(["settings", "common"])
+  const chatSidebarCollapsed = useLayoutUiStore(
+    (state) => state.chatSidebarCollapsed
+  )
+  const pageShellMaxWidthClassName = chatSidebarCollapsed
+    ? "max-w-none"
+    : "max-w-5xl"
 
   return (
-    <PageShell className="space-y-4" maxWidthClassName="max-w-none">
+    <PageShell
+      className="space-y-4"
+      maxWidthClassName={pageShellMaxWidthClassName}
+    >
       <div className="space-y-1">
         <h1 className="text-lg font-semibold text-text">
           {t("option:header.modePromptsPlayground", "Prompts")}

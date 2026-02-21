@@ -16,6 +16,7 @@ type Props = {
   onClearPromptContext: () => void
   onClearPinnedSourceContext: () => void
   onClearHistoryContext: () => void
+  onCreateSummaryCheckpoint: () => void
   onReviewCharacterContext: () => void
   onTrimLargestContextContributor: () => void
 }
@@ -29,6 +30,7 @@ export const ContextFootprintPanel: React.FC<Props> = ({
   onClearPromptContext,
   onClearPinnedSourceContext,
   onClearHistoryContext,
+  onCreateSummaryCheckpoint,
   onReviewCharacterContext,
   onTrimLargestContextContributor
 }) => (
@@ -84,6 +86,16 @@ export const ContextFootprintPanel: React.FC<Props> = ({
         className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-subtle hover:bg-surface-hover hover:text-text"
       >
         {t("playground:tokens.clearHistoryContext", "Clear history")}
+      </button>
+      <button
+        type="button"
+        onClick={onCreateSummaryCheckpoint}
+        className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text-subtle hover:bg-surface-hover hover:text-text"
+      >
+        {t(
+          "playground:tokens.createSummaryCheckpoint",
+          "Create checkpoint summary"
+        )}
       </button>
       <button
         type="button"

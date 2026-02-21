@@ -30,6 +30,22 @@ def _make_config(**overrides) -> ImageGenerationConfig:
         swarmui_swarm_token=None,
         swarmui_allowed_extra_params=[],
         swarmui_timeout_seconds=120,
+        openrouter_image_base_url=None,
+        openrouter_image_api_key=None,
+        openrouter_image_default_model=None,
+        openrouter_image_allowed_extra_params=[],
+        openrouter_image_timeout_seconds=120,
+        novita_image_base_url=None,
+        novita_image_api_key=None,
+        novita_image_default_model=None,
+        novita_image_allowed_extra_params=[],
+        novita_image_timeout_seconds=180,
+        novita_image_poll_interval_seconds=2,
+        together_image_base_url=None,
+        together_image_api_key=None,
+        together_image_default_model=None,
+        together_image_allowed_extra_params=[],
+        together_image_timeout_seconds=120,
     )
     base.update(overrides)
     return ImageGenerationConfig(**base)

@@ -9,8 +9,16 @@ describe("PlaygroundForm signal surface guard", () => {
       __dirname,
       "../ContextFootprintPanel.tsx"
     )
+    const recommendationsPanelSourcePath = path.resolve(
+      __dirname,
+      "../ModelRecommendationsPanel.tsx"
+    )
     const formSource = fs.readFileSync(formSourcePath, "utf8")
     const contextPanelSource = fs.readFileSync(contextPanelSourcePath, "utf8")
+    const recommendationsPanelSource = fs.readFileSync(
+      recommendationsPanelSourcePath,
+      "utf8"
+    )
 
     expect(formSource).toContain("Type a message... (/ commands, @ mentions)")
     expect(formSource).toContain("Changed since last send:")
@@ -23,6 +31,10 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("ContextFootprintPanel")
     expect(formSource).toContain("playground:composer.compareActivationTitle")
     expect(formSource).toContain("playground:composer.compareActivationBody")
+    expect(formSource).toContain(
+      "playground:composer.compareActivationInteroperability"
+    )
+    expect(formSource).toContain("compare-interoperability-notices")
     expect(formSource).toContain(
       "playground:composer.validationCompareMinModelsInline"
     )
@@ -37,15 +49,39 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("el.focus()")
     expect(formSource).toContain("tldw:toggle-compare-mode")
     expect(formSource).toContain("tldw:toggle-mode-launcher")
+    expect(formSource).toContain("playground:composer.context.routing")
+    expect(formSource).toContain("playground:composer.context.truncationRisk")
+    expect(formSource).toContain("playground:composer.context.checkpoint")
     expect(formSource).toContain("playground:composer.context.contextMix")
+    expect(formSource).toContain("playground:composer.conflict.summaryCheckpointBudget")
     expect(formSource).toContain("playground:composer.conflict.contextFootprint")
+    expect(formSource).toContain("buildConversationSummaryCheckpointPrompt")
+    expect(formSource).toContain("evaluateSummaryCheckpointSuggestion")
+    expect(formSource).toContain("resolveTokenBudgetRisk")
+    expect(formSource).toContain("playground:tokens.truncationRisk")
     expect(formSource).toContain("playgroundStartupTemplateBundles")
     expect(formSource).toContain('data-testid="startup-template-controls"')
+    expect(formSource).toContain("SessionInsightsPanel")
+    expect(formSource).toContain("ModelRecommendationsPanel")
+    expect(formSource).toContain("buildSessionInsights")
+    expect(formSource).toContain("buildModelRecommendations")
+    expect(formSource).toContain("buildCompareInteroperabilityNotices")
+    expect(formSource).toContain("playground:insights.modalTitle")
     expect(formSource).toContain("startup-template-preview-modal")
     expect(formSource).toContain(
       "playground:composer.startupTemplatePreviewTitle"
     )
     expect(formSource).toContain("resolveStartupTemplatePrompt")
+    expect(formSource).toContain("image-refine-with-llm")
+    expect(formSource).toContain("image-prompt-refine-diff")
+    expect(formSource).toContain("applyRefinedImagePromptCandidate")
+    expect(formSource).toContain("imageGenerationRefine")
     expect(contextPanelSource).toContain("playground:tokens.contextBreakdownTitle")
+    expect(recommendationsPanelSource).toContain(
+      'data-testid="model-recommendations-panel"'
+    )
+    expect(recommendationsPanelSource).toContain(
+      "playground:composer.recommendationsTitle"
+    )
   })
 })

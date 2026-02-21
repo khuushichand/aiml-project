@@ -73,6 +73,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const isDiagramLanguage = ["mermaid", "diagram", "graphviz", "dot"].includes(
     normalizedLanguage
   )
+  const artifactId = computeKey()
   const artifactKind = isDiagramLanguage ? "diagram" : "code"
   const artifactOriginId = `artifact-origin-${artifactId}`
   const viewLabel = isDiagramLanguage
@@ -81,7 +82,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
   const downloadLabel = t("downloadCode", "Download code")
   const copyLabel = t("copyToClipboard", "Copy to clipboard")
   
-  const computeKey = () => {
+  function computeKey() {
     const content = value ?? ""
     const base =
       typeof blockIndex === "number"
@@ -94,7 +95,6 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
     return hash.toString(36)
   }
   const keyRef = useRef<string>(computeKey())
-  const artifactId = computeKey()
   const previewMapRef = useRef<Map<string, boolean> | null>(null)
   const collapsedMapRef = useRef<Map<string, boolean> | null>(null)
   const autoOpenMapRef = useRef<Map<string, boolean> | null>(null)

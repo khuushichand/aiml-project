@@ -251,4 +251,73 @@ describe("useCharacterGreeting", () => {
       expect(messageState[0]?.message).toBe("Alternate greeting")
     })
   })
+
+  it("does not inject greeting messages for server chats", async () => {
+    const selectedCharacter = {
+      id: "char-server",
+      name: "Server Guide",
+      greeting: "Server hello"
+    } as Character
+    let messageState: Message[] = []
+    let historyState: ChatHistory = []
+    const setMessages = vi.fn(
+      (next: Message[] | ((prev: Message[]) => Message[])) => {
+        messageState = applyMessageUpdate(messageState, next)
+      }
+    )
+    const setHistory = vi.fn(
+      (next: ChatHistory | ((prev: ChatHistory) => ChatHistory)) => {
+        historyState = applyHistoryUpdate(historyState, next)
+      }
+    )
+    const setSelectedCharacter = vi.fn()
+
+    renderHook(() =>
+      useCharacterGreeting({
+        playgroundReady: true,
+        selectedCharacter,
+        serverChatId: "srv-chat-1",
+        historyId: "history-server",
+        messagesLength: messageState.length,
+        setMessages,
+        setHistory,
+        setSelectedCharacter
+      })
+    )
+
+    await waitFor(() => {
+      expect(setMessages).not.toHaveBeenCalled()
+    })
+    expect(messageState).toHaveLength(0)
+    expect(historyState).toHaveLength(0)
+  })
+
+  it("does not sync selected character from storage during server chat load", async () => {
+    mocks.selectedCharacterStorageGet.mockResolvedValue({
+      id: "char-stale",
+      name: "Stale character",
+      greeting: "Old greeting"
+    })
+    const setMessages = vi.fn()
+    const setHistory = vi.fn()
+    const setSelectedCharacter = vi.fn()
+
+    renderHook(() =>
+      useCharacterGreeting({
+        playgroundReady: true,
+        selectedCharacter: null,
+        serverChatId: "srv-chat-2",
+        historyId: "history-server",
+        messagesLength: 0,
+        setMessages,
+        setHistory,
+        setSelectedCharacter
+      })
+    )
+
+    await waitFor(() => {
+      expect(setSelectedCharacter).not.toHaveBeenCalled()
+    })
+    expect(mocks.selectedCharacterStorageGet).not.toHaveBeenCalled()
+  })
 })

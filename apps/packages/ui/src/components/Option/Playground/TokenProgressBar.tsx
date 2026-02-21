@@ -1,7 +1,6 @@
 import React from "react"
 import { Tooltip } from "antd"
 import { useTranslation } from "react-i18next"
-import { withTemplateFallback } from "@/utils/template-guards"
 
 interface TokenProgressBarProps {
   /** Current conversation token count (excluding draft) */
@@ -76,6 +75,14 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
     t
   ])
 
+  const fallbackConversationLabel = React.useMemo(
+    () =>
+      `${formatNumber(conversationTokens)} + ~${formatNumber(
+        draftTokens
+      )} = ${formatNumber(totalTokens)} ${t("playground:tokens.tokenUnit", "tokens")}`,
+    [conversationTokens, draftTokens, formatNumber, t, totalTokens]
+  )
+
   if (!maxTokens || maxTokens <= 0) {
     if (isInteractive) {
       return (
@@ -88,13 +95,13 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
             "Configure context window size"
           )}
         >
-          <span>~{formatNumber(draftTokens)} {t("playground:tokens.tokenUnit", "tokens")}</span>
+          <span>{fallbackConversationLabel}</span>
         </button>
       )
     }
     return (
       <div className="inline-flex items-center gap-1.5 text-[11px] text-text-muted">
-        <span>~{formatNumber(draftTokens)} {t("playground:tokens.tokenUnit", "tokens")}</span>
+        <span>{fallbackConversationLabel}</span>
       </div>
     )
   }
@@ -103,12 +110,6 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
   const textColor = getProgressColorText(percentage)
 
   if (compact) {
-    const memoryUsageLabel = withTemplateFallback(
-      t("playground:tokens.memoryUsage", "Memory: {{percentage}}% full", {
-        percentage
-      }),
-      `Memory: ${percentage}% full`
-    )
     const compactContent = (
       <>
         <div className="relative h-1.5 w-16 sm:w-20 overflow-hidden rounded-full bg-border">
@@ -118,7 +119,7 @@ export const TokenProgressBar: React.FC<TokenProgressBarProps> = ({
           />
         </div>
         <span className={`text-xs sm:text-[10px] font-medium ${textColor}`}>
-          {memoryUsageLabel}
+          {fallbackConversationLabel}
         </span>
       </>
     )

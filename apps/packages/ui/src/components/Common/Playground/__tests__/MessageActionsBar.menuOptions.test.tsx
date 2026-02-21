@@ -130,4 +130,28 @@ describe("MessageActionsBar menu options", () => {
     expect(onQuickMessageAction).toHaveBeenNthCalledWith(3, "shorten")
     expect(onQuickMessageAction).toHaveBeenNthCalledWith(4, "explain")
   })
+
+  it("uses touch-sized controls for variant pager and overflow chip on compact layouts", () => {
+    render(
+      <MessageActionsBar
+        {...baseProps()}
+        showVariantPager
+        variantCount={3}
+        canSwipePrev
+        canSwipeNext
+        overflowChipVisibility="inline-flex"
+      />
+    )
+
+    const prevButton = screen.getByTestId("variant-prev-button")
+    const nextButton = screen.getByTestId("variant-next-button")
+    const overflowChip = screen.getByTestId("message-actions-overflow-chip")
+
+    expect(prevButton.className).toContain("min-h-[44px]")
+    expect(prevButton.className).toContain("min-w-[44px]")
+    expect(nextButton.className).toContain("min-h-[44px]")
+    expect(nextButton.className).toContain("min-w-[44px]")
+    expect(overflowChip.className).toContain("min-h-[44px]")
+    expect(overflowChip.className).toContain("min-w-[44px]")
+  })
 })

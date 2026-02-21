@@ -189,4 +189,66 @@ describe("KnowledgeQAProvider branch/share actions", () => {
       expect(latestContext!.results).toHaveLength(1)
     })
   })
+
+  it("handles expired share links with a safe recovery state", async () => {
+    resolveConversationShareLinkMock.mockRejectedValueOnce(
+      new Error("HTTP 410 expired")
+    )
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await act(async () => {
+      await latestContext!.selectSharedThread("token-expired")
+    })
+
+    await waitFor(() => {
+      expect(resolveConversationShareLinkMock).toHaveBeenCalledWith(
+        "token-expired"
+      )
+      expect(latestContext!.currentThreadId).toBeNull()
+      expect(latestContext!.messages).toEqual([])
+      expect(latestContext!.results).toEqual([])
+      expect(latestContext!.answer).toBeNull()
+      expect(latestContext!.error).toBe(
+        "Unable to open this shared conversation link."
+      )
+    })
+  })
+
+  it("handles revoked share links with a safe recovery state", async () => {
+    resolveConversationShareLinkMock.mockRejectedValueOnce(
+      new Error("HTTP 403 revoked")
+    )
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await act(async () => {
+      await latestContext!.selectSharedThread("token-revoked")
+    })
+
+    await waitFor(() => {
+      expect(resolveConversationShareLinkMock).toHaveBeenCalledWith(
+        "token-revoked"
+      )
+      expect(latestContext!.currentThreadId).toBeNull()
+      expect(latestContext!.messages).toEqual([])
+      expect(latestContext!.results).toEqual([])
+      expect(latestContext!.answer).toBeNull()
+      expect(latestContext!.error).toBe(
+        "Unable to open this shared conversation link."
+      )
+    })
+  })
 })
