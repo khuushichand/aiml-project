@@ -40,7 +40,7 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_review_metrics,
     record_claims_webhook_delivery,
 )
-from tldw_Server_API.app.core.Claims_Extraction.span_alignment import find_text_span
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
@@ -358,6 +358,18 @@ def _resolve_corrected_claim_span(
     corrected_text: str,
 ) -> tuple[int | None, int | None]:
     try:
+        alignment_mode = str(settings.get("CLAIMS_ALIGNMENT_MODE", "fuzzy")).strip().lower()
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        alignment_mode = "fuzzy"
+    if alignment_mode not in {"off", "exact", "fuzzy"}:
+        alignment_mode = "fuzzy"
+    try:
+        alignment_threshold = float(settings.get("CLAIMS_ALIGNMENT_THRESHOLD", 0.75))
+    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+        alignment_threshold = 0.75
+    alignment_threshold = max(0.0, min(1.0, alignment_threshold))
+
+    try:
         media_id = int(claim_row.get("media_id") or 0)
         chunk_index = int(claim_row.get("chunk_index") or 0)
     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
@@ -370,7 +382,12 @@ def _resolve_corrected_claim_span(
     chunk_text = chunk_row.get("chunk_text")
     if not chunk_text:
         return (None, None)
-    span = find_text_span(str(chunk_text), str(corrected_text))
+    span = align_claim_span(
+        str(chunk_text),
+        str(corrected_text),
+        mode=alignment_mode,
+        threshold=alignment_threshold,
+    )
     if span is None:
         return (None, None)
     span_start, span_end = span
