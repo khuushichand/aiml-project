@@ -1333,8 +1333,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     length_penalty=_cfg_float("mlx_length_penalty", 0.0) if stt_cfg.get("mlx_length_penalty") is not None else None,
                     patience=_cfg_float("mlx_patience", 0.0) if stt_cfg.get("mlx_patience") is not None else None,
                     duration_reward=_cfg_float("mlx_duration_reward", 0.0) if stt_cfg.get("mlx_duration_reward") is not None else None,
-                    sentence_max_words=_cfg_int("mlx_sentence_max_words", 0) or None,
-                    sentence_silence_gap=_cfg_float("mlx_sentence_silence_gap", 0.0) if stt_cfg.get("mlx_sentence_silence_gap") is not None else None,
+                    duration_reward=_cfg_float("mlx_duration_reward", 0.0) if stt_cfg.get("mlx_duration_reward") is not None else None,
                     sentence_max_duration=_cfg_float("mlx_sentence_max_duration", 0.0) if stt_cfg.get("mlx_sentence_max_duration") is not None else None,
                 )
                 if self._mlx_stream_session is not None:
