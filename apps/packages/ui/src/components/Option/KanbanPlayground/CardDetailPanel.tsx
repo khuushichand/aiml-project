@@ -70,8 +70,8 @@ export const CardDetailPanel = ({
       message.success("Card copied")
       onCopied?.()
     },
-    onError: (err) => {
-      message.error(`Copy failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to copy card. Please try again.")
     }
   })
 
@@ -93,8 +93,8 @@ export const CardDetailPanel = ({
         queryKey: ["kanban-card-comments", card?.id]
       })
     },
-    onError: (err) => {
-      message.error(`Comment failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to add comment. Please try again.")
     }
   })
 
@@ -181,8 +181,8 @@ export const CardDetailPanel = ({
                 />
               )}
               <Popconfirm
-                title="Delete this card permanently?"
-                description="This cannot be undone."
+                title="Delete this card?"
+                description="This card will be removed. This cannot be undone."
                 onConfirm={() => onDelete(card.id)}
                 okText="Delete"
                 okType="danger"
@@ -191,7 +191,7 @@ export const CardDetailPanel = ({
                   danger
                   type="text"
                   icon={<Trash2 className="w-4 h-4" />}
-                  title="Delete permanently"
+                  title="Delete card"
                 />
               </Popconfirm>
             </Space>
@@ -200,7 +200,7 @@ export const CardDetailPanel = ({
       }
       open={open}
       onClose={onClose}
-      size={400}
+      width={400}
       footer={
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>

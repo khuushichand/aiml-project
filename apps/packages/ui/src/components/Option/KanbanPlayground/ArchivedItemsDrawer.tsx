@@ -57,20 +57,20 @@ export const ArchivedItemsDrawer = ({
       queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
       queryClient.invalidateQueries({ queryKey: ["kanban-boards-archived"] })
     },
-    onError: (err) => {
-      message.error(`Failed to restore board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to restore. Please try again.")
     }
   })
 
   const deleteBoardMutation = useMutation({
     mutationFn: (boardId: number) => deleteBoard(boardId),
     onSuccess: () => {
-      message.success("Board deleted permanently")
+      message.success("Board deleted")
       queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
       queryClient.invalidateQueries({ queryKey: ["kanban-boards-archived"] })
     },
-    onError: (err) => {
-      message.error(`Failed to delete board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete. Please try again.")
     }
   })
 
@@ -80,19 +80,19 @@ export const ArchivedItemsDrawer = ({
       message.success("List restored")
       if (board) queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to restore: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to restore. Please try again.")
     }
   })
 
   const deleteListMutation = useMutation({
     mutationFn: (listId: number) => deleteList(listId),
     onSuccess: () => {
-      message.success("List deleted permanently")
+      message.success("List deleted")
       if (board) queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete. Please try again.")
     }
   })
 
@@ -102,19 +102,19 @@ export const ArchivedItemsDrawer = ({
       message.success("Card restored")
       if (board) queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to restore: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to restore. Please try again.")
     }
   })
 
   const deleteCardMutation = useMutation({
     mutationFn: (cardId: number) => deleteCard(cardId),
     onSuccess: () => {
-      message.success("Card deleted permanently")
+      message.success("Card deleted")
       if (board) queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete. Please try again.")
     }
   })
 
@@ -136,7 +136,7 @@ export const ArchivedItemsDrawer = ({
         Restore
       </Button>
       <Popconfirm
-        title={`Delete "${name}" permanently?`}
+        title={`Delete "${name}"?`}
         description="This cannot be undone."
         onConfirm={onDelete}
         okText="Delete"

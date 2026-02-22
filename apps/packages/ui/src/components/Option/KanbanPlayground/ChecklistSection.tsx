@@ -43,8 +43,8 @@ export const ChecklistSection = ({ cardId }: ChecklistSectionProps) => {
       setAddingChecklist(false)
       setNewChecklistTitle("")
     },
-    onError: (err) => {
-      message.error(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create checklist. Please try again.")
     }
   })
 
@@ -124,12 +124,18 @@ const SingleChecklist = ({
     onSuccess: () => {
       setEditingTitle(false)
       onChanged()
+    },
+    onError: () => {
+      message.error("Failed to rename checklist. Please try again.")
     }
   })
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteChecklist(checklist.id),
-    onSuccess: onChanged
+    onSuccess: onChanged,
+    onError: () => {
+      message.error("Failed to delete checklist. Please try again.")
+    }
   })
 
   const addItemMutation = useMutation({
@@ -141,24 +147,36 @@ const SingleChecklist = ({
     onSuccess: () => {
       setNewItemContent("")
       onChanged()
+    },
+    onError: () => {
+      message.error("Failed to add item. Please try again.")
     }
   })
 
   const toggleItemMutation = useMutation({
     mutationFn: ({ itemId, checked }: { itemId: number; checked: boolean }) =>
       updateChecklistItem(itemId, { checked }),
-    onSuccess: onChanged
+    onSuccess: onChanged,
+    onError: () => {
+      message.error("Failed to update item. Please try again.")
+    }
   })
 
   const updateItemContentMutation = useMutation({
     mutationFn: ({ itemId, content }: { itemId: number; content: string }) =>
       updateChecklistItem(itemId, { content }),
-    onSuccess: onChanged
+    onSuccess: onChanged,
+    onError: () => {
+      message.error("Failed to update item. Please try again.")
+    }
   })
 
   const deleteItemMutation = useMutation({
     mutationFn: (itemId: number) => deleteChecklistItem(itemId),
-    onSuccess: onChanged
+    onSuccess: onChanged,
+    onError: () => {
+      message.error("Failed to delete item. Please try again.")
+    }
   })
 
   const handleAddItem = () => {

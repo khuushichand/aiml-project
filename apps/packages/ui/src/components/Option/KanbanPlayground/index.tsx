@@ -91,8 +91,8 @@ export const KanbanPlayground = () => {
       setNewBoardName("")
       setNewBoardDescription("")
     },
-    onError: (err) => {
-      message.error(`Failed to create board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create board. Please try again.")
     }
   })
 
@@ -104,8 +104,8 @@ export const KanbanPlayground = () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
       setSelectedBoardId(null)
     },
-    onError: (err) => {
-      message.error(`Failed to delete board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete board. Please try again.")
     }
   })
 
@@ -117,8 +117,8 @@ export const KanbanPlayground = () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
       setSelectedBoardId(null)
     },
-    onError: (err) => {
-      message.error(`Failed to archive board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to archive board. Please try again.")
     }
   })
 
@@ -160,7 +160,7 @@ export const KanbanPlayground = () => {
       URL.revokeObjectURL(url)
       message.success("Board exported")
     } catch (err) {
-      message.error(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+      message.error("Failed to export board. Please try again.")
     }
   }, [selectedBoardId, boardData])
 
@@ -189,9 +189,7 @@ export const KanbanPlayground = () => {
         queryKey: ["kanban-board", selectedBoardId]
       })
     } catch (err) {
-      message.error(
-        `Failed: ${err instanceof Error ? err.message : "Unknown error"}`
-      )
+      message.error("Failed to create lists. Please try again.")
     }
   }, [selectedBoardId, queryClient])
 

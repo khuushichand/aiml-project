@@ -61,6 +61,7 @@ export const LabelManager = ({
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["kanban-board-labels", boardId] })
+    queryClient.invalidateQueries({ queryKey: ["kanban-board", boardId] })
     onChanged?.()
   }
 
@@ -75,8 +76,8 @@ export const LabelManager = ({
       setNewLabelName("")
       invalidate()
     },
-    onError: (err) => {
-      message.error(`Failed to create label: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create label. Please try again.")
     }
   })
 
@@ -87,32 +88,32 @@ export const LabelManager = ({
       setEditingId(null)
       invalidate()
     },
-    onError: (err) => {
-      message.error(`Failed to update label: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to update label. Please try again.")
     }
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteLabel(id),
     onSuccess: () => invalidate(),
-    onError: (err) => {
-      message.error(`Failed to delete label: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete label. Please try again.")
     }
   })
 
   const assignMutation = useMutation({
     mutationFn: (labelId: number) => assignLabelToCard(cardId, labelId),
     onSuccess: () => invalidate(),
-    onError: (err) => {
-      message.error(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to update label assignment. Please try again.")
     }
   })
 
   const removeMutation = useMutation({
     mutationFn: (labelId: number) => removeLabelFromCard(cardId, labelId),
     onSuccess: () => invalidate(),
-    onError: (err) => {
-      message.error(`Failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to update label assignment. Please try again.")
     }
   })
 

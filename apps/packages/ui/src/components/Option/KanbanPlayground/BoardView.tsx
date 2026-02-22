@@ -126,19 +126,27 @@ export const BoardView = ({
               if (!a) return
               undoRef.current = null
               if (a.type === "archive-card") {
-                unarchiveCard(a.entityId).then(() => {
-                  queryClient.invalidateQueries({
-                    queryKey: ["kanban-board", board.id]
+                unarchiveCard(a.entityId)
+                  .then(() => {
+                    queryClient.invalidateQueries({
+                      queryKey: ["kanban-board", board.id]
+                    })
+                    message.success("Card restored")
                   })
-                  message.success("Card restored")
-                })
+                  .catch(() => {
+                    message.error("Failed to restore card. Please try again.")
+                  })
               } else if (a.type === "archive-list") {
-                unarchiveList(a.entityId).then(() => {
-                  queryClient.invalidateQueries({
-                    queryKey: ["kanban-board", board.id]
+                unarchiveList(a.entityId)
+                  .then(() => {
+                    queryClient.invalidateQueries({
+                      queryKey: ["kanban-board", board.id]
+                    })
+                    message.success("List restored")
                   })
-                  message.success("List restored")
-                })
+                  .catch(() => {
+                    message.error("Failed to restore list. Please try again.")
+                  })
               }
             }}
           >
@@ -160,8 +168,8 @@ export const BoardView = ({
       setAddingList(false)
       setNewListName("")
     },
-    onError: (err) => {
-      message.error(`Failed to create list: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create list. Please try again.")
     }
   })
 
@@ -173,10 +181,8 @@ export const BoardView = ({
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
       setRenameModalOpen(false)
     },
-    onError: (err) => {
-      message.error(
-        `Failed to rename board: ${err instanceof Error ? err.message : "Unknown error"}`
-      )
+    onError: () => {
+      message.error("Failed to rename board. Please try again.")
     }
   })
 
@@ -187,8 +193,8 @@ export const BoardView = ({
       message.success("List renamed")
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to rename list: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to rename list. Please try again.")
     }
   })
 
@@ -198,8 +204,8 @@ export const BoardView = ({
       message.success("List deleted")
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to delete list: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete list. Please try again.")
     }
   })
 
@@ -210,8 +216,8 @@ export const BoardView = ({
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
       showUndoToast({ type: "archive-list", entityId: listId, label: listName })
     },
-    onError: (err) => {
-      message.error(`Failed to archive list: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to archive list. Please try again.")
     }
   })
 
@@ -233,8 +239,8 @@ export const BoardView = ({
         label: cardTitle
       })
     },
-    onError: (err) => {
-      message.error(`Failed to archive card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to archive card. Please try again.")
     }
   })
 
@@ -245,8 +251,8 @@ export const BoardView = ({
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
       setAddingCardListId(null)
     },
-    onError: (err) => {
-      message.error(`Failed to create card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create card. Please try again.")
     }
   })
 
@@ -256,8 +262,8 @@ export const BoardView = ({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to update card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to update card. Please try again.")
     }
   })
 
@@ -269,8 +275,8 @@ export const BoardView = ({
       setDetailPanelOpen(false)
       setSelectedCard(null)
     },
-    onError: (err) => {
-      message.error(`Failed to delete card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete card. Please try again.")
     }
   })
 
@@ -287,8 +293,8 @@ export const BoardView = ({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to move card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to move card. Please try again.")
     }
   })
 
@@ -308,11 +314,11 @@ export const BoardView = ({
       }
       return { previous }
     },
-    onError: (err, _vars, context) => {
+    onError: (_err, _vars, context) => {
       if (context?.previous) {
         queryClient.setQueryData(["kanban-board", board.id], context.previous)
       }
-      message.error(`Failed to reorder lists: ${err instanceof Error ? err.message : "Unknown error"}`)
+      message.error("Failed to reorder lists. Please try again.")
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
@@ -340,11 +346,11 @@ export const BoardView = ({
       }
       return { previous }
     },
-    onError: (err, _vars, context) => {
+    onError: (_err, _vars, context) => {
       if (context?.previous) {
         queryClient.setQueryData(["kanban-board", board.id], context.previous)
       }
-      message.error(`Failed to reorder cards: ${err instanceof Error ? err.message : "Unknown error"}`)
+      message.error("Failed to reorder cards. Please try again.")
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
@@ -635,10 +641,10 @@ export const BoardView = ({
             </Button>
           )}
           <Popconfirm
-            title="Delete this board permanently?"
-            description="All lists and cards will be permanently deleted. This cannot be undone."
+            title="Delete this board?"
+            description="All lists and cards will be removed. This cannot be undone."
             onConfirm={onDelete}
-            okText="Delete Permanently"
+            okText="Delete"
             okType="danger"
           >
             <Button danger type="text" icon={<Trash2 className="w-4 h-4" />} size="small">
@@ -955,7 +961,7 @@ const SortableList = ({
     },
     {
       key: "delete",
-      label: "Delete Permanently",
+      label: "Delete List",
       danger: true,
       icon: <Trash2 className="w-4 h-4" />,
       onClick: () => setDeleteConfirmOpen(true)
@@ -1004,7 +1010,7 @@ const SortableList = ({
         </div>
         <Popconfirm
           title={`Delete list '${list.name}'?`}
-          description={`${list.cards.length} card${list.cards.length !== 1 ? "s" : ""} will be deleted.`}
+          description={`${list.cards.length} card${list.cards.length !== 1 ? "s" : ""} will be removed.`}
           open={deleteConfirmOpen}
           onConfirm={() => {
             setDeleteConfirmOpen(false)
@@ -1014,7 +1020,7 @@ const SortableList = ({
           okText="Delete"
           okType="danger"
         >
-          <span />
+          <span className="absolute w-0 h-0 overflow-hidden" />
         </Popconfirm>
         <Dropdown menu={{ items: menuItems }} trigger={["click"]}>
           <Button
