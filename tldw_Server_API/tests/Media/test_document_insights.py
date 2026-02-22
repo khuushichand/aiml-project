@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-from tldw_Server_API.app.api.v1.schemas.document_insights import GenerateInsightsRequest
 from tldw_Server_API.app.api.v1.endpoints.media import document_insights as insights_mod
+from tldw_Server_API.app.api.v1.schemas.document_insights import GenerateInsightsRequest
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.main import app
 
 
 @pytest.fixture
@@ -33,8 +33,11 @@ def mock_db():
 
 
 class _StubAdapter:
+    def __init__(self, payload=None):
+        self._payload = payload if payload is not None else {"ok": True}
+
     def chat(self, _payload):
-        return {"ok": True}
+        return self._payload
 
 
 @pytest.mark.asyncio
@@ -119,3 +122,58 @@ def test_build_insights_cache_key_includes_scope_and_length(mock_db):
     assert "user:42" in key
     assert f"db:{mock_db.db_path_str}" in key
     assert "maxlen:1234" in key
+
+
+@pytest.mark.asyncio
+async def test_generate_document_insights_parses_fenced_json_with_think(mock_user, mock_db):
+    app.dependency_overrides[get_request_user] = lambda: mock_user
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_db
+
+    fenced_payload = (
+        "<think>analysis</think>\n"
+        "```json\n"
+        "{\"insights\":[{\"category\":\"summary\",\"title\":\"T\",\"content\":\"C\"}]}\n"
+        "```"
+    )
+
+    with patch.object(insights_mod, "_get_adapter", return_value=_StubAdapter()), patch.object(
+        insights_mod, "resolve_provider_api_key", return_value=("key", None)
+    ), patch.object(insights_mod, "provider_requires_api_key", return_value=False), patch.object(
+        insights_mod, "_resolve_model", return_value="test-model"
+    ), patch.object(
+        insights_mod, "extract_response_content", return_value=fenced_payload
+    ), patch.object(
+        insights_mod, "get_cached_response", return_value=None
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/v1/media/1/insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["insights"][0]["category"] == "summary"
+    assert payload["insights"][0]["title"] == "T"
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_generate_document_insights_invalid_json_returns_500(mock_user, mock_db):
+    app.dependency_overrides[get_request_user] = lambda: mock_user
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_db
+
+    with patch.object(insights_mod, "_get_adapter", return_value=_StubAdapter()), patch.object(
+        insights_mod, "resolve_provider_api_key", return_value=("key", None)
+    ), patch.object(insights_mod, "provider_requires_api_key", return_value=False), patch.object(
+        insights_mod, "_resolve_model", return_value="test-model"
+    ), patch.object(
+        insights_mod, "extract_response_content", return_value="this is not json"
+    ), patch.object(
+        insights_mod, "get_cached_response", return_value=None
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/v1/media/1/insights")
+
+    assert response.status_code == 500
+    assert "Failed to parse insights" in response.text
+
+    app.dependency_overrides.clear()

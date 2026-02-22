@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from typing import Any
 
@@ -32,6 +31,10 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputOptions,
+    parse_structured_output,
+)
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -103,36 +106,6 @@ def _resolve_model(provider: str, model: str | None, app_config: dict[str, Any])
         return model
     key = f"{provider.replace('-', '_').replace('.', '_')}_api"
     return (app_config.get(key) or {}).get("model")
-
-
-def _extract_json_payload(raw: Any) -> Any:
-    """Extract JSON payload from LLM response."""
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        text = raw.strip()
-        # Handle markdown code blocks
-        if text.startswith("```"):
-            lines = text.split("\n")
-            # Remove first line (```json or ```)
-            if lines:
-                lines = lines[1:]
-            # Remove last line if it's ```)
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Try to find JSON object in text
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                try:
-                    return json.loads(text[start:end])
-                except json.JSONDecodeError:
-                    pass
-    return raw
 
 
 def _normalize_insights(raw_insights: list[Any]) -> list[InsightItem]:
@@ -367,7 +340,10 @@ async def generate_document_insights(
     # 6. Parse response
     try:
         content_text = extract_response_content(raw_response)
-        payload = _extract_json_payload(content_text if content_text is not None else raw_response)
+        payload = parse_structured_output(
+            content_text if content_text is not None else raw_response,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
 
         raw_insights = payload.get("insights") if isinstance(payload, dict) else payload
 

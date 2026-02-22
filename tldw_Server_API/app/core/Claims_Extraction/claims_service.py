@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.claims_clustering import rebuild_claim_clusters_embeddings
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
@@ -40,7 +41,6 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_review_metrics,
     record_claims_webhook_delivery,
 )
-from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import coerce_llm_response_text
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
@@ -122,9 +122,7 @@ def _legacy_user_has_platform_admin_claims(current_user: User | Any | None) -> b
     permissions = _normalized_claim_values(getattr(current_user, "permissions", None))
     if role in _PLATFORM_ADMIN_ROLES or roles & _PLATFORM_ADMIN_ROLES:
         return True
-    if permissions & _ADMIN_CLAIM_PERMISSIONS:
-        return True
-    return False
+    return bool(permissions & _ADMIN_CLAIM_PERMISSIONS)
 
 
 def _is_db_pool_object(db: Any) -> bool:
@@ -1113,8 +1111,12 @@ def _claims_settings_snapshot() -> dict[str, Any]:
         "claims_llm_temperature": float(settings.get("CLAIMS_LLM_TEMPERATURE", 0.1)),
         "claims_llm_model": str(settings.get("CLAIMS_LLM_MODEL", "")),
         "claims_json_parse_mode": str(settings.get("CLAIMS_JSON_PARSE_MODE", "lenient")),
+        "claims_prompt_validation_mode": str(settings.get("CLAIMS_PROMPT_VALIDATION_MODE", "warning")),
+        "claims_prompt_validation_strict": bool(settings.get("CLAIMS_PROMPT_VALIDATION_STRICT", False)),
         "claims_alignment_mode": str(settings.get("CLAIMS_ALIGNMENT_MODE", "fuzzy")),
         "claims_alignment_threshold": float(settings.get("CLAIMS_ALIGNMENT_THRESHOLD", 0.75)),
+        "claims_context_window_chars": int(settings.get("CLAIMS_CONTEXT_WINDOW_CHARS", 0)),
+        "claims_extraction_passes": int(settings.get("CLAIMS_EXTRACTION_PASSES", 1)),
         "claims_rebuild_enabled": bool(settings.get("CLAIMS_REBUILD_ENABLED", False)),
         "claims_rebuild_interval_sec": int(settings.get("CLAIMS_REBUILD_INTERVAL_SEC", 3600)),
         "claims_rebuild_policy": str(settings.get("CLAIMS_REBUILD_POLICY", "missing")),
@@ -2037,10 +2039,18 @@ def update_claims_settings(
         updates["CLAIMS_LLM_MODEL"] = str(payload["claims_llm_model"])
     if payload.get("claims_json_parse_mode") is not None:
         updates["CLAIMS_JSON_PARSE_MODE"] = str(payload["claims_json_parse_mode"]).strip().lower()
+    if payload.get("claims_prompt_validation_mode") is not None:
+        updates["CLAIMS_PROMPT_VALIDATION_MODE"] = str(payload["claims_prompt_validation_mode"]).strip().lower()
+    if payload.get("claims_prompt_validation_strict") is not None:
+        updates["CLAIMS_PROMPT_VALIDATION_STRICT"] = bool(payload["claims_prompt_validation_strict"])
     if payload.get("claims_alignment_mode") is not None:
         updates["CLAIMS_ALIGNMENT_MODE"] = str(payload["claims_alignment_mode"]).strip().lower()
     if payload.get("claims_alignment_threshold") is not None:
         updates["CLAIMS_ALIGNMENT_THRESHOLD"] = float(payload["claims_alignment_threshold"])
+    if payload.get("claims_context_window_chars") is not None:
+        updates["CLAIMS_CONTEXT_WINDOW_CHARS"] = int(payload["claims_context_window_chars"])
+    if payload.get("claims_extraction_passes") is not None:
+        updates["CLAIMS_EXTRACTION_PASSES"] = int(payload["claims_extraction_passes"])
     if payload.get("claims_rebuild_enabled") is not None:
         updates["CLAIMS_REBUILD_ENABLED"] = bool(payload["claims_rebuild_enabled"])
     if payload.get("claims_rebuild_interval_sec") is not None:

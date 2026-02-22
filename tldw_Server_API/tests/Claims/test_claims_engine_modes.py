@@ -271,3 +271,77 @@ def test_claims_engine_records_response_format_selection(monkeypatch):
     modes = {item.get("mode") for item in captured}
     assert "extract" in modes
     assert "verify" in modes
+
+
+@pytest.mark.unit
+def test_claims_engine_multi_pass_dedupes_first_pass_wins(monkeypatch):
+    import tldw_Server_API.app.core.Claims_Extraction.claims_engine as engine_mod
+
+    calls = {"extract": 0}
+
+    monkeypatch.setattr(engine_mod, "_resolve_claims_extraction_passes", lambda: 3)
+    monkeypatch.setattr(engine_mod, "_resolve_claims_context_window_chars", lambda: 64)
+
+    def _analyze_multi_pass(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs,
+    ):
+        if system_message and "fact-checking judge" in system_message:
+            return '{"label": "nei", "confidence": 0.4, "rationale": "stub"}'
+        calls["extract"] += 1
+        return '{"claims": [{"text": "Repeated multi-pass claim."}]}'
+
+    engine = ClaimsEngine(_analyze_multi_pass)
+
+    async def _run():
+        result = await engine.run(
+            answer="Repeated multi-pass claim.",
+            query="Q",
+            documents=[Doc("d1", "Repeated multi-pass claim context.", 0.5)],
+            claim_extractor="llm",
+            claim_verifier="nli",
+            claims_max=5,
+        )
+        claims = result.get("claims") or []
+        assert len(claims) == 1
+        assert claims[0].get("text") == "Repeated multi-pass claim."
+
+    asyncio.run(_run())
+    assert calls["extract"] == 3
+
+
+@pytest.mark.unit
+def test_claims_engine_summary_includes_refuted_status_count():
+    def _analyze_refuted(
+        api_name: str,
+        input_data: Any,
+        custom_prompt_arg: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        **kwargs,
+    ):
+        if system_message and "fact-checking judge" in system_message:
+            return '{"label": "refuted", "confidence": 0.95, "rationale": "stub"}'
+        return '{"claims": [{"text": "Claim to refute."}]}'
+
+    engine = ClaimsEngine(_analyze_refuted)
+
+    async def _run():
+        result = await engine.run(
+            answer="Claim to refute.",
+            query="Q",
+            documents=[Doc("d1", "Contradictory context.", 0.9)],
+            claim_extractor="llm",
+            claim_verifier="llm",
+            claims_max=2,
+        )
+        summary = result.get("summary") or {}
+        assert int(summary.get("refuted_status", 0)) >= 1
+
+    asyncio.run(_run())

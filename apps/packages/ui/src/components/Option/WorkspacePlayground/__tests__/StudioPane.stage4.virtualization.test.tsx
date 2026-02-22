@@ -215,6 +215,19 @@ if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
   }
 }
 
+const expandGeneratedOutputsSection = () => {
+  const toggle = screen.getByRole("button", { name: /Generated Outputs/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const renderStudioPane = () => {
+  const renderResult = render(<StudioPane />)
+  expandGeneratedOutputsSection()
+  return renderResult
+}
+
 const buildArtifacts = (count: number) =>
   Array.from({ length: count }, (_, index) => ({
     id: `artifact-${index}`,
@@ -236,7 +249,7 @@ describe("StudioPane Stage 4 outputs virtualization", () => {
   })
 
   it("activates virtualization when artifact history is large", () => {
-    render(<StudioPane />)
+    renderStudioPane()
 
     const listContainer = screen.getByTestId("generated-outputs-virtualized")
     expect(listContainer).toHaveAttribute("data-virtualized", "true")
@@ -254,7 +267,7 @@ describe("StudioPane Stage 4 outputs virtualization", () => {
         return { destroy: vi.fn(), update: vi.fn() } as any
       })
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     const listContainer = screen.getByTestId("generated-outputs-virtualized")
     fireEvent.scroll(listContainer, { target: { scrollTop: 4_500 } })

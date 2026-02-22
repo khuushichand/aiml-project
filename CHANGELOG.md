@@ -21,7 +21,22 @@ and this project adheres to Some kind of Versioning
 -
 
 
-## [0.1.21] 2026-02-X
+## [0.1.22] 2026-02-X
+
+### Added
+-
+
+### Changed
+-
+
+### Removed
+- 
+
+### Fixed
+-
+
+
+## [0.1.21] 2026-02-21
 
 ### Added
 - New security and regression tests for:

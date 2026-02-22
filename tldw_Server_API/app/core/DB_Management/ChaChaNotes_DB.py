@@ -432,10 +432,21 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 25  # Schema v25 adds quiz hints and hint-penalty scoring metadata
+    _CURRENT_SCHEMA_VERSION = 26  # Schema v26 adds persona profile/scope/policy/session/memory tables
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
+    _ALLOWED_PERSONA_MODES: tuple[str, ...] = ("session_scoped", "persistent_scoped")
+    _DEFAULT_PERSONA_MODE = "session_scoped"
+    _ALLOWED_PERSONA_SCOPE_RULE_TYPES: tuple[str, ...] = (
+        "conversation_id",
+        "character_id",
+        "media_id",
+        "media_tag",
+        "note_id",
+    )
+    _ALLOWED_PERSONA_POLICY_RULE_KINDS: tuple[str, ...] = ("mcp_tool", "skill")
+    _ALLOWED_PERSONA_SESSION_STATUSES: tuple[str, ...] = ("active", "paused", "closed", "archived")
 
     _FTS_CONFIG: list[tuple[str, str, list[str]]] = [
         (
@@ -500,6 +511,8 @@ class CharactersRAGDB:
         ("writing_themes", "id"),
         ("voice_command_events", "id"),
         ("skill_registry", "id"),
+        ("persona_scope_rules", "id"),
+        ("persona_policy_rules", "id"),
     )
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -2693,6 +2706,117 @@ UPDATE db_schema_version
    AND version < 25;
 """
 
+    _MIGRATION_SQL_V25_TO_V26 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 26 - Persona profile/scoping persistence (2026-02-22)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS persona_profiles(
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  character_card_id INTEGER REFERENCES character_cards(id) ON DELETE SET NULL ON UPDATE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'session_scoped'
+    CHECK(mode IN ('session_scoped','persistent_scoped')),
+  system_prompt TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(user_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_profiles_user ON persona_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_persona_profiles_user_active ON persona_profiles(user_id, deleted, is_active);
+CREATE INDEX IF NOT EXISTS idx_persona_profiles_character ON persona_profiles(character_card_id);
+
+CREATE TABLE IF NOT EXISTS persona_scope_rules(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  rule_type TEXT NOT NULL
+    CHECK(rule_type IN ('conversation_id','character_id','media_id','media_tag','note_id')),
+  rule_value TEXT NOT NULL,
+  include BOOLEAN NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_scope_rules_persona ON persona_scope_rules(persona_id, deleted, include);
+CREATE INDEX IF NOT EXISTS idx_persona_scope_rules_user_type ON persona_scope_rules(user_id, rule_type, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_scope_rules_value ON persona_scope_rules(rule_type, rule_value);
+
+CREATE TABLE IF NOT EXISTS persona_policy_rules(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  rule_kind TEXT NOT NULL CHECK(rule_kind IN ('mcp_tool','skill')),
+  rule_name TEXT NOT NULL,
+  allowed BOOLEAN NOT NULL DEFAULT 1,
+  require_confirmation BOOLEAN NOT NULL DEFAULT 0,
+  max_calls_per_turn INTEGER,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_policy_rules_persona ON persona_policy_rules(persona_id, deleted, rule_kind);
+CREATE INDEX IF NOT EXISTS idx_persona_policy_rules_user ON persona_policy_rules(user_id, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_policy_rules_lookup ON persona_policy_rules(rule_kind, rule_name, deleted);
+
+CREATE TABLE IF NOT EXISTS persona_sessions(
+  id TEXT PRIMARY KEY,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  mode TEXT NOT NULL DEFAULT 'session_scoped'
+    CHECK(mode IN ('session_scoped','persistent_scoped')),
+  reuse_allowed BOOLEAN NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active','paused','closed','archived')),
+  scope_snapshot_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_sessions_user ON persona_sessions(user_id, deleted, status);
+CREATE INDEX IF NOT EXISTS idx_persona_sessions_persona ON persona_sessions(persona_id, deleted, status);
+CREATE INDEX IF NOT EXISTS idx_persona_sessions_conversation ON persona_sessions(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_persona_sessions_last_modified ON persona_sessions(last_modified);
+
+CREATE TABLE IF NOT EXISTS persona_memory_entries(
+  id TEXT PRIMARY KEY,
+  persona_id TEXT NOT NULL REFERENCES persona_profiles(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  memory_type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+  salience REAL NOT NULL DEFAULT 0,
+  archived BOOLEAN NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_persona_memory_persona ON persona_memory_entries(persona_id, archived, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_memory_user ON persona_memory_entries(user_id, archived, deleted);
+CREATE INDEX IF NOT EXISTS idx_persona_memory_source ON persona_memory_entries(source_conversation_id);
+CREATE INDEX IF NOT EXISTS idx_persona_memory_last_modified ON persona_memory_entries(last_modified);
+
+UPDATE db_schema_version
+   SET version = 26
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 26;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -3996,6 +4120,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V24->V25: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V25 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v25_to_v26(self, conn: sqlite3.Connection):
+        """Migrates schema from V25 to V26 (Persona profile/scoping persistence tables)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V25 to V26 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V25_TO_V26)
+            final_version = self._get_db_version(conn)
+            if final_version != 26:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V25->V26 failed version check. Expected 26, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V26 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V25->V26 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V25->V26 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V25->V26: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V26 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4208,6 +4352,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 25 and current_db_version == 24:
                         self._migrate_from_v24_to_v25(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 26 and current_db_version == 25:
+                        self._migrate_from_v25_to_v26(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4425,6 +4572,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 24 and target_version >= 25:
                         self._migrate_from_v24_to_v25(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 25 and target_version >= 26:
+                        self._migrate_from_v25_to_v26(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         # Fallback: attempt linear migrations for known versions.
                         fallback_version = current_initial_version
@@ -4471,6 +4621,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v23_to_v24(conn)
                             elif fallback_version == 24:
                                 self._migrate_from_v24_to_v25(conn)
+                            elif fallback_version == 25:
+                                self._migrate_from_v25_to_v26(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4521,6 +4673,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 25 and current_db_version == 24:
                     self._migrate_from_v24_to_v25(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 26 and current_db_version == 25:
+                    self._migrate_from_v25_to_v26(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -4785,6 +4940,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 25:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V24_TO_V25, conn, expected_version=25)
                 current_version = 25
+            if current_version < 26:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V25_TO_V26, conn, expected_version=26)
+                current_version = 26
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -5728,6 +5886,839 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as exc:
             logger.error(f"Database error deleting skill '{name}': {exc}")
             raise
+
+    # ----------------------
+    # Persona persistence
+    # ----------------------
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    def _normalize_persona_mode(self, value: Any) -> str:
+        mode = str(value or self._DEFAULT_PERSONA_MODE).strip().lower()
+        if mode not in self._ALLOWED_PERSONA_MODES:
+            allowed = ", ".join(self._ALLOWED_PERSONA_MODES)
+            raise InputError(f"Invalid persona mode '{mode}'. Allowed: {allowed}.")  # noqa: TRY003
+        return mode
+
+    def _normalize_persona_scope_rule_type(self, value: Any) -> str:
+        rule_type = str(value or "").strip().lower()
+        if rule_type not in self._ALLOWED_PERSONA_SCOPE_RULE_TYPES:
+            allowed = ", ".join(self._ALLOWED_PERSONA_SCOPE_RULE_TYPES)
+            raise InputError(f"Invalid persona scope rule_type '{rule_type}'. Allowed: {allowed}.")  # noqa: TRY003
+        return rule_type
+
+    def _normalize_persona_policy_rule_kind(self, value: Any) -> str:
+        rule_kind = str(value or "").strip().lower()
+        if rule_kind not in self._ALLOWED_PERSONA_POLICY_RULE_KINDS:
+            allowed = ", ".join(self._ALLOWED_PERSONA_POLICY_RULE_KINDS)
+            raise InputError(f"Invalid persona policy rule_kind '{rule_kind}'. Allowed: {allowed}.")  # noqa: TRY003
+        return rule_kind
+
+    def _normalize_persona_session_status(self, value: Any) -> str:
+        status = str(value or "active").strip().lower()
+        if status not in self._ALLOWED_PERSONA_SESSION_STATUSES:
+            allowed = ", ".join(self._ALLOWED_PERSONA_SESSION_STATUSES)
+            raise InputError(f"Invalid persona session status '{status}'. Allowed: {allowed}.")  # noqa: TRY003
+        return status
+
+    def _persona_profile_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        item = dict(row)
+        item["is_active"] = self._as_bool(item.get("is_active"))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        return item
+
+    def _persona_scope_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        item = dict(row)
+        item["include"] = self._as_bool(item.get("include"))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        return item
+
+    def _persona_policy_rule_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        item = dict(row)
+        item["allowed"] = self._as_bool(item.get("allowed"))
+        item["require_confirmation"] = self._as_bool(item.get("require_confirmation"))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        max_calls = item.get("max_calls_per_turn")
+        if max_calls is not None:
+            try:
+                item["max_calls_per_turn"] = int(max_calls)
+            except (TypeError, ValueError):
+                item["max_calls_per_turn"] = None
+        return item
+
+    def _persona_session_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        item = dict(row)
+        item["reuse_allowed"] = self._as_bool(item.get("reuse_allowed"))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        raw_snapshot = item.get("scope_snapshot_json")
+        if isinstance(raw_snapshot, str):
+            try:
+                item["scope_snapshot"] = json.loads(raw_snapshot)
+            except json.JSONDecodeError:
+                item["scope_snapshot"] = {}
+        elif isinstance(raw_snapshot, dict):
+            item["scope_snapshot"] = raw_snapshot
+        else:
+            item["scope_snapshot"] = {}
+        return item
+
+    def _persona_memory_row_to_dict(self, row: Any) -> dict[str, Any] | None:
+        if not row:
+            return None
+        item = dict(row)
+        item["archived"] = self._as_bool(item.get("archived"))
+        item["deleted"] = self._as_bool(item.get("deleted"))
+        salience = item.get("salience")
+        if salience is not None:
+            try:
+                item["salience"] = float(salience)
+            except (TypeError, ValueError):
+                item["salience"] = 0.0
+        return item
+
+    def _require_active_persona_profile_owner(self, conn: Any, *, persona_id: str, user_id: str) -> dict[str, Any]:
+        row = conn.execute(
+            "SELECT id, user_id, mode, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+            (persona_id, user_id),
+        ).fetchone()
+        if not row:
+            raise ConflictError(  # noqa: TRY003
+                "Persona profile not found for user.",
+                entity="persona_profiles",
+                entity_id=persona_id,
+            )
+        item = dict(row)
+        if self._as_bool(item.get("deleted")):
+            raise ConflictError(  # noqa: TRY003
+                "Persona profile is soft-deleted.",
+                entity="persona_profiles",
+                entity_id=persona_id,
+            )
+        return item
+
+    def create_persona_profile(self, profile_data: dict[str, Any]) -> str:
+        """Create a persona profile and return its UUID."""
+        user_id = str(profile_data.get("user_id") or "").strip()
+        name = str(profile_data.get("name") or "").strip()
+        if not user_id:
+            raise InputError("user_id is required for persona profile creation.")  # noqa: TRY003
+        if not name:
+            raise InputError("name is required for persona profile creation.")  # noqa: TRY003
+
+        persona_id = str(profile_data.get("id") or self._generate_uuid())
+        mode = self._normalize_persona_mode(profile_data.get("mode"))
+        system_prompt = profile_data.get("system_prompt")
+        is_active = self._as_bool(profile_data.get("is_active", True))
+        now = self._get_current_utc_timestamp_iso()
+
+        character_card_id = profile_data.get("character_card_id")
+        if character_card_id is not None:
+            try:
+                character_card_id = int(character_card_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
+
+        deleted_value = bool(profile_data.get("deleted", False))
+        version = int(profile_data.get("version", 1))
+        if version < 1:
+            raise InputError("version must be >= 1.")  # noqa: TRY003
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            is_active_db = bool(is_active)
+            deleted_db = bool(deleted_value)
+        else:
+            is_active_db = int(is_active)
+            deleted_db = int(deleted_value)
+
+        query = (
+            "INSERT INTO persona_profiles("
+            "id, user_id, name, character_card_id, mode, system_prompt, "
+            "is_active, created_at, last_modified, deleted, version"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = (
+            persona_id,
+            user_id,
+            name,
+            character_card_id,
+            mode,
+            system_prompt,
+            is_active_db,
+            profile_data.get("created_at") or now,
+            profile_data.get("last_modified") or now,
+            deleted_db,
+            version,
+        )
+
+        try:
+            self.execute_query(query, params, commit=True)
+            return persona_id  # noqa: TRY300
+        except sqlite3.IntegrityError as exc:
+            msg = str(exc).lower()
+            if "unique constraint failed" in msg and "persona_profiles.user_id, persona_profiles.name" in msg:
+                raise ConflictError(  # noqa: TRY003
+                    f"Persona profile name '{name}' already exists for user '{user_id}'.",
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                ) from exc
+            if "unique constraint failed" in msg and "persona_profiles.id" in msg:
+                raise ConflictError(  # noqa: TRY003
+                    f"Persona profile '{persona_id}' already exists.",
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                ) from exc
+            raise
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(  # noqa: TRY003
+                    f"Persona profile name '{name}' already exists for user '{user_id}'.",
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                ) from exc
+            raise CharactersRAGDBError(f"Failed creating persona profile: {exc}") from exc  # noqa: TRY003
+
+    def get_persona_profile(
+        self,
+        persona_id: str,
+        *,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a single persona profile owned by a user."""
+        query = "SELECT * FROM persona_profiles WHERE id = ? AND user_id = ?"
+        params: list[Any] = [persona_id, user_id]
+        if not include_deleted:
+            query += " AND deleted = 0"
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_profile_row_to_dict(cursor.fetchone())
+
+    def list_persona_profiles(
+        self,
+        *,
+        user_id: str,
+        include_deleted: bool = False,
+        active_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persona profiles for a user."""
+        clauses = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        if active_only:
+            clauses.append("is_active = 1")
+        where_sql = " AND ".join(clauses)
+        query = (
+            "SELECT * FROM persona_profiles "  # nosec B608
+            f"WHERE {where_sql} "
+            "ORDER BY last_modified DESC, name ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_profile_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def update_persona_profile(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        update_data: dict[str, Any],
+        expected_version: int | None = None,
+    ) -> bool:
+        """Update persona profile fields for an owned profile."""
+        if not update_data:
+            raise InputError("No profile fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {"name", "character_card_id", "mode", "system_prompt", "is_active", "deleted"}
+        set_parts: list[str] = []
+        params: list[Any] = []
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "mode":
+                params.append(self._normalize_persona_mode(value))
+                set_parts.append("mode = ?")
+            elif key in {"is_active", "deleted"}:
+                cast_value = bool(self._as_bool(value)) if self.backend_type == BackendType.POSTGRESQL else int(
+                    self._as_bool(value)
+                )
+                params.append(cast_value)
+                set_parts.append(f"{key} = ?")
+            elif key == "character_card_id":
+                if value is None:
+                    params.append(None)
+                else:
+                    try:
+                        params.append(int(value))
+                    except (TypeError, ValueError) as exc:
+                        raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
+                set_parts.append("character_card_id = ?")
+            else:
+                params.append(value)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid profile fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1"])
+        params.append(now)
+
+        where_sql = "id = ? AND user_id = ? AND deleted = 0"
+        params.extend([persona_id, user_id])
+        if expected_version is not None:
+            where_sql += " AND version = ?"
+            params.append(int(expected_version))
+
+        query = f"UPDATE persona_profiles SET {', '.join(set_parts)} WHERE {where_sql}"  # nosec B608
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT version, deleted FROM persona_profiles WHERE id = ? AND user_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            if not existing:
+                return False
+            if self._as_bool(existing["deleted"]):
+                return False
+            if expected_version is not None and int(existing["version"]) != int(expected_version):
+                raise ConflictError(  # noqa: TRY003
+                    f"Persona profile version mismatch (db has {existing['version']}, expected {expected_version}).",
+                    entity="persona_profiles",
+                    entity_id=persona_id,
+                )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
+    def soft_delete_persona_profile(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        expected_version: int | None = None,
+    ) -> bool:
+        """Soft-delete a persona profile and mark it inactive."""
+        update_data: dict[str, Any] = {"deleted": True, "is_active": False}
+        return self.update_persona_profile(
+            persona_id=persona_id,
+            user_id=user_id,
+            update_data=update_data,
+            expected_version=expected_version,
+        )
+
+    def list_persona_scope_rules(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List scope rules for a user-owned persona profile."""
+        self.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        query = "SELECT * FROM persona_scope_rules WHERE persona_id = ? AND user_id = ?"
+        params: list[Any] = [persona_id, user_id]
+        if not include_deleted:
+            query += " AND deleted = 0"
+        query += " ORDER BY rule_type ASC, rule_value ASC, id ASC"
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_scope_rule_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def replace_persona_scope_rules(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        rules: list[dict[str, Any]],
+    ) -> int:
+        """Replace active scope rules for a user-owned persona profile."""
+        if rules is None:
+            rules = []
+        now = self._get_current_utc_timestamp_iso()
+        include_true = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        normalized_rules: list[tuple[str, str, bool]] = []
+        seen: set[tuple[str, str, bool]] = set()
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_type = self._normalize_persona_scope_rule_type(rule.get("rule_type"))
+            rule_value = str(rule.get("rule_value") or "").strip()
+            if not rule_value:
+                raise InputError("persona scope rule_value is required.")  # noqa: TRY003
+            include = self._as_bool(rule.get("include", True))
+            key = (rule_type, rule_value, include)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_rules.append(key)
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            prepared_update, update_params = self._prepare_backend_statement(
+                (
+                    "UPDATE persona_scope_rules "
+                    "SET deleted = ?, last_modified = ?, version = version + 1 "
+                    "WHERE persona_id = ? AND user_id = ? AND deleted = 0"
+                ),
+                (
+                    include_true(True),
+                    now,
+                    persona_id,
+                    user_id,
+                ),
+            )
+            conn.execute(prepared_update, update_params or ())
+            if not normalized_rules:
+                return 0
+
+            insert_query = (
+                "INSERT INTO persona_scope_rules("
+                "persona_id, user_id, rule_type, rule_value, include, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            inserted = 0
+            for rule_type, rule_value, include in normalized_rules:
+                insert_params = (
+                    persona_id,
+                    user_id,
+                    rule_type,
+                    rule_value,
+                    include_true(include),
+                    now,
+                    now,
+                    include_true(False),
+                    1,
+                )
+                prepared_insert, prepared_params = self._prepare_backend_statement(insert_query, insert_params)
+                conn.execute(prepared_insert, prepared_params or ())
+                inserted += 1
+            return inserted
+
+    def list_persona_policy_rules(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List policy rules for a user-owned persona profile."""
+        self.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        query = "SELECT * FROM persona_policy_rules WHERE persona_id = ? AND user_id = ?"
+        params: list[Any] = [persona_id, user_id]
+        if not include_deleted:
+            query += " AND deleted = 0"
+        query += " ORDER BY rule_kind ASC, rule_name ASC, id ASC"
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_policy_rule_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def replace_persona_policy_rules(
+        self,
+        *,
+        persona_id: str,
+        user_id: str,
+        rules: list[dict[str, Any]],
+    ) -> int:
+        """Replace active policy rules for a user-owned persona profile."""
+        if rules is None:
+            rules = []
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        normalized_rules: list[tuple[str, str, bool, bool, int | None]] = []
+        seen: set[tuple[str, str, bool, bool, int | None]] = set()
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_kind = self._normalize_persona_policy_rule_kind(rule.get("rule_kind"))
+            rule_name = str(rule.get("rule_name") or "").strip()
+            if not rule_name:
+                raise InputError("persona policy rule_name is required.")  # noqa: TRY003
+            allowed = self._as_bool(rule.get("allowed", True))
+            require_confirmation = self._as_bool(rule.get("require_confirmation", False))
+            max_calls = rule.get("max_calls_per_turn")
+            if max_calls is not None:
+                try:
+                    max_calls = int(max_calls)
+                except (TypeError, ValueError) as exc:
+                    raise InputError("max_calls_per_turn must be an integer when provided.") from exc  # noqa: TRY003
+                if max_calls < 1:
+                    raise InputError("max_calls_per_turn must be >= 1 when provided.")  # noqa: TRY003
+            key = (rule_kind, rule_name, allowed, require_confirmation, max_calls)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_rules.append(key)
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            prepared_update, update_params = self._prepare_backend_statement(
+                (
+                    "UPDATE persona_policy_rules "
+                    "SET deleted = ?, last_modified = ?, version = version + 1 "
+                    "WHERE persona_id = ? AND user_id = ? AND deleted = 0"
+                ),
+                (
+                    bool_cast(True),
+                    now,
+                    persona_id,
+                    user_id,
+                ),
+            )
+            conn.execute(prepared_update, update_params or ())
+            if not normalized_rules:
+                return 0
+
+            insert_query = (
+                "INSERT INTO persona_policy_rules("
+                "persona_id, user_id, rule_kind, rule_name, allowed, require_confirmation, "
+                "max_calls_per_turn, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            inserted = 0
+            for rule_kind, rule_name, allowed, require_confirmation, max_calls in normalized_rules:
+                insert_params = (
+                    persona_id,
+                    user_id,
+                    rule_kind,
+                    rule_name,
+                    bool_cast(allowed),
+                    bool_cast(require_confirmation),
+                    max_calls,
+                    now,
+                    now,
+                    bool_cast(False),
+                    1,
+                )
+                prepared_insert, prepared_params = self._prepare_backend_statement(insert_query, insert_params)
+                conn.execute(prepared_insert, prepared_params or ())
+                inserted += 1
+            return inserted
+
+    def create_persona_session(self, session_data: dict[str, Any]) -> str:
+        """Create a persona runtime session and return its session ID."""
+        persona_id = str(session_data.get("persona_id") or "").strip()
+        user_id = str(session_data.get("user_id") or "").strip()
+        if not persona_id:
+            raise InputError("persona_id is required for persona session creation.")  # noqa: TRY003
+        if not user_id:
+            raise InputError("user_id is required for persona session creation.")  # noqa: TRY003
+
+        session_id = str(session_data.get("id") or self._generate_uuid())
+        scope_snapshot = session_data.get("scope_snapshot_json")
+        if isinstance(scope_snapshot, str):
+            scope_snapshot_json = scope_snapshot.strip() or "{}"
+        else:
+            scope_snapshot_json = self._ensure_json_string(scope_snapshot) or "{}"
+
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        with self.transaction() as conn:
+            persona_row = self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            mode = self._normalize_persona_mode(session_data.get("mode") or persona_row.get("mode"))
+            reuse_allowed_default = mode == "persistent_scoped"
+            reuse_allowed = self._as_bool(session_data.get("reuse_allowed", reuse_allowed_default))
+            status = self._normalize_persona_session_status(session_data.get("status") or "active")
+            conversation_id = session_data.get("conversation_id")
+
+            query = (
+                "INSERT INTO persona_sessions("
+                "id, persona_id, user_id, conversation_id, mode, reuse_allowed, status, "
+                "scope_snapshot_json, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            params = (
+                session_id,
+                persona_id,
+                user_id,
+                conversation_id,
+                mode,
+                bool_cast(reuse_allowed),
+                status,
+                scope_snapshot_json,
+                session_data.get("created_at") or now,
+                session_data.get("last_modified") or now,
+                bool_cast(session_data.get("deleted", False)),
+                int(session_data.get("version", 1)),
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            conn.execute(prepared_query, prepared_params or ())
+        return session_id
+
+    def get_persona_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a single persona session owned by a user."""
+        query = "SELECT * FROM persona_sessions WHERE id = ? AND user_id = ?"
+        params: list[Any] = [session_id, user_id]
+        if not include_deleted:
+            query += " AND deleted = 0"
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_session_row_to_dict(cursor.fetchone())
+
+    def list_persona_sessions(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        status: str | None = None,
+        include_deleted: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persona sessions for a user."""
+        clauses = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if status is not None:
+            normalized_status = self._normalize_persona_session_status(status)
+            clauses.append("status = ?")
+            params.append(normalized_status)
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        where_sql = " AND ".join(clauses)
+        query = (
+            "SELECT * FROM persona_sessions "  # nosec B608
+            f"WHERE {where_sql} "
+            "ORDER BY last_modified DESC, id ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_session_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def update_persona_session(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        update_data: dict[str, Any],
+        expected_version: int | None = None,
+    ) -> bool:
+        """Update persona session fields for an owned session."""
+        if not update_data:
+            raise InputError("No session fields provided for update.")  # noqa: TRY003
+        allowed_fields = {"conversation_id", "mode", "reuse_allowed", "status", "scope_snapshot_json", "deleted"}
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        set_parts: list[str] = []
+        params: list[Any] = []
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "mode":
+                params.append(self._normalize_persona_mode(value))
+                set_parts.append("mode = ?")
+            elif key == "status":
+                params.append(self._normalize_persona_session_status(value))
+                set_parts.append("status = ?")
+            elif key in {"reuse_allowed", "deleted"}:
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append(f"{key} = ?")
+            elif key == "scope_snapshot_json":
+                if isinstance(value, str):
+                    params.append(value.strip() or "{}")
+                else:
+                    params.append(self._ensure_json_string(value) or "{}")
+                set_parts.append("scope_snapshot_json = ?")
+            else:
+                params.append(value)
+                set_parts.append("conversation_id = ?")
+
+        if not set_parts:
+            raise InputError("No valid session fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1"])
+        params.append(now)
+        where_sql = "id = ? AND user_id = ? AND deleted = 0"
+        params.extend([session_id, user_id])
+        if expected_version is not None:
+            where_sql += " AND version = ?"
+            params.append(int(expected_version))
+
+        query = f"UPDATE persona_sessions SET {', '.join(set_parts)} WHERE {where_sql}"  # nosec B608
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT version, deleted FROM persona_sessions WHERE id = ? AND user_id = ?",
+                (session_id, user_id),
+            ).fetchone()
+            if not existing:
+                return False
+            if self._as_bool(existing["deleted"]):
+                return False
+            if expected_version is not None and int(existing["version"]) != int(expected_version):
+                raise ConflictError(  # noqa: TRY003
+                    f"Persona session version mismatch (db has {existing['version']}, expected {expected_version}).",
+                    entity="persona_sessions",
+                    entity_id=session_id,
+                )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
+
+    def add_persona_memory_entry(self, entry_data: dict[str, Any]) -> str:
+        """Create a persona memory entry and return its ID."""
+        persona_id = str(entry_data.get("persona_id") or "").strip()
+        user_id = str(entry_data.get("user_id") or "").strip()
+        memory_type = str(entry_data.get("memory_type") or "").strip()
+        content = str(entry_data.get("content") or "").strip()
+        if not persona_id:
+            raise InputError("persona_id is required for persona memory creation.")  # noqa: TRY003
+        if not user_id:
+            raise InputError("user_id is required for persona memory creation.")  # noqa: TRY003
+        if not memory_type:
+            raise InputError("memory_type is required for persona memory creation.")  # noqa: TRY003
+        if not content:
+            raise InputError("content is required for persona memory creation.")  # noqa: TRY003
+
+        entry_id = str(entry_data.get("id") or self._generate_uuid())
+        source_conversation_id = entry_data.get("source_conversation_id")
+        try:
+            salience = float(entry_data.get("salience", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise InputError("salience must be a numeric value.") from exc  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        archived = self._as_bool(entry_data.get("archived", False))
+        deleted = self._as_bool(entry_data.get("deleted", False))
+        version = int(entry_data.get("version", 1))
+        if version < 1:
+            raise InputError("version must be >= 1.")  # noqa: TRY003
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "INSERT INTO persona_memory_entries("
+                "id, persona_id, user_id, memory_type, content, source_conversation_id, salience, archived, "
+                "created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            params = (
+                entry_id,
+                persona_id,
+                user_id,
+                memory_type,
+                content,
+                source_conversation_id,
+                salience,
+                bool_cast(archived),
+                entry_data.get("created_at") or now,
+                entry_data.get("last_modified") or now,
+                bool_cast(deleted),
+                version,
+            )
+            prepared_query, prepared_params = self._prepare_backend_statement(query, params)
+            conn.execute(prepared_query, prepared_params or ())
+        return entry_id
+
+    def list_persona_memory_entries(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        memory_type: str | None = None,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List persona memory entries for a user (optionally scoped to persona)."""
+        clauses = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if memory_type is not None:
+            clauses.append("memory_type = ?")
+            params.append(str(memory_type).strip())
+        if not include_archived:
+            clauses.append("archived = 0")
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        where_sql = " AND ".join(clauses)
+        query = (
+            "SELECT * FROM persona_memory_entries "  # nosec B608
+            f"WHERE {where_sql} "
+            "ORDER BY last_modified DESC, id ASC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        cursor = self.execute_query(query, tuple(params))
+        return [self._persona_memory_row_to_dict(row) for row in cursor.fetchall() if row]
+
+    def set_persona_memory_archived(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        archived: bool = True,
+        persona_id: str | None = None,
+    ) -> bool:
+        """Archive/unarchive a persona memory entry owned by user."""
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        now = self._get_current_utc_timestamp_iso()
+        clauses = ["id = ?", "user_id = ?", "deleted = 0"]
+        params: list[Any] = [entry_id, user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        where_sql = " AND ".join(clauses)
+        query = (
+            "UPDATE persona_memory_entries "
+            "SET archived = ?, last_modified = ?, version = version + 1 "
+            f"WHERE {where_sql}"  # nosec B608
+        )
+        update_params = [bool_cast(archived), now, *params]
+        cursor = self.execute_query(query, tuple(update_params), commit=True)
+        return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    def soft_delete_persona_memory_entry(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str | None = None,
+    ) -> bool:
+        """Soft-delete a persona memory entry owned by user."""
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+        now = self._get_current_utc_timestamp_iso()
+        clauses = ["id = ?", "user_id = ?", "deleted = 0"]
+        params: list[Any] = [entry_id, user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        where_sql = " AND ".join(clauses)
+        query = (
+            "UPDATE persona_memory_entries "
+            "SET deleted = ?, archived = ?, last_modified = ?, version = version + 1 "
+            f"WHERE {where_sql}"  # nosec B608
+        )
+        update_params = [bool_cast(True), bool_cast(True), now, *params]
+        cursor = self.execute_query(query, tuple(update_params), commit=True)
+        return bool(cursor.rowcount and cursor.rowcount > 0)
 
     def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> list[str]:
         """Convert SQLite schema SQL into individual Postgres-compatible statements."""

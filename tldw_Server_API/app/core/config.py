@@ -6,7 +6,6 @@ import configparser
 import contextlib
 import json
 import os
-import sys
 from collections.abc import MutableMapping
 from functools import lru_cache
 from pathlib import Path
@@ -1334,6 +1333,27 @@ def load_settings():
                                 _cp.get('Claims', 'CLAIMS_LOCAL_NER_MODEL_MAP', fallback='') if _cp else ''
                             )
                         ),
+                        "CLAIMS_PROMPT_VALIDATION_MODE": (
+                            _env.get("CLAIMS_PROMPT_VALIDATION_MODE")
+                            if _env.get("CLAIMS_PROMPT_VALIDATION_MODE") is not None else (
+                                _cp.get('Claims', 'CLAIMS_PROMPT_VALIDATION_MODE', fallback='warning') if _cp else 'warning'
+                            )
+                        ),
+                        "CLAIMS_PROMPT_VALIDATION_STRICT": (
+                            (_env.get("CLAIMS_PROMPT_VALIDATION_STRICT").lower() == "true") if _env.get("CLAIMS_PROMPT_VALIDATION_STRICT") is not None else (
+                                _cp.getboolean('Claims', 'CLAIMS_PROMPT_VALIDATION_STRICT', fallback=False) if _cp else False
+                            )
+                        ),
+                        "CLAIMS_CONTEXT_WINDOW_CHARS": (
+                            int(_env.get("CLAIMS_CONTEXT_WINDOW_CHARS")) if _env.get("CLAIMS_CONTEXT_WINDOW_CHARS") is not None else (
+                                int(_cp.getint('Claims', 'CLAIMS_CONTEXT_WINDOW_CHARS', fallback=0)) if _cp else 0
+                            )
+                        ),
+                        "CLAIMS_EXTRACTION_PASSES": (
+                            int(_env.get("CLAIMS_EXTRACTION_PASSES")) if _env.get("CLAIMS_EXTRACTION_PASSES") is not None else (
+                                int(_cp.getint('Claims', 'CLAIMS_EXTRACTION_PASSES', fallback=1)) if _cp else 1
+                            )
+                        ),
                     }
                 ))({
                     k: os.getenv(k) for k in [
@@ -1342,7 +1362,9 @@ def load_settings():
                         "CLAIMS_CLUSTER_SIMILARITY_THRESHOLD", "CLAIMS_CLUSTER_BATCH_SIZE",
                         "CLAIMS_LLM_PROVIDER", "CLAIMS_LLM_TEMPERATURE", "CLAIMS_JOB_BUDGET_ENABLED",
                         "CLAIMS_JOB_MAX_COST_USD", "CLAIMS_JOB_MAX_TOKENS", "CLAIMS_JOB_BUDGET_STRICT",
-                        "CLAIMS_LOCAL_NER_MODEL", "CLAIMS_EXTRACTOR_LANGUAGE_DEFAULT", "CLAIMS_LOCAL_NER_MODEL_MAP"
+                        "CLAIMS_LOCAL_NER_MODEL", "CLAIMS_EXTRACTOR_LANGUAGE_DEFAULT", "CLAIMS_LOCAL_NER_MODEL_MAP",
+                        "CLAIMS_PROMPT_VALIDATION_MODE", "CLAIMS_PROMPT_VALIDATION_STRICT",
+                        "CLAIMS_CONTEXT_WINDOW_CHARS", "CLAIMS_EXTRACTION_PASSES"
                     ]
                 })
             ))(load_comprehensive_config())

@@ -55,7 +55,10 @@ export const useTtsProviderData = ({
 }: UseTtsProviderDataArgs) => {
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const isOnline = useServerOnline()
-  const hasAudio = isOnline && !capsLoading && capabilities?.hasAudio
+  const hasAudio =
+    isOnline &&
+    !capsLoading &&
+    Boolean(capabilities?.hasTts ?? capabilities?.hasAudio)
 
   const { data: providersInfo } = useQuery<TldwTtsProvidersInfo | null>({
     queryKey: ["tldw-tts-providers"],

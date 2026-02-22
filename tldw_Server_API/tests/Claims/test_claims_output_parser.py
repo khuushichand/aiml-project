@@ -27,6 +27,13 @@ def test_parse_raw_json_and_think_tag_lenient():
 
 
 @pytest.mark.unit
+def test_parse_raw_json_and_think_tag_strict_rejects():
+    raw = "<think>reasoning</think>\n{\"claims\":[{\"text\":\"Claim B\"}]}"
+    with pytest.raises(ClaimsOutputNoJsonError):
+        parse_claims_llm_output(raw, parse_mode="strict", strip_think_tags=True)
+
+
+@pytest.mark.unit
 def test_parse_malformed_json_strict_raises():
     raw = "```json\n{\"claims\":[{\"text\":\"Missing brace\"}\n```"
     with pytest.raises(ClaimsOutputNoJsonError):

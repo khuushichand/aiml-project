@@ -1,11 +1,17 @@
 import pytest
 
-from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim, align_claim_span
 
 
 @pytest.mark.unit
 def test_align_claim_span_exact_mode():
     text = "Alpha Beta Gamma."
+    result = align_claim(text, "Beta", mode="exact")
+    assert result is not None
+    assert result.method == "exact"
+    assert result.score == pytest.approx(1.0)
+    assert text[result.span[0] : result.span[1]] == "Beta"
+
     span = align_claim_span(text, "Beta", mode="exact")
     assert span is not None
     assert text[span[0] : span[1]] == "Beta"

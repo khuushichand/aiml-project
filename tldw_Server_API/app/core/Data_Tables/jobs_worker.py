@@ -61,6 +61,12 @@ from tldw_Server_API.app.core.Jobs.worker_utils import coerce_int as _coerce_int
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env as _jobs_manager
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputNoPayloadError,
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    parse_structured_output,
+)
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 
 DATA_TABLES_DOMAIN = "data_tables"
@@ -433,20 +439,12 @@ def _extract_json_payload(raw: Any) -> Any:
     if not text:
         raise DataTablesJobError("llm_response_empty", retryable=False)
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    for open_char, close_char in (("{", "}"), ("[", "]")):
-        start_idx = text.find(open_char)
-        end_idx = text.rfind(close_char)
-        if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
-            continue
-        snippet = text[start_idx:end_idx + 1]
-        try:
-            return json.loads(snippet)
-        except json.JSONDecodeError:
-            continue
-    raise DataTablesJobError("llm_response_invalid_json", retryable=False)
+        return parse_structured_output(
+            text,
+            options=StructuredOutputOptions(parse_mode="lenient", strip_think_tags=True),
+        )
+    except (StructuredOutputNoPayloadError, StructuredOutputParseError) as exc:
+        raise DataTablesJobError("llm_response_invalid_json", retryable=False) from exc
 
 
 def _extract_text_from_snapshot(snapshot: Any) -> str | None:

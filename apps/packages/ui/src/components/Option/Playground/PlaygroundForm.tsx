@@ -450,10 +450,18 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     },
     [setToolModules]
   )
-  const hasServerAudio =
-    isConnectionReady && !capsLoading && capabilities?.hasAudio
-  const { healthState: audioHealthState } = useTldwAudioStatus()
-  const canUseServerAudio = hasServerAudio && audioHealthState !== "unhealthy"
+  const hasServerVoiceChat =
+    isConnectionReady &&
+    !capsLoading &&
+    Boolean(capabilities?.hasVoiceChat ?? capabilities?.hasAudio)
+  const hasServerStt =
+    isConnectionReady &&
+    !capsLoading &&
+    Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const canUseServerAudio =
+    hasServerVoiceChat && audioHealthState !== "unhealthy"
+  const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
   const voiceChatAvailable = canUseServerAudio
   const voiceChat = useVoiceChatStream({
     active: voiceChatEnabled && voiceChatAvailable,
@@ -2657,8 +2665,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   })
   const { sendWhenEnter, setSendWhenEnter } = useWebUI()
   const speechAvailable =
-    browserSupportsSpeechRecognition || canUseServerAudio
-  const speechUsesServer = canUseServerAudio
+    browserSupportsSpeechRecognition || canUseServerStt
+  const speechUsesServer = canUseServerStt
 
   const speechTooltipText = React.useMemo(() => {
     if (!speechAvailable) {
@@ -3771,7 +3779,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       stopServerDictation()
       return
     }
-    if (!canUseServerAudio) {
+    if (!canUseServerStt) {
       notificationApi.error({
         message: t(
           "playground:actions.speechUnavailableTitle",
@@ -3911,7 +3919,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
     }
   }, [
-    canUseServerAudio,
+    canUseServerStt,
     isServerDictating,
     notificationApi,
     speechToTextLanguage,
@@ -7745,7 +7753,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         onOpenModelSettings={() => setOpenModelSettings(true)}
                         modelSummaryLabel={modelSummaryLabel}
                         promptSummaryLabel={promptSummaryLabel}
-                        hasDictation={!!(browserSupportsSpeechRecognition || hasServerAudio)}
+                        hasDictation={!!(browserSupportsSpeechRecognition || hasServerStt)}
                         speechAvailable={speechAvailable}
                         speechUsesServer={speechUsesServer}
                         isListening={isListening}

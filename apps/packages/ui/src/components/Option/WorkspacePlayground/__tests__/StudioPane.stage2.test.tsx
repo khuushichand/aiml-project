@@ -277,6 +277,27 @@ Object.defineProperty(HTMLMediaElement.prototype, "pause", {
   value: vi.fn()
 })
 
+const expandOutputTypesSection = () => {
+  const toggle = screen.getByRole("button", { name: /Output Types/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const expandGeneratedOutputsSection = () => {
+  const toggle = screen.getByRole("button", { name: /Generated Outputs/i })
+  if (toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle)
+  }
+}
+
+const renderStudioPane = () => {
+  const renderResult = render(<StudioPane />)
+  expandOutputTypesSection()
+  expandGeneratedOutputsSection()
+  return renderResult
+}
+
 describe("StudioPane Stage 2 workflows", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -381,7 +402,7 @@ describe("StudioPane Stage 2 workflows", () => {
 
     const dispatchSpy = vi.spyOn(window, "dispatchEvent")
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Discuss in chat" }))
 
@@ -410,7 +431,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Save to notes" }))
     fireEvent.click(await screen.findByText("Append to notes"))
@@ -439,7 +460,7 @@ describe("StudioPane Stage 2 workflows", () => {
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
     workspaceStoreState.getSelectedMediaIds = () => [101, 202]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Quiz" }))
 
@@ -472,7 +493,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "View" }))
 
@@ -496,7 +517,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "View" }))
 
@@ -531,7 +552,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
     fireEvent.click(screen.getByRole("button", { name: "View" }))
 
     fireEvent.change(await screen.findByPlaceholderText("Filter table rows"), {
@@ -575,7 +596,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
     fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-flashcards"))
 
     fireEvent.change(await screen.findByPlaceholderText("Front (question or term)"), {
@@ -619,7 +640,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
     fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-flashcards"))
 
     const firstFrontInput = await screen.findByDisplayValue("First")
@@ -672,7 +693,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
     fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-quiz"))
 
     fireEvent.change(await screen.findByPlaceholderText("Question prompt"), {
@@ -740,7 +761,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
     fireEvent.click(screen.getByTestId("studio-artifact-edit-artifact-quiz"))
 
     const firstQuestionInput = await screen.findByDisplayValue("First question")
@@ -778,7 +799,7 @@ describe("StudioPane Stage 2 workflows", () => {
       generation: "Front: ATP\nBack: Cellular energy"
     })
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Audio Settings" }))
     const autoDeckLabel = await screen.findByText("Auto (first deck or create new)")
@@ -806,7 +827,7 @@ describe("StudioPane Stage 2 workflows", () => {
     workspaceStoreState.selectedSourceIds = ["source-1"]
     workspaceStoreState.getSelectedMediaIds = () => [101]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     const compareButton = screen.getByRole("button", { name: "Compare Sources" })
     expect(compareButton).toBeDisabled()
@@ -823,7 +844,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     })
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Compare Sources" }))
 
@@ -877,7 +898,7 @@ describe("StudioPane Stage 2 workflows", () => {
       }
     ]
 
-    render(<StudioPane />)
+    renderStudioPane()
 
     await waitFor(() => {
       expect(
@@ -893,7 +914,7 @@ describe("StudioPane Stage 2 workflows", () => {
   })
 
   it("requests voice preview audio from TTS provider", async () => {
-    render(<StudioPane />)
+    renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Audio Settings" }))
     fireEvent.click(screen.getByRole("button", { name: "Preview" }))
@@ -934,7 +955,7 @@ describe("StudioPane Stage 2 workflows", () => {
           }) as any
       )
 
-    render(<StudioPane />)
+    renderStudioPane()
     fireEvent.click(screen.getByRole("button", { name: "View" }))
 
     expect(modalInfoSpy).toHaveBeenCalledWith(

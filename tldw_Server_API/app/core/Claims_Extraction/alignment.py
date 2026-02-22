@@ -4,8 +4,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any
-
 
 _HYPHEN_RE = re.compile(r"[\u2010\u2011\u2012\u2013\u2014\u2015\-]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -147,6 +145,23 @@ def align_claim_span(
     mode: str = "fuzzy",
     threshold: float = 0.75,
 ) -> tuple[int, int] | None:
+    """Backward-compatible span-only alignment helper."""
+    result = align_claim(
+        source_text,
+        claim_text,
+        mode=mode,
+        threshold=threshold,
+    )
+    return result.span if result is not None else None
+
+
+def align_claim(
+    source_text: str,
+    claim_text: str,
+    *,
+    mode: str = "fuzzy",
+    threshold: float = 0.75,
+) -> AlignmentResult | None:
     """Align claim text to source text using exact/normalized/fuzzy token matching."""
     strategy = str(mode or "fuzzy").strip().lower()
     if strategy in {"off", "none", "disabled"}:
@@ -158,14 +173,12 @@ def align_claim_span(
 
     exact = _exact_or_normalized_span(source_text, claim_text)
     if exact is not None:
-        return exact.span
+        return exact
     if strategy == "exact":
         return None
 
     fuzzy = _fuzzy_token_span(source_text, claim_text, threshold)
-    if fuzzy is not None:
-        return fuzzy.span
-    return None
+    return fuzzy
 
 
-__all__ = ["AlignmentResult", "align_claim_span"]
+__all__ = ["AlignmentResult", "align_claim", "align_claim_span"]

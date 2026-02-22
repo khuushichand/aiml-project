@@ -42,6 +42,36 @@ def _get_float(
     return default
 
 
+def _get_int(
+    settings_obj: Mapping[str, Any],
+    key: str,
+    *,
+    default: int,
+) -> int:
+    with suppress(Exception):
+        value = settings_obj.get(key, default)
+        return int(value)
+    return default
+
+
+def _get_bool(
+    settings_obj: Mapping[str, Any],
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    with suppress(Exception):
+        value = settings_obj.get(key, default)
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return default
+
+
 def resolve_claims_llm_config(
     settings_obj: Mapping[str, Any] | None = None,
     *,
@@ -100,8 +130,50 @@ def resolve_claims_alignment_config(
     return resolved_mode, threshold
 
 
+def resolve_claims_prompt_validation_config(
+    settings_obj: Mapping[str, Any] | None = None,
+    *,
+    default_mode: str = "warning",
+    default_strict: bool = False,
+) -> tuple[str, bool]:
+    settings_map = _resolve_settings(settings_obj)
+    mode = _get_str(settings_map, "CLAIMS_PROMPT_VALIDATION_MODE", default=default_mode) or default_mode
+    resolved_mode = mode.strip().lower()
+    if resolved_mode not in {"off", "warning", "error"}:
+        resolved_mode = default_mode
+    strict = _get_bool(
+        settings_map,
+        "CLAIMS_PROMPT_VALIDATION_STRICT",
+        default=default_strict,
+    )
+    return resolved_mode, strict
+
+
+def resolve_claims_context_window_chars(
+    settings_obj: Mapping[str, Any] | None = None,
+    *,
+    default: int = 0,
+) -> int:
+    settings_map = _resolve_settings(settings_obj)
+    value = _get_int(settings_map, "CLAIMS_CONTEXT_WINDOW_CHARS", default=default)
+    return max(0, value)
+
+
+def resolve_claims_extraction_passes(
+    settings_obj: Mapping[str, Any] | None = None,
+    *,
+    default: int = 1,
+) -> int:
+    settings_map = _resolve_settings(settings_obj)
+    value = _get_int(settings_map, "CLAIMS_EXTRACTION_PASSES", default=default)
+    return max(1, value)
+
+
 __all__ = [
     "resolve_claims_alignment_config",
+    "resolve_claims_context_window_chars",
+    "resolve_claims_extraction_passes",
     "resolve_claims_json_parse_mode",
     "resolve_claims_llm_config",
+    "resolve_claims_prompt_validation_config",
 ]

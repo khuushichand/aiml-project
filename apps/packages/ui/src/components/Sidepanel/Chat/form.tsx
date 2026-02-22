@@ -367,13 +367,23 @@ export const SidepanelForm = ({
   const { uxState } = useConnectionUxState()
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
-  const hasServerAudio =
-    isConnectionReady && !capsLoading && capabilities?.hasAudio
-  const { healthState: audioHealthState } = useTldwAudioStatus()
-  const canUseServerAudio = hasServerAudio && audioHealthState !== "unhealthy"
+  const hasServerVoiceChat =
+    isConnectionReady &&
+    !capsLoading &&
+    Boolean(capabilities?.hasVoiceChat ?? capabilities?.hasAudio)
+  const hasServerStt =
+    isConnectionReady &&
+    !capsLoading &&
+    Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const canUseServerAudio =
+    hasServerVoiceChat && audioHealthState !== "unhealthy"
+  const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
+  const hasVoiceInputControls =
+    browserSupportsSpeechRecognition || hasServerStt || hasServerVoiceChat
   const speechAvailable =
-    browserSupportsSpeechRecognition || canUseServerAudio
-  const speechUsesServer = canUseServerAudio
+    browserSupportsSpeechRecognition || canUseServerStt
+  const speechUsesServer = canUseServerStt
   const voiceChatAvailable = canUseServerAudio
 
   const voiceChat = useVoiceChatStream({
@@ -620,7 +630,7 @@ export const SidepanelForm = ({
     startServerDictation,
     stopServerDictation
   } = useServerDictation({
-    canUseServerAudio,
+    canUseServerStt,
     speechToTextLanguage,
     sttSettings,
     onTranscript: (text) => form.setFieldValue("message", text)
@@ -2274,7 +2284,7 @@ export const SidepanelForm = ({
                                       </button>
                                     </Popover>
                                   </div>
-                                  {(browserSupportsSpeechRecognition || hasServerAudio) && (
+                                  {hasVoiceInputControls && (
                                     <Tooltip
                                       title={
                                         !speechAvailable
@@ -2573,7 +2583,7 @@ export const SidepanelForm = ({
                                 {t("playground:actions.uploadShort", "Image")}
                               </span>
                             </div>
-                            {(browserSupportsSpeechRecognition || hasServerAudio) && (
+                            {hasVoiceInputControls && (
                               <div className="flex flex-wrap items-end gap-1.5">
                                 <div className="flex flex-col items-center gap-1">
                                   <Tooltip

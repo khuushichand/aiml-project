@@ -1387,6 +1387,34 @@ async def lifespan(app: FastAPI):
     except ImportError as _content_import_err:
         logger.debug(f"Content backend validation skipped (import error): {_content_import_err}")
 
+    # Startup: validate claims extraction prompt templates (configurable off|warning|error).
+    try:
+        from tldw_Server_API.app.core.Claims_Extraction.prompt_validation import (
+            ClaimsPromptValidationError,
+            validate_claims_prompt_preflight,
+        )
+        from tldw_Server_API.app.core.config import settings as _claims_settings
+
+        _claims_prompt_report = validate_claims_prompt_preflight(_claims_settings)
+        if _claims_prompt_report.has_issues and _claims_prompt_report.mode != "off":
+            logger.warning(
+                "App Startup: Claims prompt validation found {} issue(s) (mode={}, strict={})",
+                len(_claims_prompt_report.issues),
+                _claims_prompt_report.mode,
+                _claims_prompt_report.strict,
+            )
+        else:
+            logger.info(
+                "App Startup: Claims prompt validation completed (mode={}, strict={})",
+                _claims_prompt_report.mode,
+                _claims_prompt_report.strict,
+            )
+    except ClaimsPromptValidationError as _claims_prompt_err:
+        logger.exception(f"Startup aborted due to claims prompt validation error: {_claims_prompt_err}")
+        raise
+    except _STARTUP_GUARD_EXCEPTIONS as _claims_prompt_exc:
+        logger.debug(f"App Startup: Claims prompt validation skipped/failed: {_claims_prompt_exc}")
+
     # Startup: preserve fail-fast semantics for critical lazy subsystems in non-test runtime.
     # Warm lazy managers early so configuration errors surface at startup.
     try:

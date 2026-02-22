@@ -522,10 +522,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
   // Local state for collapsible sections
-  const [studioOptionsExpanded, setStudioOptionsExpanded] = useState(true)
-  const [studioExpanded, setStudioExpanded] = useState(true)
-  const [outputsExpanded, setOutputsExpanded] = useState(true)
-  const [notesExpanded, setNotesExpanded] = useState(true)
+  const [studioOptionsExpanded, setStudioOptionsExpanded] = useState(false)
+  const [studioExpanded, setStudioExpanded] = useState(false)
+  const [outputsExpanded, setOutputsExpanded] = useState(false)
+  const [notesExpanded, setNotesExpanded] = useState(false)
   const [chatModels, setChatModels] = useState<ModelInfo[]>([])
   const [loadingChatModels, setLoadingChatModels] = useState(false)
   const generationAbortRef = useRef<AbortController | null>(null)

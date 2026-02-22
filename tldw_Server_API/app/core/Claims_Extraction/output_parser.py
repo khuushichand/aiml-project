@@ -1,26 +1,28 @@
 from __future__ import annotations
 
-import json
-import re
 from contextlib import suppress
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from tldw_Server_API.app.core.LLM_Calls.structured_output import (
+    StructuredOutputNoPayloadError,
+    StructuredOutputOptions,
+    StructuredOutputParseError,
+    StructuredOutputSchemaError,
+    extract_items,
+    parse_structured_output,
+)
 
-_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
-_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
-
-class ClaimsOutputParseError(ValueError):
+class ClaimsOutputParseError(StructuredOutputParseError):
     """Base parse error for claims-oriented model outputs."""
 
 
-class ClaimsOutputNoJsonError(ClaimsOutputParseError):
+class ClaimsOutputNoJsonError(StructuredOutputNoPayloadError, ClaimsOutputParseError):
     """No parseable JSON payload could be extracted."""
 
 
-class ClaimsOutputSchemaError(ClaimsOutputParseError):
+class ClaimsOutputSchemaError(StructuredOutputSchemaError, ClaimsOutputParseError):
     """Parsed JSON shape is not compatible with expected schema."""
 
 
@@ -35,88 +37,6 @@ class ClaimsParserOptions:
         return str(self.parse_mode or "lenient").strip().lower() == "strict"
 
 
-def _strip_think_tags(text: str) -> str:
-    return _THINK_TAG_RE.sub("", text).strip()
-
-
-def _extract_balanced_json_fragments(text: str, *, max_fragments: int = 6) -> list[str]:
-    fragments: list[str] = []
-    if not text:
-        return fragments
-
-    pairs = {"{": "}", "[": "]"}
-    starts = [idx for idx, ch in enumerate(text) if ch in pairs]
-    for start in starts:
-        stack: list[str] = []
-        in_string = False
-        escaped = False
-        for idx in range(start, len(text)):
-            ch = text[idx]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif ch == "\\":
-                    escaped = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-                continue
-            if ch in pairs:
-                stack.append(pairs[ch])
-                continue
-            if ch in {"}", "]"}:
-                if not stack or stack[-1] != ch:
-                    break
-                stack.pop()
-                if not stack:
-                    fragment = text[start : idx + 1].strip()
-                    if fragment:
-                        fragments.append(fragment)
-                    break
-        if len(fragments) >= max_fragments:
-            break
-    return fragments
-
-
-def _build_parse_candidates(text: str, *, options: ClaimsParserOptions) -> list[str]:
-    body = text if isinstance(text, str) else str(text)
-    raw = body.strip()
-    if not raw:
-        return []
-
-    candidates: list[str] = []
-    seen: set[str] = set()
-
-    def _push(value: str | None) -> None:
-        if not value:
-            return
-        candidate = value.strip()
-        if not candidate or candidate in seen:
-            return
-        seen.add(candidate)
-        candidates.append(candidate)
-
-    fences = _FENCE_RE.findall(raw) or []
-    for block in fences:
-        _push(block)
-        if options.strip_think_tags:
-            _push(_strip_think_tags(block))
-
-    _push(raw)
-    if options.strip_think_tags:
-        _push(_strip_think_tags(raw))
-
-    if not options.strict:
-        for fragment in _extract_balanced_json_fragments(raw):
-            _push(fragment)
-            if options.strip_think_tags:
-                _push(_strip_think_tags(fragment))
-
-    return candidates
-
-
 def parse_claims_llm_output(
     text: str,
     *,
@@ -124,19 +44,18 @@ def parse_claims_llm_output(
     strip_think_tags: bool = True,
 ) -> Any:
     """Parse raw model text into JSON with strict/lenient handling."""
-    options = ClaimsParserOptions(parse_mode=parse_mode, strip_think_tags=strip_think_tags)
-    candidates = _build_parse_candidates(text, options=options)
-    if not candidates:
-        raise ClaimsOutputNoJsonError("Model output was empty or whitespace-only.")
-
-    last_error: Exception | None = None
-    for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            last_error = exc
-            continue
-    raise ClaimsOutputNoJsonError(f"Unable to parse JSON from model output: {last_error}")
+    try:
+        return parse_structured_output(
+            text,
+            options=StructuredOutputOptions(
+                parse_mode=parse_mode,
+                strip_think_tags=strip_think_tags,
+            ),
+        )
+    except StructuredOutputNoPayloadError as exc:
+        raise ClaimsOutputNoJsonError(str(exc)) from exc
+    except StructuredOutputParseError as exc:
+        raise ClaimsOutputParseError(str(exc)) from exc
 
 
 def coerce_llm_response_text(response: Any) -> str:
@@ -168,31 +87,17 @@ def extract_claim_items(
 ) -> list[dict[str, Any]]:
     """Normalize payload into claim objects with optional wrapper support."""
     strict = str(parse_mode or "lenient").strip().lower() == "strict"
-    items: Any = payload
-
-    if isinstance(payload, Mapping):
-        if wrapper_key and wrapper_key in payload:
-            items = payload.get(wrapper_key)
-        elif not strict and wrapper_key and wrapper_key != "claims" and "claims" in payload:
-            items = payload.get("claims")
-        elif strict and wrapper_key:
-            raise ClaimsOutputSchemaError(f"Expected wrapper key '{wrapper_key}' in strict mode.")
-        else:
-            items = [payload]
-
-    if not isinstance(items, list):
-        raise ClaimsOutputSchemaError("Expected a list of claims.")
-
-    normalized: list[dict[str, Any]] = []
-    for item in items:
-        if isinstance(item, Mapping):
-            normalized.append(dict(item))
-            continue
-        if isinstance(item, str) and not strict:
-            normalized.append({"text": item})
-            continue
-        raise ClaimsOutputSchemaError("Each claim must be an object (or string in lenient mode).")
-    return normalized
+    try:
+        return extract_items(
+            payload,
+            wrapper_key=wrapper_key,
+            strict=strict,
+            allow_top_level_list=not strict,
+            allow_string_items=not strict,
+            fallback_wrapper_keys=("claims",) if wrapper_key and wrapper_key != "claims" else (),
+        )
+    except StructuredOutputSchemaError as exc:
+        raise ClaimsOutputSchemaError(str(exc)) from exc
 
 
 def extract_claim_texts(

@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim, align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.analyze_types import ClaimsAnalyzeCallable
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
@@ -26,18 +27,6 @@ from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     estimate_claims_tokens,
     resolve_claims_job_budget,
 )
-from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
-    estimate_claims_cost,
-    record_claims_fallback,
-    record_claims_budget_exhausted,
-    record_claims_output_parse_event,
-    record_claims_provider_request,
-    record_claims_response_format_selection,
-    record_claims_throttle,
-    should_throttle_claims_provider,
-    suggest_claims_concurrency,
-)
-from tldw_Server_API.app.core.Claims_Extraction.alignment import align_claim_span
 from tldw_Server_API.app.core.Claims_Extraction.compat_types import (
     ClaimType,
     Document,
@@ -50,6 +39,18 @@ from tldw_Server_API.app.core.Claims_Extraction.extractor_registry import (
     extract_ner_claims_texts,
     run_async_claims_strategy,
 )
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    estimate_claims_cost,
+    record_claims_alignment_event,
+    record_claims_budget_exhausted,
+    record_claims_fallback,
+    record_claims_output_parse_event,
+    record_claims_provider_request,
+    record_claims_response_format_selection,
+    record_claims_throttle,
+    should_throttle_claims_provider,
+    suggest_claims_concurrency,
+)
 from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
     ClaimsOutputParseError,
     ClaimsOutputSchemaError,
@@ -60,11 +61,20 @@ from tldw_Server_API.app.core.Claims_Extraction.output_parser import (
 )
 from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
     resolve_claims_alignment_config as resolve_runtime_alignment_config,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_context_window_chars as resolve_runtime_context_window_chars,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
+    resolve_claims_extraction_passes as resolve_runtime_extraction_passes,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
     resolve_claims_json_parse_mode as resolve_runtime_parse_mode,
+)
+from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
     resolve_claims_llm_config as resolve_runtime_llm_config,
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-
 
 _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -547,6 +557,27 @@ def _resolve_claims_alignment_config() -> tuple[str, float]:
     return resolve_runtime_alignment_config(default_mode="fuzzy", default_threshold=0.75)
 
 
+def _resolve_claims_context_window_chars() -> int:
+    return resolve_runtime_context_window_chars(default=0)
+
+
+def _resolve_claims_extraction_passes() -> int:
+    return resolve_runtime_extraction_passes(default=1)
+
+
+def _normalize_claim_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _spans_overlap(
+    first: tuple[int, int] | None,
+    second: tuple[int, int] | None,
+) -> bool:
+    if first is None or second is None:
+        return True
+    return first[0] < second[1] and second[0] < first[1]
+
+
 def _claims_local_nli_enabled() -> bool:
     try:
         from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
@@ -861,6 +892,7 @@ class HybridClaimVerifier:
             def _load():
                 try:
                     import os
+
                     from transformers import pipeline  # type: ignore
 
                     model_name = (
@@ -1265,6 +1297,7 @@ class ClaimsEngine:
         source_text: str,
         claim_texts: list[str],
         max_claims: int,
+        alignment_context: str = "engine_extract",
     ) -> list[Claim]:
         alignment_mode, alignment_threshold = _resolve_claims_alignment_config()
         claims: list[Claim] = []
@@ -1272,14 +1305,51 @@ class ClaimsEngine:
             cleaned = (claim_text or "").strip()
             if not cleaned:
                 continue
-            span = align_claim_span(
+            alignment_result = align_claim(
                 source_text,
                 cleaned,
                 mode=alignment_mode,
                 threshold=alignment_threshold,
             )
-            claims.append(Claim(id=f"c{idx+1}", text=cleaned, span=span))
+            record_claims_alignment_event(
+                context=alignment_context,
+                mode=alignment_mode,
+                result=alignment_result,
+            )
+            claims.append(
+                Claim(
+                    id=f"c{idx+1}",
+                    text=cleaned,
+                    span=alignment_result.span if alignment_result is not None else None,
+                )
+            )
         return claims
+
+    @staticmethod
+    def _dedupe_claims(
+        claims: list[Claim],
+        *,
+        max_claims: int,
+    ) -> list[Claim]:
+        deduped: list[Claim] = []
+        for claim in claims:
+            normalized = _normalize_claim_text(claim.text)
+            is_duplicate = False
+            for existing in deduped:
+                if _normalize_claim_text(existing.text) != normalized:
+                    continue
+                if _spans_overlap(existing.span, claim.span):
+                    is_duplicate = True
+                    break
+            if is_duplicate:
+                continue
+            deduped.append(claim)
+            if len(deduped) >= max_claims:
+                break
+
+        for idx, claim in enumerate(deduped, start=1):
+            claim.id = f"c{idx}"
+        return deduped
 
     async def _extract_aps_claim_texts(self, answer: str, max_claims: int) -> list[str]:
         try:
@@ -1348,22 +1418,41 @@ class ClaimsEngine:
         }
         requested = (claim_extractor or "auto").strip().lower()
         fallback_mode = "llm" if requested in {"auto", "detect", "ner", "aps", "llm"} else "heuristic"
+        context_window_chars = _resolve_claims_context_window_chars()
+        extraction_passes = _resolve_claims_extraction_passes()
+        llm_multi_pass_enabled = requested in {"auto", "detect", "aps", "llm"}
+        run_passes = extraction_passes if llm_multi_pass_enabled else 1
+        run_passes = max(1, run_passes)
 
-        dispatch = await run_async_claims_strategy(
-            requested_mode=requested,
-            text=answer,
-            max_claims=claims_max,
-            strategy_map=strategy_map,
-            fallback_mode=fallback_mode,
-            catch_exceptions=_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS,
-        )
+        collected_claims: list[Claim] = []
+        mode = requested
+        for pass_index in range(run_passes):
+            pass_input = answer
+            if llm_multi_pass_enabled and context_window_chars > 0 and pass_index > 0:
+                pass_input = f"{answer[-context_window_chars:]}\n\n{answer}"
 
-        claims = self._build_claims_from_texts(
-            source_text=answer,
-            claim_texts=dispatch.claim_texts,
-            max_claims=claims_max,
-        )
-        mode = dispatch.mode
+            dispatch = await run_async_claims_strategy(
+                requested_mode=requested,
+                text=pass_input,
+                max_claims=claims_max,
+                strategy_map=strategy_map,
+                fallback_mode=fallback_mode,
+                catch_exceptions=_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS,
+            )
+            mode = dispatch.mode
+            pass_claims = self._build_claims_from_texts(
+                source_text=answer,
+                claim_texts=dispatch.claim_texts,
+                max_claims=claims_max,
+                alignment_context="engine_extract",
+            )
+            if pass_claims:
+                collected_claims.extend(pass_claims)
+
+        if run_passes > 1 or context_window_chars > 0:
+            claims = self._dedupe_claims(collected_claims, max_claims=claims_max)
+        else:
+            claims = collected_claims[:claims_max]
         if claims:
             return claims, mode
 
@@ -1372,6 +1461,7 @@ class ClaimsEngine:
             source_text=answer,
             claim_texts=[c.text for c in heur_claims],
             max_claims=claims_max,
+            alignment_context="engine_extract_fallback",
         )
         return claims, "heuristic"
 
@@ -1464,7 +1554,7 @@ class ClaimsEngine:
 
         # Count by new status values
         verified_count = sum(1 for v in verifications if v.status == VerificationStatus.VERIFIED)
-        sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
+        refuted_count = sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
         hallucination_count = sum(1 for v in verifications if v.status == VerificationStatus.HALLUCINATION)
         numerical_error_count = sum(1 for v in verifications if v.status == VerificationStatus.NUMERICAL_ERROR)
         misquoted_count = sum(1 for v in verifications if v.status == VerificationStatus.MISQUOTED)
@@ -1508,6 +1598,7 @@ class ClaimsEngine:
                 "claim_faithfulness": (supported / total) if total else 0.0,
                 # Enhanced summary with new status breakdown
                 "verified": verified_count,
+                "refuted_status": refuted_count,
                 "hallucination": hallucination_count,
                 "numerical_error": numerical_error_count,
                 "misquoted": misquoted_count,

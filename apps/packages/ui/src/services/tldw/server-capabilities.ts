@@ -18,6 +18,9 @@ export type ServerCapabilities = {
   hasChatbooks: boolean
   hasChatQueue: boolean
   hasChatSaveToDb: boolean
+  hasStt: boolean
+  hasTts: boolean
+  hasVoiceChat: boolean
   hasAudio: boolean
   hasEmbeddings: boolean
   hasMetrics: boolean
@@ -51,6 +54,9 @@ const defaultCapabilities: ServerCapabilities = {
   hasChatbooks: false,
   hasChatQueue: false,
   hasChatSaveToDb: false,
+  hasStt: false,
+  hasTts: false,
+  hasVoiceChat: false,
   hasAudio: false,
   hasEmbeddings: false,
   hasMetrics: false,
@@ -114,8 +120,11 @@ const fallbackSpec = {
       "/api/v1/chatbooks/cleanup",
       "/api/v1/chatbooks/health",
       "/api/v1/audio/transcriptions",
+      "/api/v1/audio/transcriptions/health",
       "/api/v1/audio/speech",
       "/api/v1/audio/health",
+      "/api/v1/audio/stream/transcribe",
+      "/api/v1/audio/chat/stream",
       "/api/v1/embeddings/models",
       "/api/v1/embeddings/providers-config",
       "/api/v1/embeddings/health",
@@ -327,6 +336,18 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
   const paths = normalizePaths(spec.paths || {})
   const has = (p: string) => Boolean(paths[p])
   const hasChatSaveToDb = detectChatSaveToDb(spec)
+  const hasStt =
+    has("/api/v1/audio/transcriptions") ||
+    has("/api/v1/audio/transcriptions/health") ||
+    has("/api/v1/audio/stream/transcribe") ||
+    has("/api/v1/audio/chat/stream")
+  const hasTts =
+    has("/api/v1/audio/speech") ||
+    has("/api/v1/audio/health") ||
+    has("/api/v1/audio/voices/catalog") ||
+    has("/api/v1/audio/chat/stream")
+  const hasVoiceChat =
+    has("/api/v1/audio/chat/stream") || (hasStt && hasTts)
 
   return {
     hasChat: has("/api/v1/chat/completions"),
@@ -354,10 +375,10 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     hasChatbooks: has("/api/v1/chatbooks/export") || has("/api/v1/chatbooks/health"),
     hasChatQueue: has("/api/v1/chat/queue/status") || has("/api/v1/chat/queue/activity"),
     hasChatSaveToDb,
-    hasAudio:
-      has("/api/v1/audio/speech") ||
-      has("/api/v1/audio/transcriptions") ||
-      has("/api/v1/audio/health"),
+    hasStt,
+    hasTts,
+    hasVoiceChat,
+    hasAudio: hasStt || hasTts || hasVoiceChat,
     hasEmbeddings:
       has("/api/v1/embeddings/models") ||
       has("/api/v1/embeddings/providers-config") ||

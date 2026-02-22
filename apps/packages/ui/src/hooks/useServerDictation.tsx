@@ -5,7 +5,7 @@ import type { SttSettings } from "@/hooks/useSttSettings"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 
 export interface UseServerDictationOptions {
-  canUseServerAudio: boolean
+  canUseServerStt: boolean
   speechToTextLanguage: string
   sttSettings: SttSettings
   onTranscript: (text: string) => void
@@ -22,7 +22,7 @@ export const useServerDictation = (
 ): UseServerDictationResult => {
   const { t } = useTranslation(["playground"])
   const notification = useAntdNotification()
-  const { canUseServerAudio, speechToTextLanguage, sttSettings, onTranscript } =
+  const { canUseServerStt, speechToTextLanguage, sttSettings, onTranscript } =
     options
 
   const serverRecorderRef = React.useRef<MediaRecorder | null>(null)
@@ -44,7 +44,7 @@ export const useServerDictation = (
       return
     }
 
-    if (!canUseServerAudio) {
+    if (!canUseServerStt) {
       notification.error({
         message: t(
           "playground:actions.speechUnavailableTitle",
@@ -219,7 +219,7 @@ export const useServerDictation = (
       })
     }
   }, [
-    canUseServerAudio,
+    canUseServerStt,
     isServerDictating,
     speechToTextLanguage,
     sttSettings,
