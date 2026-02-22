@@ -754,7 +754,7 @@ async def test_kanban_adapter_board_list(monkeypatch):
     ):
         with patch(
             "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
-            return_value=Path("/tmp/kanban.db"),
+            return_value=Path("/tmp/kanban.db"),  # nosec B108
         ):
             config = {"action": "board.list", "limit": 10}
             context = {"user_id": "1"}
@@ -779,7 +779,7 @@ async def test_kanban_adapter_board_list_accepts_y_flag(monkeypatch):
     ):
         with patch(
             "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
-            return_value=Path("/tmp/kanban.db"),
+            return_value=Path("/tmp/kanban.db"),  # nosec B108
         ):
             config = {"action": "board.list", "include_archived": "y"}
             context = {"user_id": "1"}
@@ -805,7 +805,7 @@ async def test_kanban_adapter_board_create(monkeypatch):
     ):
         with patch(
             "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
-            return_value=Path("/tmp/kanban.db"),
+            return_value=Path("/tmp/kanban.db"),  # nosec B108
         ):
             config = {"action": "board.create", "name": "New Board"}
             context = {"user_id": "1"}
@@ -830,7 +830,7 @@ async def test_kanban_adapter_card_create(monkeypatch):
     ):
         with patch(
             "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
-            return_value=Path("/tmp/kanban.db"),
+            return_value=Path("/tmp/kanban.db"),  # nosec B108
         ):
             config = {"action": "card.create", "list_id": "1", "title": "New Task"}
             context = {"user_id": "1"}
@@ -855,7 +855,7 @@ async def test_kanban_adapter_card_search(monkeypatch):
     ):
         with patch(
             "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
-            return_value=Path("/tmp/kanban.db"),
+            return_value=Path("/tmp/kanban.db"),  # nosec B108
         ):
             config = {"action": "card.search", "query": "matching"}
             context = {"user_id": "1"}
@@ -879,7 +879,7 @@ async def test_kanban_adapter_unsupported_action():
     ):
         with patch(
             "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
-            return_value=Path("/tmp/kanban.db"),
+            return_value=Path("/tmp/kanban.db"),  # nosec B108
         ):
             config = {"action": "invalid.action"}
             context = {"user_id": "1"}
@@ -1336,7 +1336,7 @@ async def test_podcast_rss_publish_creates_feed_and_item(monkeypatch, tmp_path):
     feed_path = tmp_path / "feeds" / "podcast.xml"
     assert feed_path.exists()
 
-    root = ET.parse(feed_path).getroot()
+    root = ET.parse(feed_path).getroot()  # nosec B314
     channel = root.find("channel")
     assert channel is not None
     item = channel.find("item")
@@ -1386,7 +1386,7 @@ async def test_podcast_rss_publish_dedupes_guid_and_checks_version(monkeypatch, 
     assert second.get("replaced_existing_guid") is True
 
     feed_path = tmp_path / "feeds" / "podcast.xml"
-    root = ET.parse(feed_path).getroot()
+    root = ET.parse(feed_path).getroot()  # nosec B314
     channel = root.find("channel")
     items = channel.findall("item") if channel is not None else []
     assert len(items) == 1

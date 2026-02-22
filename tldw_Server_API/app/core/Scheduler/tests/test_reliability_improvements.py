@@ -46,7 +46,7 @@ class TestAsyncWriteBuffer:
             database_url=':memory:',
             write_buffer_size=2,
             write_buffer_flush_interval=10.0,
-            base_path=Path('/tmp/test')
+            base_path=Path('/tmp/test')  # nosec B108
         )
 
         buffer = AsyncWriteBuffer(backend, config, FlushStrategy.BLOCK)
@@ -90,7 +90,7 @@ class TestAsyncWriteBuffer:
             database_url=':memory:',
             write_buffer_size=2,
             write_buffer_flush_interval=10.0,
-            base_path=Path('/tmp/test')
+            base_path=Path('/tmp/test')  # nosec B108
         )
 
         # Test DROP_OLDEST strategy
@@ -152,7 +152,7 @@ class TestAsyncWriteBuffer:
             database_url=':memory:',
             write_buffer_size=2,
             write_buffer_flush_interval=1.0,
-            base_path=Path('/tmp/test')
+            base_path=Path('/tmp/test')  # nosec B108
         )
 
         buffer = AsyncWriteBuffer(backend, config)

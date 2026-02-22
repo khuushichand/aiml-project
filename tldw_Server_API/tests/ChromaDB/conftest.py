@@ -475,7 +475,7 @@ def mock_metrics():
 def test_config():
     """Test configuration for ChromaDB module."""
     return {
-        "chroma_base_path": "/tmp/chroma_test",
+        "chroma_base_path": "/tmp/chroma_test",  # nosec B108
         "embedding_providers": {
             "openai": {
                 "api_key": "test_key",
@@ -573,7 +573,7 @@ def test_session_cleanup():
     """Session-level cleanup for all ChromaDB tests."""
     yield
     # Final cleanup
-    temp_dirs = Path("/tmp").glob("chroma_test_*")
+    temp_dirs = Path("/tmp").glob("chroma_test_*")  # nosec B108
     for temp_dir in temp_dirs:
         try:
             shutil.rmtree(temp_dir)

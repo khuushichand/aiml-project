@@ -62,7 +62,7 @@ async def _get_client(monkeypatch):
     from tldw_Server_API.app.main import app
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:  # nosec B113
         try:
             yield client, app
         finally:
@@ -778,7 +778,7 @@ async def test_audit_export_returns_500_on_read_failure(monkeypatch):
     app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:  # nosec B113
         try:
             r = await client.get(
                 "/api/v1/audit/export?format=json",
@@ -810,7 +810,7 @@ async def test_audit_count_returns_500_on_read_failure(monkeypatch):
     app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:  # nosec B113
         try:
             r = await client.get(
                 "/api/v1/audit/count",

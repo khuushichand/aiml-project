@@ -27,7 +27,7 @@ def test_rate_limit_validation_warns_when_rg_disabled(monkeypatch: pytest.Monkey
 def test_rate_limit_validation_warns_when_policy_path_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_rate_limit_env(monkeypatch)
     monkeypatch.setenv("RG_ENABLED", "true")
-    monkeypatch.setenv("RG_POLICY_PATH", "/tmp/does-not-exist-rg-policy.yaml")
+    monkeypatch.setenv("RG_POLICY_PATH", "/tmp/does-not-exist-rg-policy.yaml")  # nosec B108
     validator = EvaluationConfigValidator()
 
     validator._validate_rate_limiting()

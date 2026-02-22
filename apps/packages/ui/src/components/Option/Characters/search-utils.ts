@@ -107,6 +107,7 @@ export const sortCharactersForWorkspace = <T extends Record<string, unknown>>(
 
   return [...characters].sort((left, right) => {
     let comparison = 0
+    let forceAscendingOrder = false
 
     switch (sortBy) {
       case "conversation_count":
@@ -142,19 +143,28 @@ export const sortCharactersForWorkspace = <T extends Record<string, unknown>>(
           ])
         break
       case "last_used_at":
-        comparison =
-          resolveCharacterTimestamp(left, [
-            "last_used_at",
-            "lastUsedAt",
-            "last_active",
-            "lastActive"
-          ]) -
-          resolveCharacterTimestamp(right, [
+        {
+          const leftTimestamp = resolveCharacterTimestamp(left, [
             "last_used_at",
             "lastUsedAt",
             "last_active",
             "lastActive"
           ])
+          const rightTimestamp = resolveCharacterTimestamp(right, [
+            "last_used_at",
+            "lastUsedAt",
+            "last_active",
+            "lastActive"
+          ])
+          if (leftTimestamp === 0 && rightTimestamp === 0) {
+            comparison = resolveNameComparable(left).localeCompare(
+              resolveNameComparable(right)
+            )
+            forceAscendingOrder = true
+          } else {
+            comparison = leftTimestamp - rightTimestamp
+          }
+        }
         break
       case "creator":
         comparison = resolveCreatorComparable(left).localeCompare(
@@ -173,6 +183,10 @@ export const sortCharactersForWorkspace = <T extends Record<string, unknown>>(
       comparison = resolveNameComparable(left).localeCompare(
         resolveNameComparable(right)
       )
+    }
+
+    if (forceAscendingOrder) {
+      return comparison
     }
 
     return comparison * direction

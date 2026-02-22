@@ -89,7 +89,7 @@ def test_opml_export_escapes_xml_entities(client_with_user):
     assert escaped_name in exported.text
     assert f"token={token}&amp;mode=full" in exported.text
 
-    root = ET.fromstring(exported.text)
+    root = ET.fromstring(exported.text)  # nosec B314
     outlines = root.findall(".//outline")
     matches = [o for o in outlines if token in (o.attrib.get("xmlUrl") or "")]
     assert matches

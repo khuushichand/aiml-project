@@ -72,6 +72,11 @@ import { workspacePlaygroundTutorials } from "./definitions/workspace-playground
 import { mediaTutorials } from "./definitions/media"
 import { knowledgeTutorials } from "./definitions/knowledge"
 import { charactersTutorials } from "./definitions/characters"
+import { promptsTutorials } from "./definitions/prompts"
+import { evaluationsTutorials } from "./definitions/evaluations"
+import { notesTutorials } from "./definitions/notes"
+import { flashcardsTutorials } from "./definitions/flashcards"
+import { worldBooksTutorials } from "./definitions/world-books"
 
 /**
  * Central registry of all available tutorials
@@ -81,11 +86,12 @@ export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
   ...workspacePlaygroundTutorials,
   ...mediaTutorials,
   ...knowledgeTutorials,
-  ...charactersTutorials
-  // Add more tutorial definitions here as they are created:
-  // ...promptStudioTutorials,
-  // ...mediaLibraryTutorials,
-  // ...flashcardsTutorials,
+  ...charactersTutorials,
+  ...promptsTutorials,
+  ...evaluationsTutorials,
+  ...notesTutorials,
+  ...flashcardsTutorials,
+  ...worldBooksTutorials
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,9 +134,23 @@ const LEGACY_ROUTE_ALIASES: Record<string, string> = {
   "/options/characters": "/characters",
   "/options/workspace-playground": "/workspace-playground",
   "/options/prompts": "/prompts",
+  "/options/evaluations": "/evaluations",
   "/options/notes": "/notes",
   "/options/flashcards": "/flashcards",
   "/options/world-books": "/world-books"
+}
+
+/**
+ * Tutorials are only meant for the options surface. Sidepanel hosts can share
+ * route-like paths (for example "/chat") that should not trigger options tours.
+ */
+export function isTutorialRuntimeSuppressed(
+  runtimePathname?: string | null
+): boolean {
+  const pathname =
+    runtimePathname ??
+    (typeof window !== "undefined" ? window.location.pathname : "")
+  return /sidepanel/i.test(pathname || "")
 }
 
 /**
@@ -185,6 +205,10 @@ export function normalizeTutorialRoute(routeLike: string): string {
  * @returns Array of tutorials matching the route, sorted by priority
  */
 export function getTutorialsForRoute(pathname: string): TutorialDefinition[] {
+  if (isTutorialRuntimeSuppressed()) {
+    return []
+  }
+
   const matches = TUTORIAL_REGISTRY.filter((tutorial) =>
     matchRoute(tutorial.routePattern, pathname)
   )

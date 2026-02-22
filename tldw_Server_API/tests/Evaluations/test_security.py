@@ -297,11 +297,11 @@ class TestConnectionPoolThreadSafety:
                             # Each thread writes to its own table
                             table_name = f"test_table_{worker_id}"
                             conn.execute(f"CREATE TABLE IF NOT EXISTS {table_name} (id INTEGER, value TEXT)")
-                            conn.execute(f"INSERT INTO {table_name} VALUES (?, ?)", (i, f"value_{i}"))
+                            conn.execute(f"INSERT INTO {table_name} VALUES (?, ?)", (i, f"value_{i}"))  # nosec B608
                             conn.commit()
 
                             # Verify write
-                            cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+                            cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")  # nosec B608
                             count = cursor.fetchone()[0]
                             results.append((worker_id, count))
 

@@ -1676,7 +1676,7 @@ class StateVerification:
     @staticmethod
     def create_content_hash(content: str) -> str:
         """Create a hash of content for verification."""
-        return hashlib.md5(content.encode()).hexdigest()
+        return hashlib.md5(content.encode()).hexdigest()  # nosec B324
 
     @staticmethod
     def verify_content_preserved(original: str, retrieved: str, context: str = "") -> None:

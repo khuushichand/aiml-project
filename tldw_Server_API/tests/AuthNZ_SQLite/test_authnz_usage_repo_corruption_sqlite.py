@@ -8,7 +8,7 @@ from loguru import logger
 
 class _CorruptingSQLitePool:
     pool = None
-    _sqlite_fs_path = "/tmp/authnz-corrupt-users.db"
+    _sqlite_fs_path = "/tmp/authnz-corrupt-users.db"  # nosec B108
 
     async def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003, D401
         raise RuntimeError("database disk image is malformed")

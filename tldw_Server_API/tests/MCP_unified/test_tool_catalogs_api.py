@@ -73,7 +73,7 @@ def _ensure_single_user_row():
 
             placeholders = ", ".join("?" for _ in insert_cols)
             conn.execute(
-                f"INSERT INTO users ({', '.join(insert_cols)}) VALUES ({placeholders})",
+                f"INSERT INTO users ({', '.join(insert_cols)}) VALUES ({placeholders})",  # nosec B608
                 insert_vals,
             )
 

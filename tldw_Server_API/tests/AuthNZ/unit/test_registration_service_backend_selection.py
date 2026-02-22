@@ -54,7 +54,7 @@ def _settings_stub() -> SimpleNamespace:
         ENABLE_ORG_SCOPED_REGISTRATION_CODES=True,
         DEFAULT_USER_ROLE="user",
         DEFAULT_STORAGE_QUOTA_MB=1024,
-        USER_DATA_BASE_PATH="/tmp",
+        USER_DATA_BASE_PATH="/tmp",  # nosec B108
         CHROMADB_BASE_PATH=None,
     )
 

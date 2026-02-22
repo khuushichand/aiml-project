@@ -148,7 +148,7 @@ async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch):
     )
     monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
     monkeypatch.setattr(jobs_worker, "_kanban_card_indexable", lambda **_: True)
-    monkeypatch.setattr(jobs_worker, "_embedding_config_for_user", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})
+    monkeypatch.setattr(jobs_worker, "_embedding_config_for_user", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})  # nosec B108
     monkeypatch.setattr(jobs_worker, "ChromaDBManager", FakeChromaDBManager)
 
     job = {

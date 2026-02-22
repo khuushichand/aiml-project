@@ -102,7 +102,7 @@ async def test_flashcards_crud_and_export(monkeypatch):
     fake_db = FakeFlashcardsDB()
     mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
 
-    ctx = SimpleNamespace(db_paths={"chacha": "/tmp/chacha.db"})
+    ctx = SimpleNamespace(db_paths={"chacha": "/tmp/chacha.db"})  # nosec B108
 
     created_deck = await mod.execute_tool("flashcards.decks.create", {"name": "Deck"}, context=ctx)
     deck_id = created_deck["deck_id"]

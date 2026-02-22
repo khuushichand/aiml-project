@@ -48,13 +48,13 @@ def test_process_audio_files_uses_check_transcription_model_status(monkeypatch, 
 
 @pytest.mark.unit
 def test_default_title_from_audio_path_strips_hex_suffix():
-    title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd34.wav")
+    title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd34.wav")  # nosec B108
     assert title == "My_Clip"
 
 
 @pytest.mark.unit
 def test_default_title_from_audio_path_keeps_non_hex_suffix():
-    title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd3g.wav")
+    title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd3g.wav")  # nosec B108
     assert title == "My_Clip_ab12cd3g"
 
 

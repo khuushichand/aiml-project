@@ -139,5 +139,85 @@
       "libraryTitle": "Character Library",
       "libraryContent": "Open character actions to chat, quick-chat, edit, duplicate, export, or review version history."
     }
+  },
+  "prompts": {
+    "basics": {
+      "label": "Prompts Basics",
+      "description": "Create reusable prompts, search your library, and manage prompt workflow segments",
+      "segmentedTitle": "Prompt Workspaces",
+      "segmentedContent": "Switch between Custom, Copilot, Studio, and Trash to manage different prompt sources.",
+      "createTitle": "Create Prompt",
+      "createContent": "Create a reusable prompt template you can insert into chat conversations.",
+      "searchTitle": "Search Prompts",
+      "searchContent": "Search prompt names, content, and keywords to quickly find the right template.",
+      "filtersTitle": "Filter and Scope",
+      "filtersContent": "Use type and tag filters to narrow your prompt list before editing or running prompts.",
+      "transferTitle": "Import and Export",
+      "transferContent": "Export prompts for backup or sharing, and import prompt sets to bootstrap new workflows."
+    }
+  },
+  "evaluations": {
+    "basics": {
+      "label": "Evaluations Basics",
+      "description": "Create evaluations, inspect recent runs, and navigate evaluation tabs",
+      "headerTitle": "Evaluations Workspace",
+      "headerContent": "Use this workspace to define evaluation specs and monitor quality over time.",
+      "tabsTitle": "Tab Navigation",
+      "tabsContent": "Switch between Evaluations, Runs, Datasets, Webhooks, and History depending on your workflow stage.",
+      "createTitle": "Create Evaluation",
+      "createContent": "Start here to define a new evaluation and attach a dataset or inline samples.",
+      "listTitle": "Recent Evaluations",
+      "listContent": "Select an evaluation from this list to inspect details, edit it, or run it.",
+      "detailTitle": "Evaluation Details",
+      "detailContent": "Review selected evaluation metadata and copy IDs needed for automation and debugging."
+    }
+  },
+  "notes": {
+    "basics": {
+      "label": "Notes Basics",
+      "description": "Organize notes, apply filters, and edit content with split list/editor workflow",
+      "listTitle": "Notes List",
+      "listContent": "Browse and select notes from the sidebar to load them in the editor.",
+      "modeTitle": "Active and Trash Views",
+      "modeContent": "Switch between active notes and trash to recover or permanently remove entries.",
+      "filtersTitle": "Sort and Filter",
+      "filtersContent": "Sort by date/title and use notebook/keyword filters to narrow your working set.",
+      "editorTitle": "Editor Workspace",
+      "editorContent": "Edit note content, references, and metadata in the main editor panel.",
+      "saveTitle": "Save and Actions",
+      "saveContent": "Save updates, duplicate notes, export content, and run helper actions from the header."
+    }
+  },
+  "flashcards": {
+    "basics": {
+      "label": "Flashcards Basics",
+      "description": "Use study, manage, and transfer flows to maintain spaced-repetition decks",
+      "tabsTitle": "Study, Manage, Transfer",
+      "tabsContent": "Switch tabs to study cards, manage deck contents, and import or export card data.",
+      "reviewTitle": "Study Tab",
+      "reviewContent": "Run review sessions here and score recall quality to update spaced-repetition schedules.",
+      "manageTitle": "Manage Tab",
+      "manageContent": "Open the Manage tab to search cards, filter by deck/tags, and perform bulk updates.",
+      "transferTitle": "Transfer Tab",
+      "transferContent": "Use Transfer for CSV/JSON/APKG import and export workflows.",
+      "quizTitle": "Bridge to Quiz",
+      "quizContent": "Jump into Quiz mode from your selected deck to validate retention with assessments."
+    }
+  },
+  "worldBooks": {
+    "basics": {
+      "label": "World Books Basics",
+      "description": "Create world books, filter by state, and manage reusable lore entries",
+      "headerTitle": "World Books Workspace",
+      "headerContent": "World Books hold reusable lore and structured context that can be attached to characters and chat sessions.",
+      "searchTitle": "Search World Books",
+      "searchContent": "Search by title, metadata, and content to quickly locate the right world book.",
+      "filtersTitle": "Status Filters",
+      "filtersContent": "Filter by enabled/disabled state and attachment status before editing or exporting.",
+      "tableTitle": "World Book Library",
+      "tableContent": "Select a row to manage entries, attachments, and advanced actions for each world book.",
+      "actionsTitle": "Create and Import",
+      "actionsContent": "Create a new world book or import an existing JSON bundle to seed your knowledge base."
+    }
   }
 }

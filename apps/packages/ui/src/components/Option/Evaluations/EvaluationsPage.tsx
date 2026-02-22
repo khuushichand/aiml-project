@@ -93,7 +93,10 @@ export const EvaluationsPage: React.FC = () => {
     {
       key: "evaluations",
       label: (
-        <span className="flex items-center gap-2">
+        <span
+          className="flex items-center gap-2"
+          data-testid="evaluations-tab-evaluations"
+        >
           <BarChart3 className="h-4 w-4" />
           {t("evaluations:tabEvaluations", "Evaluations")}
         </span>
@@ -103,7 +106,7 @@ export const EvaluationsPage: React.FC = () => {
     {
       key: "runs",
       label: (
-        <span className="flex items-center gap-2">
+        <span className="flex items-center gap-2" data-testid="evaluations-tab-runs">
           <Play className="h-4 w-4" />
           {t("evaluations:tabRuns", "Runs")}
         </span>
@@ -113,7 +116,10 @@ export const EvaluationsPage: React.FC = () => {
     {
       key: "datasets",
       label: (
-        <span className="flex items-center gap-2">
+        <span
+          className="flex items-center gap-2"
+          data-testid="evaluations-tab-datasets"
+        >
           <Database className="h-4 w-4" />
           {t("evaluations:tabDatasets", "Datasets")}
         </span>
@@ -123,7 +129,10 @@ export const EvaluationsPage: React.FC = () => {
     {
       key: "webhooks",
       label: (
-        <span className="flex items-center gap-2">
+        <span
+          className="flex items-center gap-2"
+          data-testid="evaluations-tab-webhooks"
+        >
           <Webhook className="h-4 w-4" />
           {t("evaluations:tabWebhooks", "Webhooks")}
         </span>
@@ -133,7 +142,10 @@ export const EvaluationsPage: React.FC = () => {
     {
       key: "history",
       label: (
-        <span className="flex items-center gap-2">
+        <span
+          className="flex items-center gap-2"
+          data-testid="evaluations-tab-history"
+        >
           <History className="h-4 w-4" />
           {t("evaluations:tabHistory", "History")}
         </span>
@@ -169,7 +181,7 @@ export const EvaluationsPage: React.FC = () => {
   return (
     <PageShell className="py-6" maxWidthClassName="max-w-6xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-text">
+        <h1 className="text-2xl font-semibold text-text" data-testid="evaluations-page-title">
           {t("evaluations:title", "Evaluations")}
         </h1>
         <p className="mt-1 text-sm text-text-muted">
@@ -221,6 +233,7 @@ export const EvaluationsPage: React.FC = () => {
         onChange={handleTabChange}
         items={tabItems}
         className="evaluations-tabs"
+        data-testid="evaluations-tabs"
       />
     </PageShell>
   )

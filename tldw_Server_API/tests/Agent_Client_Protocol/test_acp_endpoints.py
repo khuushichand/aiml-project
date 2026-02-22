@@ -55,7 +55,7 @@ def stub_runner_client(monkeypatch):
 def test_acp_session_new_success(client_user_only, stub_runner_client):
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
-        json={"cwd": "/tmp"},
+        json={"cwd": "/tmp"},  # nosec B108
     )
     assert resp.status_code == 200
     payload = resp.json()
@@ -114,7 +114,7 @@ def test_acp_session_new_error(client_user_only, monkeypatch):
 
     resp = client_user_only.post(
         "/api/v1/acp/sessions/new",
-        json={"cwd": "/tmp"},
+        json={"cwd": "/tmp"},  # nosec B108
     )
     assert resp.status_code == 502
     assert resp.json()["detail"] == "boom"

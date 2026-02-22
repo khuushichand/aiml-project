@@ -128,7 +128,7 @@ async def test_discovery_filters_tools_and_unknown_virtual_tool_is_rejected(monk
         adapter=adapter,
     )
 
-    manager = ExternalServerManager(config_path="/tmp/unused.yaml")
+    manager = ExternalServerManager(config_path="/tmp/unused.yaml")  # nosec B108
     try:
         await manager.initialize()
         virtual_names = [tool.virtual_name for tool in manager.list_virtual_tools()]

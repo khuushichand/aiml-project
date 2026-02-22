@@ -14,7 +14,7 @@ def test_get_free_disk_space_gb_uses_statvfs(monkeypatch):
         lambda _path: statvfs_result(1024, 4096),
     )
 
-    free_gb = get_free_disk_space_gb("/tmp")
+    free_gb = get_free_disk_space_gb("/tmp")  # nosec B108
 
     assert free_gb == pytest.approx((1024 * 4096) / (1024 ** 3))
 

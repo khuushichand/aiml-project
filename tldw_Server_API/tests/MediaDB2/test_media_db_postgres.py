@@ -63,17 +63,19 @@ def test_media_rls_enforces_scope_postgres():
     ident = admin_backend.escape_identifier  # type: ignore[attr-defined]
 
     with admin_backend.transaction() as conn:
-        admin_backend.execute(
-            f"""
+        ensure_role_sql = """
             DO $$
             BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{test_role}'::text) THEN
-                    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '{test_role}', '{test_password}');
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s::text) THEN
+                    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', %s, %s);
                 ELSE
-                    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', '{test_role}', '{test_password}');
+                    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', %s, %s);
                 END IF;
             END$$;
-            """,
+            """
+        admin_backend.execute(
+            ensure_role_sql,
+            (test_role, test_role, test_password, test_role, test_password),
             connection=conn,
         )
         admin_backend.execute(

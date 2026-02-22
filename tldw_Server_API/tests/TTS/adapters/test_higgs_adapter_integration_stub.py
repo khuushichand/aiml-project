@@ -81,7 +81,7 @@ async def test_voice_reference_integration_message_injection():
         assert initialized
 
         # Patch voice reference processing to avoid heavy dependencies
-        with patch.object(adapter, "_prepare_voice_reference", return_value="/tmp/ref.wav"):
+        with patch.object(adapter, "_prepare_voice_reference", return_value="/tmp/ref.wav"):  # nosec B108
             # Patch StreamingAudioWriter and AudioNormalizer to be no-ops
             with patch(
                 "tldw_Server_API.app.core.TTS.streaming_audio_writer.AudioNormalizer.normalize",
@@ -131,7 +131,7 @@ async def test_voice_reference_integration_message_injection():
                 ctype = getattr(content, "type", content.get("type") if isinstance(content, dict) else None)
                 url = getattr(content, "audio_url", content.get("audio_url") if isinstance(content, dict) else None)
                 assert ctype == "audio"
-                assert url == "/tmp/ref.wav"
+                assert url == "/tmp/ref.wav"  # nosec B108
 
         # Cleanup adapter
         await adapter.close()

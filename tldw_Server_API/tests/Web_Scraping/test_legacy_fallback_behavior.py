@@ -217,7 +217,7 @@ async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch):
     monkeypatch.setattr(
         ws_service,
         "get_user_media_db_path",
-        lambda user_id: "/tmp/fallback-media.db",
+        lambda user_id: "/tmp/fallback-media.db",  # nosec B108
         raising=True,
     )
 

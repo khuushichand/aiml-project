@@ -121,7 +121,7 @@ async def test_schedule_media_add_embeddings_background_mode_adds_task(monkeypat
             "db_id": 88,
             "media_type": "document",
             "input_ref": "background.txt",
-            "processing_source": "/tmp/background.txt",
+            "processing_source": "/tmp/background.txt",  # nosec B108
         }
     ]
 

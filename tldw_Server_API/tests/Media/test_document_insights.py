@@ -28,7 +28,7 @@ def mock_db():
     db.get_media_by_id = MagicMock(
         return_value={"id": 1, "type": "pdf", "content": "Sample document content."}
     )
-    db.db_path_str = "/tmp/test_media.db"
+    db.db_path_str = "/tmp/test_media.db"  # nosec B108
     return db
 
 

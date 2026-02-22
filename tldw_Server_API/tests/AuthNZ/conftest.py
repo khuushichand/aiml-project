@@ -658,11 +658,14 @@ async def isolated_test_environment(monkeypatch):
 
     try:
         # Drop if exists (cleanup from failed tests)
-        await conn.execute(f"""
+        await conn.execute(
+            """
             SELECT pg_terminate_backend(pid)
             FROM pg_stat_activity
-            WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
-        """)
+            WHERE datname = $1 AND pid <> pg_backend_pid()
+            """,
+            db_name,
+        )
         await conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
 
         # Create new database
@@ -1426,11 +1429,14 @@ async def isolated_test_environment(monkeypatch):
     )
 
     try:
-        await cleanup_conn.execute(f"""
+        await cleanup_conn.execute(
+            """
             SELECT pg_terminate_backend(pid)
             FROM pg_stat_activity
-            WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
-        """)
+            WHERE datname = $1 AND pid <> pg_backend_pid()
+            """,
+            db_name,
+        )
         await cleanup_conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
         logger.info(f"Dropped test database: {db_name}")
     finally:
@@ -1479,11 +1485,14 @@ async def setup_test_database(monkeypatch):
 
     try:
         # Drop test database if it exists
-        await conn.execute(f"""
+        await conn.execute(
+            """
             SELECT pg_terminate_backend(pid)
             FROM pg_stat_activity
-            WHERE datname = '{TEST_DB_NAME}' AND pid <> pg_backend_pid()
-        """)
+            WHERE datname = $1 AND pid <> pg_backend_pid()
+            """,
+            TEST_DB_NAME,
+        )
         await conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB_NAME}")
 
         # Create test database
@@ -1722,11 +1731,14 @@ async def setup_test_database(monkeypatch):
     )
 
     try:
-        await cleanup_conn.execute(f"""
+        await cleanup_conn.execute(
+            """
             SELECT pg_terminate_backend(pid)
             FROM pg_stat_activity
-            WHERE datname = '{TEST_DB_NAME}' AND pid <> pg_backend_pid()
-        """)
+            WHERE datname = $1 AND pid <> pg_backend_pid()
+            """,
+            TEST_DB_NAME,
+        )
         await cleanup_conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB_NAME}")
         logger.info(f"Dropped test database: {TEST_DB_NAME}")
     finally:

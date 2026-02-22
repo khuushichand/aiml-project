@@ -434,13 +434,13 @@ class TestMultiUserScenarios:
         dict2 = dict_service2.create_dictionary("User2 Dict", "Also private")
 
         # Export for each user
-        with patch.object(service1, '_create_chatbook_archive', return_value="/tmp/user1.chatbook"):
+        with patch.object(service1, '_create_chatbook_archive', return_value="/tmp/user1.chatbook"):  # nosec B108
             result1 = await service1.export_chatbook(
                 name="User1 Export",
                 content_types=["dictionaries"]
             )
 
-        with patch.object(service2, '_create_chatbook_archive', return_value="/tmp/user2.chatbook"):
+        with patch.object(service2, '_create_chatbook_archive', return_value="/tmp/user2.chatbook"):  # nosec B108
             result2 = await service2.export_chatbook(
                 name="User2 Export",
                 content_types=["dictionaries"]

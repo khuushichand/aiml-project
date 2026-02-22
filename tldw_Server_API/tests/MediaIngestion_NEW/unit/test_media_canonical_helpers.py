@@ -133,13 +133,13 @@ def test_process_audio_wrapper_drops_unsupported_kwargs(
     )
 
     result = media_mod.process_audio_files(
-        inputs=["/tmp/audio.wav"],
+        inputs=["/tmp/audio.wav"],  # nosec B108
         perform_chunking=False,
         chunk_options={"method": "sentences", "max_size": 300},
     )
 
     assert result == {"status": "ok"}
-    assert called["inputs"] == ["/tmp/audio.wav"]
+    assert called["inputs"] == ["/tmp/audio.wav"]  # nosec B108
     assert called["perform_chunking"] is False
 
 

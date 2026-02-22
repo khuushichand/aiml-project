@@ -51,7 +51,7 @@ def _open_db_from_spec(spec: Dict[str, Any]) -> PromptStudioDatabase:
         connect_timeout=2,
     )
     be = DatabaseBackendFactory.create_backend(cfg)
-    return PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-worker", backend=be)
+    return PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-worker", backend=be)  # nosec B108
 
 
 def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
@@ -93,7 +93,7 @@ def test_parallel_acquire_distinct_jobs_multiprocessing(
         db_to_use = mp_db
     else:
         backend = DatabaseBackendFactory.create_backend(pg_database_config)
-        mp_db = PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-session", backend=backend)
+        mp_db = PromptStudioDatabase(db_path="/tmp/placeholder.sqlite", client_id="mp-session", backend=backend)  # nosec B108
         db_to_use = mp_db
 
     try:

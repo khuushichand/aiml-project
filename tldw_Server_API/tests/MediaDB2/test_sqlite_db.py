@@ -40,7 +40,7 @@ def get_latest_log(db: MediaDatabase, entity_uuid: str) -> dict | None:
     return dict(row) if row else None
 
 def get_entity_version(db: MediaDatabase, entity_table: str, uuid: str) -> int | None:
-    cursor = db.execute_query(f"SELECT version FROM {entity_table} WHERE uuid = ?", (uuid,))
+    cursor = db.execute_query(f"SELECT version FROM {entity_table} WHERE uuid = ?", (uuid,))  # nosec B608
     row = cursor.fetchone()
     return row['version'] if row else None
 

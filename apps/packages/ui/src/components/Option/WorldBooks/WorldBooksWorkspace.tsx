@@ -130,18 +130,20 @@ export const WorldBooksWorkspace: React.FC = () => {
       className="space-y-4"
       maxWidthClassName={pageShellMaxWidthClassName}
     >
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold text-text">
-          {t("option:header.modeWorldBooks", "World Books")}
-        </h1>
-        <p className="text-xs text-text-muted">
-          {t("option:worldBooksEmpty.headerDescription", {
-            defaultValue:
-              "Create and manage structured knowledge bases that characters and chats can reference."
-          })}
-        </p>
+      <div className="space-y-4" data-testid="world-books-tutorial-shell">
+        <div className="space-y-1">
+          <h1 className="text-lg font-semibold text-text">
+            {t("option:header.modeWorldBooks", "World Books")}
+          </h1>
+          <p className="text-xs text-text-muted">
+            {t("option:worldBooksEmpty.headerDescription", {
+              defaultValue:
+                "Create and manage structured knowledge bases that characters and chats can reference."
+            })}
+          </p>
+        </div>
+        <WorldBooksManager />
       </div>
-      <WorldBooksManager />
     </PageShell>
   )
 }

@@ -26,7 +26,7 @@ def _has_tiktoken():
         return False
 
     blob_url = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
-    cache_key = hashlib.sha1(blob_url.encode()).hexdigest()
+    cache_key = hashlib.sha1(blob_url.encode()).hexdigest()  # nosec B324
     cache_path = os.path.join(cache_dir, cache_key)
     return os.path.exists(cache_path)
 

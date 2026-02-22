@@ -31,7 +31,7 @@ def test_redis_worker_chunking_roundtrip_real_redis(redis_client, monkeypatch):
 
     async def _fake_chunking(*_args, **_kwargs):
         return {
-            "chunks_path": "/tmp/embeddings_chunks.json",
+            "chunks_path": "/tmp/embeddings_chunks.json",  # nosec B108
             "chunks_processed": 1,
             "total_chunks": 1,
         }, False

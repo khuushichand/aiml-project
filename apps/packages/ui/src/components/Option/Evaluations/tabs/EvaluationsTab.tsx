@@ -248,6 +248,7 @@ export const EvaluationsTab: React.FC = () => {
     <div className="space-y-4">
       {/* Evaluations List */}
       <Card
+        data-testid="evaluations-list-card"
         title={t("evaluations:listTitle", {
           defaultValue: "Recent evaluations"
         })}
@@ -257,6 +258,7 @@ export const EvaluationsTab: React.FC = () => {
               onClick={handleOpenCreate}
               type="primary"
               data-eval-tour="create-evaluation"
+              data-testid="evaluations-create-button"
             >
               {t("evaluations:newEvaluationCta", {
                 defaultValue: "New evaluation"
@@ -350,6 +352,7 @@ export const EvaluationsTab: React.FC = () => {
 
       {/* Evaluation Details */}
       <Card
+        data-testid="evaluations-detail-card"
         title={t("evaluations:detailTitle", {
           defaultValue: "Evaluation details"
         })}

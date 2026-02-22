@@ -705,7 +705,7 @@ if __name__ == "__main__":
     # Run tests
     asyncio.run(test_scheduler_lifecycle(SchedulerConfig(
         database_url="sqlite://:memory:",
-        base_path=Path("/tmp")
+        base_path=Path("/tmp")  # nosec B108
     )))
     print("✓ Scheduler lifecycle test passed")
 

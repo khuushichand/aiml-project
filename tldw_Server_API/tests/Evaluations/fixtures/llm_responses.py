@@ -156,7 +156,7 @@ class LLMResponseCache:
         # Generate a deterministic response based on prompt content
         if prompt_content:
             # Use hash to generate consistent scores
-            hash_val = int(hashlib.md5(prompt_content.encode()).hexdigest()[:8], 16)
+            hash_val = int(hashlib.md5(prompt_content.encode()).hexdigest()[:8], 16)  # nosec B324
             score = 3.0 + (hash_val % 20) / 10  # Score between 3.0 and 5.0
 
             return {
@@ -182,7 +182,7 @@ class LLMResponseCache:
     def get_embedding_response(cls, text: str, model: str = "text-embedding-3-small") -> List[float]:
         """Get a deterministic embedding based on text."""
         # Generate deterministic embedding based on text hash
-        hash_val = hashlib.md5(text.encode()).hexdigest()
+        hash_val = hashlib.md5(text.encode()).hexdigest()  # nosec B324
 
         # Create embedding vector (1536 dimensions for OpenAI embeddings)
         embedding_size = 1536 if "3" in model else 1024

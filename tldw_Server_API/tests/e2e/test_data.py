@@ -44,7 +44,7 @@ class TestDataGenerator:
 
         # Create unique content based on seed or timestamp
         unique_id = seed or datetime.now().isoformat()
-        hash_suffix = hashlib.md5(unique_id.encode()).hexdigest()[:8]
+        hash_suffix = hashlib.md5(unique_id.encode()).hexdigest()[:8]  # nosec B324
 
         # Randomly select topics for variety
         topics = random.choice([

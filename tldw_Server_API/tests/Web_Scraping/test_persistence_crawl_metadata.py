@@ -40,7 +40,7 @@ async def test_store_persistent_persists_crawl_metadata_when_available(monkeypat
     monkeypatch.setattr(
         enhanced_svc_mod,
         "get_user_media_db_path",
-        lambda user_id: "/tmp/test-media.db",
+        lambda user_id: "/tmp/test-media.db",  # nosec B108
     )
     monkeypatch.setattr(
         enhanced_svc_mod,

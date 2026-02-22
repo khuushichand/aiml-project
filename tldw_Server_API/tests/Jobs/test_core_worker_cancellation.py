@@ -43,7 +43,7 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
         async def _create_chatbook_sync_wrapper(self, **kwargs):
             # Simulate long work
             await asyncio.sleep(0.5)
-            return True, None, "/tmp/fake.zip"
+            return True, None, "/tmp/fake.zip"  # nosec B108
 
     # Patch the worker to use our FakeChatbookService and a JM bound to our DB
     import tldw_Server_API.app.services.core_jobs_worker as worker

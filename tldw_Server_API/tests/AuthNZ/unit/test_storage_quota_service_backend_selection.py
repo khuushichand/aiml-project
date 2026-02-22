@@ -166,7 +166,7 @@ class _QuotasRepoStub:
 def _make_service(pool: _PoolStub) -> StorageQuotaService:
     service = StorageQuotaService(
         db_pool=pool,
-        settings=SimpleNamespace(USER_DATA_BASE_PATH="/tmp", CHROMADB_BASE_PATH=""),
+        settings=SimpleNamespace(USER_DATA_BASE_PATH="/tmp", CHROMADB_BASE_PATH=""),  # nosec B108
     )
     service._initialized = True
     return service

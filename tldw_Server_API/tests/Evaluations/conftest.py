@@ -148,7 +148,7 @@ def mock_openai_server():
     max_retries = 30
     for _ in range(max_retries):
         try:
-            response = requests.get("http://localhost:8080/health")
+            response = requests.get("http://localhost:8080/health")  # nosec B113
             if response.status_code == 200:
                 break
         except requests.ConnectionError:
@@ -460,7 +460,7 @@ def mock_embeddings(monkeypatch):
         """Generate deterministic fake embeddings based on text hash."""
         # Generate a deterministic embedding based on the input text
         import hashlib
-        text_hash = hashlib.md5(text.encode()).hexdigest()
+        text_hash = hashlib.md5(text.encode()).hexdigest()  # nosec B324
         seed = int(text_hash[:8], 16)
         np.random.seed(seed)
         # Return 384 dimensions for all-MiniLM-L6-v2 compatibility

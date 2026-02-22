@@ -19,7 +19,7 @@ class TestContextualChunking:
     def mock_config(self):
         """Create a mock configuration with contextual settings."""
         return {
-            "USER_DB_BASE_DIR": "/tmp/test_db",
+            "USER_DB_BASE_DIR": "/tmp/test_db",  # nosec B108
             "embedding_config": {
                 "default_model_id": "test-model",
                 "enable_contextual_chunking": False,  # Default to false

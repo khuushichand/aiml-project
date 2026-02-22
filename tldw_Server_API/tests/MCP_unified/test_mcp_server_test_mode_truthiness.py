@@ -16,7 +16,7 @@ async def test_register_default_modules_auto_enables_media_with_test_mode_y(
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
     monkeypatch.delenv("MCP_ENABLE_MEDIA_MODULE", raising=False)
     monkeypatch.setenv("MCP_ENABLE_SANDBOX_MODULE", "0")
-    monkeypatch.setenv("MCP_MODULES_CONFIG", "/tmp/tldw-does-not-exist.yaml")
+    monkeypatch.setenv("MCP_MODULES_CONFIG", "/tmp/tldw-does-not-exist.yaml")  # nosec B108
     monkeypatch.delenv("MCP_MODULES", raising=False)
 
     import importlib

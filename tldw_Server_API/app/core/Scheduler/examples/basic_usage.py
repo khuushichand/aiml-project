@@ -47,7 +47,7 @@ async def main():
     # Configure scheduler
     config = SchedulerConfig(
         database_url="sqlite:///scheduler_example.db",
-        base_path=Path("/tmp/scheduler_example"),
+        base_path=Path("/tmp/scheduler_example"),  # nosec B108
         min_workers=2,
         max_workers=10,
         write_buffer_size=100,
@@ -147,7 +147,7 @@ async def example_with_batch_processing():
 
     config = SchedulerConfig(
         database_url="sqlite:///batch_example.db",
-        base_path=Path("/tmp/batch_example")
+        base_path=Path("/tmp/batch_example")  # nosec B108
     )
 
     async with Scheduler(config) as scheduler:
@@ -192,7 +192,7 @@ async def example_with_error_handling():
 
     config = SchedulerConfig(
         database_url="sqlite:///error_example.db",
-        base_path=Path("/tmp/error_example")
+        base_path=Path("/tmp/error_example")  # nosec B108
     )
 
     async with Scheduler(config) as scheduler:

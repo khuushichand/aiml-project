@@ -1,3 +1,4 @@
+import React from "react"
 import { Modal, Button, Tooltip, Dropdown } from "antd"
 import { MessageCircle, Pen, Copy, History, Trash2, Download, ExternalLink, Clock3 } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -56,6 +57,15 @@ export function CharacterPreviewPopup({
   exporting = false
 }: CharacterPreviewPopupProps) {
   const { t } = useTranslation(["settings", "common"])
+  const [fullImageOpen, setFullImageOpen] = React.useState(false)
+  const [fullImageSrc, setFullImageSrc] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (!open) {
+      setFullImageOpen(false)
+      setFullImageSrc(null)
+    }
+  }, [open])
 
   if (!character) return null
 
@@ -118,29 +128,41 @@ export function CharacterPreviewPopup({
     }
   ]
 
+  const handleOpenFullImage = (src: string) => {
+    setFullImageSrc(src)
+    setFullImageOpen(true)
+  }
+
   return (
-    <Modal
-      title={t("settings:manageCharacters.gallery.previewTitle", {
-        defaultValue: "Character Preview"
-      })}
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      destroyOnHidden
-      width={480}
-    >
-      <div className="space-y-4">
-        {/* Character Preview Content */}
-        <CharacterPreview
-          name={character.name}
-          description={character.description}
-          avatar_url={character.avatar_url}
-          image_base64={character.image_base64}
-          system_prompt={character.system_prompt}
-          greeting={character.greeting || character.first_message}
-          tags={character.tags}
-          expandedMetadata
-        />
+    <>
+      <Modal
+        title={t("settings:manageCharacters.gallery.previewTitle", {
+          defaultValue: "Character Preview"
+        })}
+        open={open}
+        onCancel={onClose}
+        footer={null}
+        destroyOnHidden
+        width={480}
+      >
+        <div className="space-y-4">
+          {/* Character Preview Content */}
+          <CharacterPreview
+            name={character.name}
+            description={character.description}
+            avatar_url={character.avatar_url}
+            image_base64={character.image_base64}
+            system_prompt={character.system_prompt}
+            greeting={character.greeting || character.first_message}
+            tags={character.tags}
+            expandedMetadata
+            onAvatarClick={handleOpenFullImage}
+            avatarTriggerTestId="character-preview-avatar-button"
+            avatarClickAriaLabel={t("settings:manageCharacters.preview.openFullImage", {
+              defaultValue: "Open full size image for {{name}}",
+              name: displayName
+            })}
+          />
 
         <div className="rounded-md border border-border bg-surface p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -213,15 +235,15 @@ export function CharacterPreviewPopup({
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border pt-4">
-          <Button
-            type="primary"
-            icon={<MessageCircle className="w-4 h-4" />}
-            onClick={onChat}
-          >
-            {chatLabel}
-          </Button>
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border pt-4">
+            <Button
+              type="primary"
+              icon={<MessageCircle className="w-4 h-4" />}
+              onClick={onChat}
+            >
+              {chatLabel}
+            </Button>
 
           <Tooltip title={chatInNewTabLabel}>
             <Button
@@ -333,8 +355,30 @@ export function CharacterPreviewPopup({
               {deleteLabel}
             </Button>
           </Tooltip>
+          </div>
         </div>
-      </div>
-    </Modal>
+      </Modal>
+      <Modal
+        title={t("settings:manageCharacters.preview.fullImageTitle", {
+          defaultValue: "Character image"
+        })}
+        open={fullImageOpen}
+        onCancel={() => setFullImageOpen(false)}
+        footer={null}
+        destroyOnHidden
+        width="auto"
+      >
+        <div className="flex items-center justify-center">
+          {fullImageSrc && (
+            <img
+              src={fullImageSrc}
+              alt={displayName}
+              className="max-h-[80vh] max-w-[90vw] h-auto w-auto object-contain"
+              data-testid="character-preview-full-image"
+            />
+          )}
+        </div>
+      </Modal>
+    </>
   )
 }

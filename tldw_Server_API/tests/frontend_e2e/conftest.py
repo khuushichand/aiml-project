@@ -100,7 +100,7 @@ def _find_repo_root() -> Path:
 
 def _fetch_frontend(base_url: str) -> Dict[str, Optional[str]]:
     try:
-        with urllib.request.urlopen(base_url, timeout=1) as response:
+        with urllib.request.urlopen(base_url, timeout=1) as response:  # nosec B310
             body = response.read(4096).decode(
                 response.headers.get_content_charset() or "utf-8",
                 errors="ignore",

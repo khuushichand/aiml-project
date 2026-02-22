@@ -285,7 +285,7 @@ async def test_llamafile_start_server_wildcard_host_uses_loopback(monkeypatch, t
 
     monkeypatch.setattr(http_utils, "wait_for_http_ready", _fake_ready)
 
-    res = await handler.start_server("toy.gguf", server_args={"host": "0.0.0.0", "port": 8077})
+    res = await handler.start_server("toy.gguf", server_args={"host": "0.0.0.0", "port": 8077})  # nosec B104
     assert res["status"] == "started"
     assert seen["base_url"] == "http://127.0.0.1:8077"
 
@@ -367,7 +367,7 @@ async def test_llamafile_start_server_starts_stream_drainers(monkeypatch, tmp_pa
 async def test_llamafile_inference_wildcard_host_uses_loopback(monkeypatch, tmp_path: Path):
     llama_dir = tmp_path / "llamafile"
     llama_dir.mkdir()
-    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_host="0.0.0.0")
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_host="0.0.0.0")  # nosec B104
     handler = LlamafileHandler(cfg, global_app_config={})
 
     class RP:

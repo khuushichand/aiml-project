@@ -74,7 +74,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
     from tldw_Server_API.app.core.DB_Management import db_path_utils as dp_mod
     from tldw_Server_API.app.core.DB_Management import Evaluations_DB as eval_db_mod
 
-    tmp = Path(os.getenv("PYTEST_TMPDIR", "/tmp")) / "evals_admin_cleanup.db"
+    tmp = Path(os.getenv("PYTEST_TMPDIR", "/tmp")) / "evals_admin_cleanup.db"  # nosec B108
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.touch(exist_ok=True)
 

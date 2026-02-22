@@ -38,7 +38,7 @@ def _extract_opml_urls(xml_text: str) -> list[str]:
     urls = []
     try:
         import xml.etree.ElementTree as ET
-        root = ET.fromstring(xml_text)
+        root = ET.fromstring(xml_text)  # nosec B314
         for outline in root.findall('.//outline'):
             url = outline.attrib.get('xmlUrl') or outline.attrib.get('xmlurl')
             if url:

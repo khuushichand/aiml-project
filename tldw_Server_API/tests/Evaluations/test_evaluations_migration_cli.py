@@ -69,7 +69,7 @@ def test_evaluations_migration_cli_row_counts(tmp_path, pg_eval_params):
     def _count_sqlite(table: str) -> int:
         with db.get_connection() as conn:
             c = conn.cursor()
-            c.execute(f"SELECT COUNT(*) AS cnt FROM {table}")
+            c.execute(f"SELECT COUNT(*) AS cnt FROM {table}")  # nosec B608
             row = c.fetchone()
             return int(row[0] if isinstance(row, tuple) else row["cnt"])  # type: ignore[index]
 
@@ -116,7 +116,7 @@ def test_evaluations_migration_cli_row_counts(tmp_path, pg_eval_params):
     try:
         with backend.transaction() as conn:
             def _pg_count(table: str) -> int:
-                res = backend.execute(f"SELECT COUNT(*) AS cnt FROM {table}", connection=conn)
+                res = backend.execute(f"SELECT COUNT(*) AS cnt FROM {table}", connection=conn)  # nosec B608
                 return int(res.scalar or 0)
 
             assert _pg_count("evaluations") == sqlite_counts["evaluations"]

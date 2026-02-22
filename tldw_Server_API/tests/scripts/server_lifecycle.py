@@ -149,7 +149,7 @@ def health_check() -> None:
         for path in HEALTH_PATHS:
             url = f"{base_url}{path}"
             try:
-                with urllib.request.urlopen(url, timeout=5) as response:
+                with urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
                     # Accept 200 OK universally; accept 206 for aggregate health endpoints
                     if response.status == 200 or (response.status == 206 and path.endswith("/health")):
                         print(f"[server-lifecycle] Health check OK for '{label}' via {path} (status {response.status})")

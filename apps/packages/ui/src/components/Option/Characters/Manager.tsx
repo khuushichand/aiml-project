@@ -94,10 +94,12 @@ const MAX_NAME_DISPLAY_LENGTH = 75
 const MAX_DESCRIPTION_LENGTH = 65
 const MAX_TAG_LENGTH = 20
 const MAX_TAGS_DISPLAYED = 6
+const MAX_TABLE_TAGS_DISPLAYED = 2
 const DEFAULT_PAGE_SIZE = 10
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const
 const PAGE_SIZE_STORAGE_KEY = "characters-page-size"
 const GALLERY_DENSITY_KEY = "characters-gallery-density"
+const TABLE_DENSITY_KEY = "characters-table-density"
 const SERVER_QUERY_ROLLOUT_FLAG_KEY = "ff_characters_server_query"
 const TEMPLATE_CHOOSER_SEEN_KEY = "characters-template-chooser-seen"
 const SYSTEM_PROMPT_EXAMPLE =
@@ -107,6 +109,7 @@ const SYSTEM_PROMPT_EXAMPLE =
 type AdvancedSectionKey = "promptControl" | "generationSettings" | "metadata"
 type AdvancedSectionState = Record<AdvancedSectionKey, boolean>
 type CharacterListScope = "active" | "deleted"
+type TableDensity = "comfortable" | "compact" | "dense"
 type DefaultCharacterPreferenceQueryResult = {
   defaultCharacterId: string | null
 }
@@ -654,6 +657,8 @@ const toCharactersSortBy = (column: string | null): CharacterListSortBy => {
   switch (column) {
     case "creator":
       return "creator"
+    case "activity":
+      return "last_used_at"
     case "createdAt":
       return "created_at"
     case "updatedAt":
@@ -1662,18 +1667,27 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     }
     return "rich"
   })
+  const [tableDensity, setTableDensity] = React.useState<TableDensity>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(TABLE_DENSITY_KEY)
+      if (saved === "dense" || saved === "compact" || saved === "comfortable") {
+        return saved
+      }
+    }
+    return "dense"
+  })
   const [sortColumn, setSortColumn] = React.useState<string | null>(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('characters-sort-column')
+      return localStorage.getItem('characters-sort-column') || "activity"
     }
-    return null
+    return "activity"
   })
   const [sortOrder, setSortOrder] = React.useState<'ascend' | 'descend' | null>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('characters-sort-order')
-      return saved === 'ascend' || saved === 'descend' ? saved : null
+      return saved === 'ascend' || saved === 'descend' ? saved : "descend"
     }
-    return null
+    return "descend"
   })
   const [currentPage, setCurrentPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState<number>(() => {
@@ -3317,6 +3331,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
   React.useEffect(() => {
     if (typeof window !== "undefined") {
+      localStorage.setItem(TABLE_DENSITY_KEY, tableDensity)
+    }
+  }, [tableDensity])
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
       localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(pageSize))
     }
   }, [pageSize])
@@ -4001,13 +4021,79 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     return null
   }
 
-  const formatTableDateCell = (
-    record: Record<string, any>,
-    keys: string[]
-  ): string => {
-    const timestamp = resolveTimestamp(record, keys)
-    if (!timestamp) return "—"
-    return new Date(timestamp).toLocaleDateString()
+  const formatRelativeActivityTime = (timestamp: number | null): string => {
+    if (!timestamp) {
+      return t("settings:manageCharacters.activity.never", {
+        defaultValue: "Never"
+      })
+    }
+    const delta = Date.now() - timestamp
+    const absDelta = Math.abs(delta)
+    const minute = 60_000
+    const hour = 3_600_000
+    const day = 86_400_000
+    const week = 604_800_000
+    const month = 2_629_746_000
+    const year = 31_556_952_000
+
+    if (absDelta < minute) {
+      return t("settings:manageCharacters.activity.justNow", {
+        defaultValue: "Just now"
+      })
+    }
+
+    if (absDelta < hour) {
+      return t("settings:manageCharacters.activity.minutesAgo", {
+        defaultValue: "{{count}}m ago",
+        count: Math.max(1, Math.round(absDelta / minute))
+      })
+    }
+
+    if (absDelta < day) {
+      return t("settings:manageCharacters.activity.hoursAgo", {
+        defaultValue: "{{count}}h ago",
+        count: Math.max(1, Math.round(absDelta / hour))
+      })
+    }
+
+    if (absDelta < week) {
+      return t("settings:manageCharacters.activity.daysAgo", {
+        defaultValue: "{{count}}d ago",
+        count: Math.max(1, Math.round(absDelta / day))
+      })
+    }
+
+    if (absDelta < month) {
+      return t("settings:manageCharacters.activity.weeksAgo", {
+        defaultValue: "{{count}}w ago",
+        count: Math.max(1, Math.round(absDelta / week))
+      })
+    }
+
+    if (absDelta < year) {
+      return t("settings:manageCharacters.activity.monthsAgo", {
+        defaultValue: "{{count}}mo ago",
+        count: Math.max(1, Math.round(absDelta / month))
+      })
+    }
+
+    return t("settings:manageCharacters.activity.yearsAgo", {
+      defaultValue: "{{count}}y ago",
+      count: Math.max(1, Math.round(absDelta / year))
+    })
+  }
+
+  const formatAbsoluteActivityTime = (timestamp: number | null): string => {
+    if (!timestamp) {
+      return t("settings:manageCharacters.activity.never", {
+        defaultValue: "Never"
+      })
+    }
+    try {
+      return new Date(timestamp).toLocaleString()
+    } catch {
+      return String(timestamp)
+    }
   }
 
   const serverSortBy = React.useMemo(
@@ -6818,6 +6904,36 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               />
             )}
 
+            {viewMode === "table" && (
+              <Segmented
+                value={tableDensity}
+                onChange={(v) => setTableDensity(v as TableDensity)}
+                options={[
+                  {
+                    value: "comfortable",
+                    label: t("settings:manageCharacters.tableDensity.comfortable", {
+                      defaultValue: "Comfortable"
+                    })
+                  },
+                  {
+                    value: "compact",
+                    label: t("settings:manageCharacters.tableDensity.compact", {
+                      defaultValue: "Compact"
+                    })
+                  },
+                  {
+                    value: "dense",
+                    label: t("settings:manageCharacters.tableDensity.dense", {
+                      defaultValue: "Dense"
+                    })
+                  }
+                ]}
+                aria-label={t("settings:manageCharacters.tableDensity.label", {
+                  defaultValue: "Table density"
+                })}
+              />
+            )}
+
             {/* Keyboard shortcuts help (H1) */}
             <Tooltip
               title={
@@ -7392,8 +7508,24 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
           )}
           <div className="overflow-x-auto" data-testid="characters-table-view">
             <Table
+              className={`characters-table-density-${tableDensity}`}
+              size={tableDensity === "comfortable" ? "middle" : "small"}
               rowKey={(r: any) => r.id || r.slug || r.name}
               dataSource={data}
+              onRow={(record) => ({
+                onClick: (event) => {
+                  if (characterListScope !== "active") return
+                  const target = event.target as HTMLElement | null
+                  if (
+                    target?.closest(
+                      "button, a, input, textarea, select, [role='button'], [role='menuitem'], .ant-select, .ant-dropdown, .ant-checkbox-wrapper"
+                    )
+                  ) {
+                    return
+                  }
+                  setPreviewCharacter(record)
+                }
+              })}
               pagination={{
                 current: currentPage,
                 pageSize,
@@ -7466,345 +7598,349 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 }
               } : null,
               {
-                title: (
-                  <span className="sr-only">
-                    {t("settings:manageCharacters.columns.avatar", {
-                      defaultValue: "Avatar"
-                    })}
-                  </span>
-                ),
-              key: "avatar",
-              width: 48,
-              render: (_: any, record: any) =>
-                record?.avatar_url ? (
-                  <img
-                    src={record.avatar_url}
-                    loading="lazy"
-                    decoding="async"
-                    className="w-6 h-6 rounded-full"
-                    alt={
-                      record?.name
-                        ? t("settings:manageCharacters.avatarAltWithName", {
-                            defaultValue: "Avatar of {{name}}",
-                            name: record.name
-                          })
-                        : t("settings:manageCharacters.avatarAlt", {
-                            defaultValue: "User avatar"
-                          })
-                    }
-                  />
-                ) : (
-                  <UserCircle2 className="w-5 h-5" />
-                )
-            },
-            {
-              title: t("settings:manageCharacters.columns.name", {
-                defaultValue: "Name"
-              }),
-              dataIndex: "name",
-              key: "name",
-              sorter: true,
-              sortDirections: ["ascend", "descend"] as const,
-              sortOrder: sortColumn === "name" ? sortOrder : undefined,
-              render: (v: string, record: any) => {
-                const recordId = String(record.id || record.slug || record.name)
-                const isEditing = inlineEdit?.id === recordId && inlineEdit?.field === 'name'
+                title: t("settings:manageCharacters.columns.name", {
+                  defaultValue: "Name"
+                }),
+                dataIndex: "name",
+                key: "name",
+                sorter: true,
+                sortDirections: ["ascend", "descend"] as const,
+                sortOrder: sortColumn === "name" ? sortOrder : undefined,
+                width: 360,
+                render: (v: string, record: any) => {
+                  const recordId = String(record.id || record.slug || record.name)
+                  const isNameEditing =
+                    inlineEdit?.id === recordId && inlineEdit?.field === "name"
+                  const isDescriptionEditing =
+                    inlineEdit?.id === recordId && inlineEdit?.field === "description"
+                  const descriptionValue = String(record?.description || "").trim()
+                  const descriptionLineClass =
+                    tableDensity === "comfortable" ? "line-clamp-2" : "line-clamp-1"
+                  const count = conversationCounts?.[recordId] || 0
 
-                if (characterListScope === "deleted") {
-                  return (
-                    <span className="line-clamp-1" title={v || undefined}>
-                      {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
-                    </span>
-                  )
-                }
+                  const avatarSrc =
+                    record?.avatar_url ||
+                    validateAndCreateImageDataUrl(record?.image_base64)
 
-                if (isEditing) {
-                  return (
-                    <Input
-                      ref={inlineEditInputRef}
-                      size="small"
-                      value={inlineEdit.value}
-                      onChange={(e) => setInlineEdit({ ...inlineEdit, value: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          saveInlineEdit()
-                        } else if (e.key === 'Escape') {
-                          cancelInlineEdit()
-                        }
-                      }}
-                      onBlur={saveInlineEdit}
-                      disabled={inlineUpdating}
-                      className="max-w-[200px]"
-                    />
-                  )
-                }
-
-                return (
-                  <Tooltip title={t("settings:manageCharacters.table.doubleClickEdit", { defaultValue: "Double-click to edit" })}>
-                    <span
-                      className="line-clamp-1 cursor-text hover:bg-surface-hover rounded px-1 -mx-1"
-                      title={v || undefined}
-                      data-inline-edit-key={`${recordId}:name`}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={withCharacterNameInLabel(
-                        t("settings:manageCharacters.table.inlineEditName", {
-                          defaultValue: "Edit name inline for {{name}}",
-                          name: v || record?.name || record?.slug || "character"
-                        }),
-                        "Edit name inline for {{name}}",
-                        String(v || record?.name || record?.slug || "character")
-                      )}
-                      onDoubleClick={(event) =>
-                        startInlineEdit(record, 'name', event.currentTarget)
+                  const avatarNode = avatarSrc ? (
+                    <img
+                      src={avatarSrc}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-6 w-6 rounded-full object-cover"
+                      alt={
+                        record?.name
+                          ? t("settings:manageCharacters.avatarAltWithName", {
+                              defaultValue: "Avatar of {{name}}",
+                              name: record.name
+                            })
+                          : t("settings:manageCharacters.avatarAlt", {
+                              defaultValue: "User avatar"
+                            })
                       }
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === 'F2') {
-                          event.preventDefault()
-                          startInlineEdit(record, 'name', event.currentTarget)
-                        }
-                      }}
-                    >
-                      {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
-                    </span>
-                  </Tooltip>
-                )
-              }
-            },
-            {
-              title: t("settings:manageCharacters.columns.description", {
-                defaultValue: "Description"
-              }),
-              dataIndex: "description",
-              key: "description",
-              render: (v: string, record: any) => {
-                const recordId = String(record.id || record.slug || record.name)
-                const isEditing = inlineEdit?.id === recordId && inlineEdit?.field === 'description'
-
-                if (characterListScope === "deleted") {
-                  return (
-                    <span className="line-clamp-1" title={v || undefined}>
-                      {v ? (
-                        truncateText(v, MAX_DESCRIPTION_LENGTH)
-                      ) : (
-                        <span className="text-text-subtle">
-                          {t("settings:manageCharacters.table.noDescription", {
-                            defaultValue: "—"
-                          })}
-                        </span>
-                      )}
-                    </span>
-                  )
-                }
-
-                if (isEditing) {
-                  return (
-                    <Input
-                      ref={inlineEditInputRef}
-                      size="small"
-                      value={inlineEdit.value}
-                      onChange={(e) => setInlineEdit({ ...inlineEdit, value: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          saveInlineEdit()
-                        } else if (e.key === 'Escape') {
-                          cancelInlineEdit()
-                        }
-                      }}
-                      onBlur={saveInlineEdit}
-                      disabled={inlineUpdating}
-                      className="max-w-[250px]"
                     />
+                  ) : (
+                    <UserCircle2 className="h-5 w-5" />
                   )
-                }
 
-                return (
-                  <Tooltip title={t("settings:manageCharacters.table.doubleClickEdit", { defaultValue: "Double-click to edit" })}>
-                    <span
-                      className="line-clamp-1 cursor-text hover:bg-surface-hover rounded px-1 -mx-1"
-                      title={v || undefined}
-                      data-inline-edit-key={`${recordId}:description`}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={t("settings:manageCharacters.table.inlineEditDescription", {
-                        defaultValue: "Edit description inline for {{name}}",
-                        name: record?.name || record?.slug || "character"
-                      })}
-                      onDoubleClick={(event) =>
-                        startInlineEdit(record, 'description', event.currentTarget)
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === 'F2') {
-                          event.preventDefault()
-                          startInlineEdit(record, 'description', event.currentTarget)
-                        }
-                      }}
-                    >
-                      {v ? (
-                        truncateText(v, MAX_DESCRIPTION_LENGTH)
-                      ) : (
-                        <span className="text-text-subtle">
-                          {t("settings:manageCharacters.table.noDescription", {
-                            defaultValue: "—"
-                          })}
-                        </span>
-                      )}
-                    </span>
-                  </Tooltip>
-                )
-              }
-            },
-            {
-              title: t("settings:manageCharacters.tags.label", {
-                defaultValue: "Tags"
-              }),
-              dataIndex: "tags",
-              key: "tags",
-              render: (tags: unknown) => {
-                const all = getCharacterVisibleTags(tags)
-                const visible = all.slice(0, MAX_TAGS_DISPLAYED)
-                const hasMore = all.length > MAX_TAGS_DISPLAYED
-                const hiddenCount = all.length - MAX_TAGS_DISPLAYED
-                const hiddenTags = all.slice(MAX_TAGS_DISPLAYED)
-                return (
-                  <div className="flex flex-wrap gap-1">
-                    {visible.map((tag: string, index: number) => (
-                      <Tag key={`${tag}-${index}`}>
-                        {truncateText(tag, MAX_TAG_LENGTH)}
-                      </Tag>
-                    ))}
-                    {hasMore && (
+                  const nameNode =
+                    characterListScope === "deleted" ? (
+                      <span className="line-clamp-1 font-medium" title={v || undefined}>
+                        {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
+                      </span>
+                    ) : isNameEditing ? (
+                      <Input
+                        ref={inlineEditInputRef}
+                        size="small"
+                        value={inlineEdit.value}
+                        onChange={(e) => setInlineEdit({ ...inlineEdit, value: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault()
+                            saveInlineEdit()
+                          } else if (e.key === "Escape") {
+                            cancelInlineEdit()
+                          }
+                        }}
+                        onBlur={saveInlineEdit}
+                        disabled={inlineUpdating}
+                        className="max-w-[240px]"
+                      />
+                    ) : (
                       <Tooltip
-                        title={
-                          <div>
-                            <div className="font-medium mb-1">
-                              {t("settings:manageCharacters.tags.moreCount", {
-                                defaultValue: "+{{count}} more tags",
-                                count: hiddenCount
-                              })}
-                            </div>
-                            <div className="text-xs">
-                              {hiddenTags.join(", ")}
-                            </div>
-                          </div>
-                        }
+                        title={t("settings:manageCharacters.table.doubleClickEdit", {
+                          defaultValue: "Double-click to edit"
+                        })}
                       >
-                        <span className="text-xs text-text-subtle cursor-help">
-                          +{hiddenCount}
+                        <span
+                          className="line-clamp-1 cursor-text rounded px-1 -mx-1 font-medium hover:bg-surface-hover"
+                          title={v || undefined}
+                          data-inline-edit-key={`${recordId}:name`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={withCharacterNameInLabel(
+                            t("settings:manageCharacters.table.inlineEditName", {
+                              defaultValue: "Edit name inline for {{name}}",
+                              name: v || record?.name || record?.slug || "character"
+                            }),
+                            "Edit name inline for {{name}}",
+                            String(v || record?.name || record?.slug || "character")
+                          )}
+                          onDoubleClick={(event) =>
+                            startInlineEdit(record, "name", event.currentTarget)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === "F2") {
+                              event.preventDefault()
+                              startInlineEdit(record, "name", event.currentTarget)
+                            }
+                          }}
+                        >
+                          {truncateText(v, MAX_NAME_DISPLAY_LENGTH)}
                         </span>
                       </Tooltip>
-                    )}
-                  </div>
-                )
-              }
-            },
-            {
-              title: t("settings:manageCharacters.columns.creator", {
-                defaultValue: "Creator"
-              }),
-              key: "creator",
-              sorter: true,
-              sortDirections: ["ascend", "descend"] as const,
-              sortOrder: sortColumn === "creator" ? sortOrder : undefined,
-              render: (_: any, record: any) => {
-                const creatorValue =
-                  record.creator || record.created_by || record.createdBy
-                return creatorValue ? (
-                  <span className="text-xs text-text">{creatorValue}</span>
-                ) : (
-                  <span className="text-text-subtle">—</span>
-                )
-              }
-            },
-            {
-              title: t("settings:manageCharacters.columns.createdAt", {
-                defaultValue: "Created"
-              }),
-              key: "createdAt",
-              sorter: true,
-              sortDirections: ["ascend", "descend"] as const,
-              sortOrder: sortColumn === "createdAt" ? sortOrder : undefined,
-              render: (_: any, record: any) => (
-                <span className="text-xs text-text-muted">
-                  {formatTableDateCell(record, ["created_at", "createdAt", "created"])}
-                </span>
-              )
-            },
-            {
-              title: t("settings:manageCharacters.columns.updatedAt", {
-                defaultValue: "Updated"
-              }),
-              key: "updatedAt",
-              sorter: true,
-              sortDirections: ["ascend", "descend"] as const,
-              sortOrder: sortColumn === "updatedAt" ? sortOrder : undefined,
-              render: (_: any, record: any) => (
-                <span className="text-xs text-text-muted">
-                  {formatTableDateCell(record, [
-                    "updated_at",
-                    "updatedAt",
-                    "modified_at",
-                    "modifiedAt"
-                  ])}
-                </span>
-              )
-            },
-            {
-              title: t("settings:manageCharacters.columns.lastUsedAt", {
-                defaultValue: "Last used"
-              }),
-              key: "lastUsedAt",
-              sorter: true,
-              sortDirections: ["ascend", "descend"] as const,
-              sortOrder: sortColumn === "lastUsedAt" ? sortOrder : undefined,
-              render: (_: any, record: any) => (
-                <span className="text-xs text-text-muted">
-                  {formatTableDateCell(record, [
+                    )
+
+                  const descriptionNode = isDescriptionEditing ? (
+                    <Input
+                      ref={inlineEditInputRef}
+                      size="small"
+                      value={inlineEdit.value}
+                      onChange={(e) => setInlineEdit({ ...inlineEdit, value: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          saveInlineEdit()
+                        } else if (e.key === "Escape") {
+                          cancelInlineEdit()
+                        }
+                      }}
+                      onBlur={saveInlineEdit}
+                      disabled={inlineUpdating}
+                      className="max-w-[320px]"
+                    />
+                  ) : descriptionValue ? (
+                    <Tooltip
+                      title={t("settings:manageCharacters.table.doubleClickEdit", {
+                        defaultValue: "Double-click to edit"
+                      })}
+                    >
+                      <span
+                        className={`${descriptionLineClass} cursor-text rounded px-1 -mx-1 text-xs text-text-muted hover:bg-surface-hover`}
+                        title={descriptionValue}
+                        data-inline-edit-key={`${recordId}:description`}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={t("settings:manageCharacters.table.inlineEditDescription", {
+                          defaultValue: "Edit description inline for {{name}}",
+                          name: record?.name || record?.slug || "character"
+                        })}
+                        onDoubleClick={(event) =>
+                          startInlineEdit(record, "description", event.currentTarget)
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === "F2") {
+                            event.preventDefault()
+                            startInlineEdit(record, "description", event.currentTarget)
+                          }
+                        }}
+                      >
+                        {truncateText(descriptionValue, MAX_DESCRIPTION_LENGTH * 2)}
+                      </span>
+                    </Tooltip>
+                  ) : null
+
+                  return (
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="pt-0.5">{avatarNode}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="min-w-0 flex-1">{nameNode}</div>
+                          {count > 0 && (
+                            <Tooltip
+                              title={t(
+                                "settings:manageCharacters.gallery.conversationCount",
+                                {
+                                  defaultValue: "{{count}} conversation(s)",
+                                  count
+                                }
+                              )}
+                            >
+                              <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                                <MessageCircle className="h-3 w-3" />
+                                {count > 99 ? "99+" : count}
+                              </span>
+                            </Tooltip>
+                          )}
+                        </div>
+                        {descriptionNode && <div className="mt-0.5 min-w-0">{descriptionNode}</div>}
+                      </div>
+                    </div>
+                  )
+                }
+              },
+              {
+                title: t("settings:manageCharacters.tags.label", {
+                  defaultValue: "Tags"
+                }),
+                dataIndex: "tags",
+                key: "tags",
+                width: 220,
+                render: (tags: unknown) => {
+                  const all = getCharacterVisibleTags(tags)
+                  if (all.length === 0) return null
+                  const visible = all.slice(0, MAX_TABLE_TAGS_DISPLAYED)
+                  const hasMore = all.length > MAX_TABLE_TAGS_DISPLAYED
+                  const hiddenCount = all.length - MAX_TABLE_TAGS_DISPLAYED
+                  const hiddenTags = all.slice(MAX_TABLE_TAGS_DISPLAYED)
+                  return (
+                    <div className="flex min-w-0 flex-wrap items-center gap-1">
+                      {visible.map((tag: string, index: number) => (
+                        <button
+                          key={`${tag}-${index}`}
+                          type="button"
+                          className="rounded-sm"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setFilterTags((prev) =>
+                              prev.includes(tag) ? prev : [...prev, tag]
+                            )
+                            setCurrentPage(1)
+                          }}
+                        >
+                          <Tag>{truncateText(tag, MAX_TAG_LENGTH)}</Tag>
+                        </button>
+                      ))}
+                      {hasMore && (
+                        <Tooltip
+                          title={
+                            <div>
+                              <div className="mb-1 font-medium">
+                                {t("settings:manageCharacters.tags.moreCount", {
+                                  defaultValue: "+{{count}} more tags",
+                                  count: hiddenCount
+                                })}
+                              </div>
+                              <div className="text-xs">{hiddenTags.join(", ")}</div>
+                            </div>
+                          }
+                        >
+                          <span className="cursor-help text-xs text-text-subtle">
+                            +{hiddenCount}
+                          </span>
+                        </Tooltip>
+                      )}
+                    </div>
+                  )
+                }
+              },
+              {
+                title: t("settings:manageCharacters.columns.creator", {
+                  defaultValue: "Creator"
+                }),
+                key: "creator",
+                sorter: true,
+                sortDirections: ["ascend", "descend"] as const,
+                sortOrder: sortColumn === "creator" ? sortOrder : undefined,
+                width: 180,
+                render: (_: any, record: any) => {
+                  const creatorValue =
+                    record.creator || record.created_by || record.createdBy
+                  return creatorValue ? (
+                    <span className="line-clamp-1 text-xs text-text">{creatorValue}</span>
+                  ) : null
+                }
+              },
+              {
+                title: t("settings:manageCharacters.columns.activity", {
+                  defaultValue: "Activity"
+                }),
+                key: "activity",
+                sorter: true,
+                sortDirections: ["ascend", "descend"] as const,
+                sortOrder:
+                  sortColumn === "activity" || sortColumn === "lastUsedAt"
+                    ? sortOrder
+                    : undefined,
+                width: 180,
+                render: (_: any, record: any) => {
+                  const lastUsedTimestamp = resolveTimestamp(record, [
                     "last_used_at",
                     "lastUsedAt",
                     "last_active",
                     "lastActive"
-                  ])}
-                </span>
-              )
-            },
-            {
-              title: t("settings:manageCharacters.columns.conversations", {
-                defaultValue: "Chats"
-              }),
-              key: "conversations",
-              width: 70,
-              align: "center" as const,
-              sorter: true,
-              sortDirections: ["ascend", "descend"] as const,
-              sortOrder: sortColumn === "conversations" ? sortOrder : undefined,
-              render: (_: any, record: any) => {
-                const charId = String(record.id || record.slug || record.name)
-                const count = conversationCounts?.[charId] || 0
-                return count > 0 ? (
-                  <Tooltip
-                    title={t("settings:manageCharacters.gallery.conversationCount", {
-                      defaultValue: "{{count}} conversation(s)",
-                      count
-                    })}
-                  >
-                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                      <MessageCircle className="h-3 w-3" />
-                      {count > 99 ? '99+' : count}
-                    </span>
-                  </Tooltip>
-                ) : (
-                  <span className="text-text-subtle">—</span>
-                )
-              }
-            },
+                  ])
+                  const updatedTimestamp = resolveTimestamp(record, [
+                    "updated_at",
+                    "updatedAt",
+                    "modified_at",
+                    "modifiedAt"
+                  ])
+                  const createdTimestamp = resolveTimestamp(record, [
+                    "created_at",
+                    "createdAt",
+                    "created"
+                  ])
+                  const activityTimestamp =
+                    lastUsedTimestamp ?? updatedTimestamp ?? createdTimestamp
+                  const secondaryText = updatedTimestamp
+                    ? t("settings:manageCharacters.activity.updatedSecondary", {
+                        defaultValue: "Updated {{time}}",
+                        time: formatRelativeActivityTime(updatedTimestamp)
+                      })
+                    : createdTimestamp
+                      ? t("settings:manageCharacters.activity.createdSecondary", {
+                          defaultValue: "Created {{time}}",
+                          time: formatRelativeActivityTime(createdTimestamp)
+                        })
+                      : ""
+
+                  return (
+                    <Tooltip
+                      placement="topLeft"
+                      title={
+                        <div className="space-y-1 text-xs">
+                          <div>
+                            {t("settings:manageCharacters.columns.lastUsedAt", {
+                              defaultValue: "Last used"
+                            })}
+                            : {formatAbsoluteActivityTime(lastUsedTimestamp)}
+                          </div>
+                          <div>
+                            {t("settings:manageCharacters.columns.updatedAt", {
+                              defaultValue: "Updated"
+                            })}
+                            : {formatAbsoluteActivityTime(updatedTimestamp)}
+                          </div>
+                          <div>
+                            {t("settings:manageCharacters.columns.createdAt", {
+                              defaultValue: "Created"
+                            })}
+                            : {formatAbsoluteActivityTime(createdTimestamp)}
+                          </div>
+                        </div>
+                      }
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-text">
+                          {formatRelativeActivityTime(activityTimestamp)}
+                        </div>
+                        {secondaryText && (
+                          <div className="line-clamp-1 text-[11px] text-text-subtle">
+                            {secondaryText}
+                          </div>
+                        )}
+                      </div>
+                    </Tooltip>
+                  )
+                }
+              },
             {
               title: t("settings:manageCharacters.columns.actions", {
                 defaultValue: "Actions"
               }),
               key: "actions",
+              width: 210,
               render: (_: any, record: any) => {
                 const chatLabel = t("settings:manageCharacters.actions.chat", {
                   defaultValue: "Chat"
@@ -7825,12 +7961,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   "settings:manageCharacters.actions.duplicate",
                   {
                     defaultValue: "Duplicate"
-                  }
-                )
-                const exportLabel = t(
-                  "settings:manageCharacters.actions.export",
-                  {
-                    defaultValue: "Export"
                   }
                 )
                 const addFavoriteLabel = t(
@@ -7857,11 +7987,11 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
                 if (characterListScope === "deleted") {
                   return (
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1 whitespace-nowrap">
                       <Tooltip title={restoreLabel}>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                          className="inline-flex items-center rounded-md border border-transparent p-1.5 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                           aria-label={withCharacterNameInLabel(
                             t("settings:manageCharacters.aria.restore", {
                               defaultValue: "Restore character {{name}}",
@@ -7872,22 +8002,19 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           )}
                           onClick={() => handleRestoreFromTrash(record)}>
                           <History className="w-4 h-4" />
-                          <span className="hidden sm:inline text-xs font-medium">
-                            {restoreLabel}
-                          </span>
                         </button>
                       </Tooltip>
                     </div>
                   )
                 }
                 return (
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 whitespace-nowrap">
                     {/* Primary: Chat */}
                     <Tooltip
                       title={chatLabel}>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                        className="inline-flex items-center rounded-md border border-transparent p-1.5 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                         aria-label={withCharacterNameInLabel(
                           t("settings:manageCharacters.aria.chatWith", {
                             defaultValue: "Chat as {{name}}",
@@ -7898,9 +8025,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         )}
                         onClick={() => handleChat(record)}>
                         <MessageCircle className="w-4 h-4" />
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {chatLabel}
-                        </span>
                       </button>
                     </Tooltip>
                     {/* Primary: Edit */}
@@ -7908,7 +8032,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       title={editLabel}>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                        className="inline-flex items-center rounded-md border border-transparent p-1.5 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                         aria-label={withCharacterNameInLabel(
                           t("settings:manageCharacters.aria.edit", {
                             defaultValue: "Edit character {{name}}",
@@ -7921,9 +8045,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           handleEdit(record, e.currentTarget)
                         }}>
                         <Pen className="w-4 h-4" />
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {editLabel}
-                        </span>
                       </button>
                     </Tooltip>
                     {/* Primary: Delete */}
@@ -7931,7 +8052,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       title={deleteLabel}>
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-danger transition motion-reduce:transition-none hover:border-danger/30 hover:bg-danger/10 focus:outline-none focus:ring-2 focus:ring-danger focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex items-center rounded-md border border-transparent p-1.5 text-danger transition motion-reduce:transition-none hover:border-danger/30 hover:bg-danger/10 focus:outline-none focus:ring-2 focus:ring-danger focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
                         aria-label={withCharacterNameInLabel(
                           t("settings:manageCharacters.aria.delete", {
                             defaultValue: "Delete character {{name}}",
@@ -7963,16 +8084,13 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           }
                         }}>
                         <Trash2 className="w-4 h-4" />
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {deleteLabel}
-                        </span>
                       </button>
                     </Tooltip>
                     <Tooltip
                       title={isFavorite ? removeFavoriteLabel : addFavoriteLabel}>
                       <button
                         type="button"
-                        className={`inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 transition motion-reduce:transition-none focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg ${
+                        className={`inline-flex items-center rounded-md border border-transparent p-1.5 transition motion-reduce:transition-none focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg ${
                           isFavorite
                             ? "text-primary hover:border-primary/30 hover:bg-primary/10"
                             : "text-text-muted hover:border-border hover:bg-surface2"
@@ -8002,9 +8120,6 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         ) : (
                           <StarOff className="w-4 h-4" />
                         )}
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {isFavorite ? removeFavoriteLabel : addFavoriteLabel}
-                        </span>
                       </button>
                     </Tooltip>
                     {/* Overflow: View Conversations, Duplicate, Export */}
@@ -8103,7 +8218,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                       <Tooltip title={t("settings:manageCharacters.actions.more", { defaultValue: "More actions" })}>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                          className="inline-flex items-center rounded-md border border-transparent p-1.5 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
                           aria-label={t("settings:manageCharacters.aria.moreActions", {
                             defaultValue: "More actions for {{name}}",
                             name

@@ -155,7 +155,7 @@ async def test_quizzes_crud_and_generation():
     fake_db = FakeQuizzesDB()
     mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
 
-    ctx = SimpleNamespace(db_paths={"media": "/tmp/media.db", "chacha": "/tmp/chacha.db"}, client_id="test")
+    ctx = SimpleNamespace(db_paths={"media": "/tmp/media.db", "chacha": "/tmp/chacha.db"}, client_id="test")  # nosec B108
 
     created = await mod.execute_tool(
         "quizzes.create",

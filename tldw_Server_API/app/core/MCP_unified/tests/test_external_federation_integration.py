@@ -180,7 +180,7 @@ async def test_external_manager_integration_discovery_execute_error_and_timeout(
         )
         monkeypatch.setattr(manager_mod, "load_external_server_registry", lambda _path=None: cfg)
 
-        manager = ExternalServerManager(config_path="/tmp/unused.yaml")
+        manager = ExternalServerManager(config_path="/tmp/unused.yaml")  # nosec B108
         try:
             await manager.initialize()
             virtual_names = [tool.virtual_name for tool in manager.list_virtual_tools()]
@@ -218,7 +218,7 @@ async def test_external_federation_module_integration_exposes_and_executes_virtu
         module = ExternalFederationModule(
             ModuleConfig(
                 name="external_federation",
-                settings={"external_servers_config_path": "/tmp/unused.yaml"},
+                settings={"external_servers_config_path": "/tmp/unused.yaml"},  # nosec B108
             )
         )
         try:

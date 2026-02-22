@@ -208,7 +208,7 @@ class TestChatbookService:
             "user_id": service.user_id,
             "status": "completed",
             "chatbook_name": "Test",
-            "output_path": "/tmp/test.zip",
+            "output_path": "/tmp/test.zip",  # nosec B108
             "created_at": "2024-01-01 00:00:00",
             "started_at": "2024-01-01 00:00:00+00:00",
             "completed_at": "2024-01-01 00:00:00.000001",
@@ -1155,7 +1155,7 @@ class TestChatbookService:
         })
         mock_db.execute_query.return_value = [
             ("job123", "test_user", "completed", "Test Export",
-             "/tmp/export.chatbook", "2024-01-01T00:00:00",
+             "/tmp/export.chatbook", "2024-01-01T00:00:00",  # nosec B108
              "2024-01-01T00:01:00", "2024-01-01T00:05:00",
              None, 100, 100, 100, 1024, metadata, None)
         ]
@@ -1164,7 +1164,7 @@ class TestChatbookService:
 
         assert result["job_id"] == "job123"
         assert result["status"] == "completed"
-        assert result["file_path"] == "/tmp/export.chatbook"
+        assert result["file_path"] == "/tmp/export.chatbook"  # nosec B108
         assert result["content_summary"]["conversations"] == 5
 
     def test_cancel_export_job(self, service, mock_db):
@@ -1255,7 +1255,7 @@ class TestChatbookService:
             mock_db.execute_query.return_value = None
 
             result = service.create_import_job(
-                file_path="/tmp/test.chatbook",
+                file_path="/tmp/test.chatbook",  # nosec B108
                 conflict_strategy="skip"
             )
 
@@ -1266,7 +1266,7 @@ class TestChatbookService:
         """Test retrieving import job status."""
         # Return tuple matching database schema
         mock_db.execute_query.return_value = [
-            ("job456", "test_user", "completed", "/tmp/import.chatbook",
+            ("job456", "test_user", "completed", "/tmp/import.chatbook",  # nosec B108
              "2024-01-01T00:00:00", "2024-01-01T00:01:00", "2024-01-01T00:10:00",
              None, 100, 10, 10, 10, 0, 2, "[]", "[]")
         ]
@@ -1299,9 +1299,9 @@ class TestChatbookService:
         """Test listing import jobs."""
         # Return tuples matching database schema
         mock_db.execute_query.return_value = [
-            ("job3", "test_user", "completed", "/tmp/import.chatbook",
+            ("job3", "test_user", "completed", "/tmp/import.chatbook",  # nosec B108
              "2024-01-01T00:00:00", None, None, None, 100, 5, 5, 5, 0, 0, "[]", "[]"),
-            ("job4", "test_user", "failed", "/tmp/import2.chatbook",
+            ("job4", "test_user", "failed", "/tmp/import2.chatbook",  # nosec B108
              "2024-01-01T00:00:00", None, None, "File not found", 0, 0, 0, 0, 0, 0, "[]", "[]")
         ]
 

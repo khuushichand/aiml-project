@@ -52,7 +52,7 @@ async def test_generate_embeddings_for_media_uses_user_scoped_chroma_manager(mon
     monkeypatch.setattr(
         media_embeddings,
         "_user_embedding_config",
-        lambda: {"USER_DB_BASE_DIR": "/tmp/test"},
+        lambda: {"USER_DB_BASE_DIR": "/tmp/test"},  # nosec B108
     )
     monkeypatch.setattr(media_embeddings, "ChromaDBManager", FakeChromaDBManager)
 

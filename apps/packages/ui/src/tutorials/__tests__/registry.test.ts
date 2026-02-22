@@ -3,6 +3,7 @@ import {
   TUTORIAL_REGISTRY,
   getPrimaryTutorialForRoute,
   getTutorialsForRoute,
+  isTutorialRuntimeSuppressed,
   normalizeTutorialRoute,
   type TutorialDefinition
 } from "../registry"
@@ -83,13 +84,18 @@ describe("tutorial registry route matching", () => {
     expect(primaryTutorial?.id).toBe("playground-basics")
   })
 
-  it("includes basics tutorials for all P0 page routes", () => {
+  it("includes basics tutorials for all P0/P1 page routes", () => {
     const expectedBasicsByRoute: Record<string, string> = {
       "/chat": "playground-basics",
       "/workspace-playground": "workspace-playground-basics",
       "/media": "media-basics",
       "/knowledge": "knowledge-basics",
-      "/characters": "characters-basics"
+      "/characters": "characters-basics",
+      "/prompts": "prompts-basics",
+      "/evaluations": "evaluations-basics",
+      "/notes": "notes-basics",
+      "/flashcards": "flashcards-basics",
+      "/world-books": "world-books-basics"
     }
 
     for (const [route, expectedId] of Object.entries(expectedBasicsByRoute)) {
@@ -106,5 +112,22 @@ describe("tutorial registry route matching", () => {
     expect(normalizeTutorialRoute("/options/media")).toBe("/media")
     expect(normalizeTutorialRoute("/options/knowledge")).toBe("/knowledge")
     expect(normalizeTutorialRoute("/options/characters")).toBe("/characters")
+    expect(normalizeTutorialRoute("/options/prompts")).toBe("/prompts")
+    expect(normalizeTutorialRoute("/options/evaluations")).toBe("/evaluations")
+    expect(normalizeTutorialRoute("/options/notes")).toBe("/notes")
+    expect(normalizeTutorialRoute("/options/flashcards")).toBe("/flashcards")
+    expect(normalizeTutorialRoute("/options/world-books")).toBe("/world-books")
+  })
+
+  it("suppresses tutorials in sidepanel runtime context", () => {
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    try {
+      window.history.replaceState({}, "", "/sidepanel.html")
+      expect(isTutorialRuntimeSuppressed()).toBe(true)
+      expect(getTutorialsForRoute("/chat")).toEqual([])
+    } finally {
+      window.history.replaceState({}, "", originalPath || "/")
+    }
   })
 })

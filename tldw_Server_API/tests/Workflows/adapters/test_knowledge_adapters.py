@@ -1185,7 +1185,7 @@ async def test_notes_adapter_create_production_mode(monkeypatch):
     # Mock DatabasePaths
     from pathlib import Path
     import tldw_Server_API.app.core.DB_Management.db_path_utils as db_utils
-    monkeypatch.setattr(db_utils.DatabasePaths, "get_user_base_directory", lambda uid: Path("/tmp/test_db"))
+    monkeypatch.setattr(db_utils.DatabasePaths, "get_user_base_directory", lambda uid: Path("/tmp/test_db"))  # nosec B108
 
     from tldw_Server_API.app.core.Workflows.adapters.knowledge import run_notes_adapter
 
@@ -1304,7 +1304,7 @@ async def test_notes_adapter_handles_exception(monkeypatch):
     # Mock DatabasePaths
     from pathlib import Path
     import tldw_Server_API.app.core.DB_Management.db_path_utils as db_utils
-    monkeypatch.setattr(db_utils.DatabasePaths, "get_user_base_directory", lambda uid: Path("/tmp/test"))
+    monkeypatch.setattr(db_utils.DatabasePaths, "get_user_base_directory", lambda uid: Path("/tmp/test"))  # nosec B108
 
     from tldw_Server_API.app.core.Workflows.adapters.knowledge import run_notes_adapter
 

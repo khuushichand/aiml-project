@@ -2453,13 +2453,17 @@ export const WorldBooksManager: React.FC = () => {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="space-y-4" data-testid="world-books-manager">
+      <div
+        className="flex flex-wrap items-center justify-between gap-2"
+        data-testid="world-books-toolbar"
+      >
         <div className="flex flex-wrap items-center gap-2">
           <Input
             allowClear
             placeholder="Search world books…"
             aria-label="Search world books"
+            data-testid="world-books-search-input"
             value={listSearch}
             onChange={(e) => setListSearch(e.target.value)}
             className="w-full min-w-[220px] md:w-72"
@@ -2468,6 +2472,7 @@ export const WorldBooksManager: React.FC = () => {
             value={enabledFilter}
             onChange={(value) => setEnabledFilter(value)}
             aria-label="Filter by enabled status"
+            data-testid="world-books-enabled-filter"
             className="w-40"
             options={[
               { label: "All statuses", value: "all" },
@@ -2479,6 +2484,7 @@ export const WorldBooksManager: React.FC = () => {
             value={attachmentFilter}
             onChange={(value) => setAttachmentFilter(value)}
             aria-label="Filter by attachment state"
+            data-testid="world-books-attachment-filter"
             className="w-44"
             options={[
               { label: "All attachments", value: "all" },
@@ -2516,6 +2522,7 @@ export const WorldBooksManager: React.FC = () => {
           </Button>
           <Button
             aria-label="Open world book import modal"
+            data-testid="world-books-import-button"
             onClick={() => {
               setImportFormatHelpOpen(false)
               setImportErrorDetailsOpen(false)
@@ -2525,7 +2532,13 @@ export const WorldBooksManager: React.FC = () => {
           >
             Import
           </Button>
-          <Button type="primary" onClick={() => setOpen(true)}>New World Book</Button>
+          <Button
+            type="primary"
+            data-testid="world-books-new-button"
+            onClick={() => setOpen(true)}
+          >
+            New World Book
+          </Button>
         </div>
       </div>
       <div className="rounded border border-border bg-surface-secondary px-3 py-2">
@@ -2608,6 +2621,7 @@ export const WorldBooksManager: React.FC = () => {
       {status === 'pending' && <Skeleton active paragraph={{ rows: 6 }} />}
       {status === 'success' && (
         <Table
+          data-testid="world-books-table"
           rowKey={(r: any) => r.id}
           dataSource={filteredWorldBooks}
           columns={columns as any}

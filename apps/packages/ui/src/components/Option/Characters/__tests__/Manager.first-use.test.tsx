@@ -524,7 +524,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    expect(await screen.findByRole("columnheader", { name: /Last used/i })).toBeInTheDocument()
+    expect(await screen.findByRole("columnheader", { name: /Activity/i })).toBeInTheDocument()
 
     const listQuery = getLatestListCharactersQueryOptions()
     expect(listQuery.queryKey[1]).toMatchObject({
@@ -3468,6 +3468,53 @@ describe("CharactersManager first-use onboarding", () => {
       name: "Open world book Chronicle Index"
     })
     expect(chronicleLink).toHaveAttribute("href", expect.stringContaining("focusWorldBookId=22"))
+  }, 30000)
+
+  it("opens a full-size image modal when the preview avatar is clicked", async () => {
+    const user = userEvent.setup()
+    const avatarUrl = "https://example.com/preview-avatar.png"
+    const characterRecord = {
+      id: "preview-avatar-click",
+      name: "Preview Avatar Character",
+      avatar_url: avatarUrl,
+      system_prompt: "Avatar preview prompt",
+      greeting: "Avatar preview greeting",
+      description: "Avatar preview description",
+      version: 1
+    }
+
+    window.localStorage.setItem("characters-view-mode", "gallery")
+
+    useQueryMock.mockImplementation((opts: any) => {
+      const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
+      if (key === "tldw:listCharacters") {
+        return makeUseQueryResult({ data: [characterRecord], status: "success" })
+      }
+      if (key === "tldw:characterPreviewWorldBooks") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getModelsForFieldGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "getAllModelsForGeneration") {
+        return makeUseQueryResult({ data: [] })
+      }
+      if (key === "tldw:characterConversationCounts") {
+        return makeUseQueryResult({ data: {} })
+      }
+      return makeUseQueryResult({})
+    })
+
+    render(<CharactersManager />)
+
+    await user.click(await screen.findByText("Preview Avatar Character"))
+    await screen.findByText("Character Preview")
+
+    await user.click(await screen.findByTestId("character-preview-avatar-button"))
+
+    const fullImage = await screen.findByTestId("character-preview-full-image")
+    expect(fullImage).toHaveAttribute("src", avatarUrl)
+    expect(await screen.findByText("Character image")).toBeInTheDocument()
   }, 30000)
 
   it("shows world-book empty state in gallery preview when no attachments exist", async () => {
