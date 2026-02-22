@@ -44,6 +44,8 @@ _CHACHA_RETRIEVABLE_MEMORY_TYPES = {
     "semantic",
     "legacy_semantic",
 }
+_DEFAULT_PERSONA_TOOL_OUTCOME_SUMMARY_MAX_CHARS = 2_048
+_TRUNCATION_SUFFIX = "... [truncated]"
 
 
 @dataclass
@@ -127,6 +129,80 @@ def _resolve_persona_memory_namespace(
     if mode == "session_scoped":
         return normalized_scope_snapshot_id, normalized_session_id
     return None, None
+
+
+def _truncate_text(value: Any, *, max_chars: int) -> str:
+    text = str(value or "")
+    safe_limit = max(1, int(max_chars))
+    if len(text) <= safe_limit:
+        return text
+    if safe_limit <= len(_TRUNCATION_SUFFIX):
+        return text[:safe_limit]
+    return f"{text[: safe_limit - len(_TRUNCATION_SUFFIX)]}{_TRUNCATION_SUFFIX}"
+
+
+def _summarize_retention_value(value: Any) -> tuple[str, int | None, int | None, str]:
+    value_type = type(value).__name__
+    if value is None:
+        return value_type, 0, None, "na"
+    if isinstance(value, str):
+        digest = hashlib.sha1(value.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, len(value), None, digest
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        digest = hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:16]
+        return value_type, len(raw), None, digest
+    if isinstance(value, dict):
+        signature = f"dict:{len(value)}"
+        digest = hashlib.sha1(signature.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, None, len(value), digest
+    if isinstance(value, (list, tuple, set)):
+        signature = f"{value_type}:{len(value)}"
+        digest = hashlib.sha1(signature.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, None, len(value), digest
+    text = str(value)
+    digest = hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+    return value_type, len(text), None, digest
+
+
+def _get_persona_tool_outcome_summary_max_chars() -> int:
+    try:
+        candidate = int(
+            settings.get(
+                "PERSONA_TOOL_OUTCOME_SUMMARY_MAX_CHARS",
+                _DEFAULT_PERSONA_TOOL_OUTCOME_SUMMARY_MAX_CHARS,
+            )
+        )
+    except Exception:
+        candidate = _DEFAULT_PERSONA_TOOL_OUTCOME_SUMMARY_MAX_CHARS
+    return max(256, min(candidate, 16_384))
+
+
+def _summarize_tool_outcome_payload(outcome: dict[str, Any]) -> str:
+    payload = dict(outcome or {})
+    output_value = payload.get("output")
+    if "output" not in payload:
+        output_value = payload.get("result")
+    output_type, output_char_count, output_item_count, output_digest = _summarize_retention_value(output_value)
+    error_text = str(payload.get("error") or "").strip()
+    error_digest = (
+        hashlib.sha1(error_text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        if error_text
+        else "na"
+    )
+    summary = {
+        "ok": bool(payload.get("ok", False)),
+        "reason_code": str(payload.get("reason_code") or ""),
+        "output_type": output_type,
+        "output_char_count": output_char_count,
+        "output_item_count": output_item_count,
+        "output_digest": output_digest,
+        "error_present": bool(error_text),
+        "error_char_count": len(error_text),
+        "error_digest": error_digest,
+    }
+    serialized = json.dumps(summary, ensure_ascii=True, sort_keys=True)
+    return _truncate_text(serialized, max_chars=_get_persona_tool_outcome_summary_max_chars())
 
 
 def _get_persona_memory_read_mode() -> str:
@@ -569,11 +645,10 @@ def persist_tool_outcome(
     runtime_mode: str | None = None,
     scope_snapshot_id: str | None = None,
 ) -> bool:
-    try:
-        serialized = json.dumps(outcome, ensure_ascii=True, sort_keys=True)
-    except Exception:
-        serialized = str(outcome)
-    tool_summary = f"Tool={tool_name} step={step_idx} outcome={serialized}"
+    safe_outcome = dict(outcome or {}) if isinstance(outcome, dict) else {"value": str(outcome)}
+    serialized_summary = _summarize_tool_outcome_payload(safe_outcome)
+    tool_summary = f"Tool={tool_name} step={step_idx} outcome={serialized_summary}"
+    tool_summary = _truncate_text(tool_summary, max_chars=_get_persona_tool_outcome_summary_max_chars())
     return persist_persona_turn(
         user_id=user_id,
         session_id=session_id,

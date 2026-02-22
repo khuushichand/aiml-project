@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -241,3 +242,39 @@ def test_session_manager_prunes_expired_sessions_on_access():
     manager._sessions["sess_ttl"].updated_at = datetime.now(timezone.utc) - timedelta(seconds=5)  # noqa: SLF001
 
     assert manager.get("sess_ttl") is None
+
+
+def test_session_manager_applies_payload_caps_with_truncation_markers():
+    manager = SessionManager(
+        max_turn_content_chars=32,
+        max_turn_metadata_chars=48,
+    )
+    manager.append_turn(
+        session_id="sess_retention_caps",
+        user_id="user_1",
+        persona_id="research_assistant",
+        role="tool",
+        content="secret-value-" + ("x" * 200),
+        turn_type="tool_result",
+        metadata={
+            "api_key": "super-secret-token-value",
+            "blob": "y" * 400,
+            "nested": {"child": "z" * 100},
+        },
+    )
+
+    turns = manager.list_turns(session_id="sess_retention_caps", user_id="user_1")
+    assert len(turns) == 1
+    turn = turns[0]
+    assert len(turn["content"]) <= 32
+    assert turn["content"].endswith("[truncated]")
+
+    metadata = turn["metadata"]
+    assert metadata.get("_truncated") is True
+    assert metadata.get("original_char_count", 0) > 48
+    serialized_metadata = json.dumps(metadata, ensure_ascii=True, sort_keys=True)
+    assert "super-secret-token-value" not in serialized_metadata
+
+    retention = metadata.get("_retention") or {}
+    assert retention.get("content_truncated") is True
+    assert retention.get("metadata_truncated") is True

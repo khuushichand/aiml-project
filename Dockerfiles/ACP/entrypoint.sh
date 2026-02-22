@@ -61,7 +61,9 @@ AUTH_KEYS_DIR="${RUNTIME_HOME}/.ssh"
 AUTH_KEYS_FILE="${AUTH_KEYS_DIR}/authorized_keys"
 mkdir -p "${AUTH_KEYS_DIR}"
 if [ -n "${ACP_SSH_AUTHORIZED_KEY:-}" ]; then
-  printf '%s\n' "${ACP_SSH_AUTHORIZED_KEY}" >> "${AUTH_KEYS_FILE}"
+  if [ ! -f "${AUTH_KEYS_FILE}" ] || ! grep -Fxq -- "${ACP_SSH_AUTHORIZED_KEY}" "${AUTH_KEYS_FILE}"; then
+    printf '%s\n' "${ACP_SSH_AUTHORIZED_KEY}" >> "${AUTH_KEYS_FILE}"
+  fi
 fi
 chmod 700 "${AUTH_KEYS_DIR}"
 if [ -f "${AUTH_KEYS_FILE}" ]; then

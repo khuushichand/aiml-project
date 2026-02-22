@@ -5,6 +5,7 @@ Tracks persona sessions: session_id, user, persona, recent turns.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,56 @@ from threading import RLock
 from typing import Any
 
 _VALID_PERSONA_PLAN_STEP_TYPES = frozenset({"mcp_tool", "skill", "rag_query", "final_answer"})
+_TRUNCATION_SUFFIX = "... [truncated]"
+
+
+def _truncate_text(value: Any, *, max_chars: int) -> tuple[str, bool, int]:
+    text = str(value or "")
+    original_length = len(text)
+    safe_limit = max(1, int(max_chars))
+    if original_length <= safe_limit:
+        return text, False, original_length
+    if safe_limit <= len(_TRUNCATION_SUFFIX):
+        return text[:safe_limit], True, original_length
+    retained = text[: safe_limit - len(_TRUNCATION_SUFFIX)]
+    return f"{retained}{_TRUNCATION_SUFFIX}", True, original_length
+
+
+def _normalize_turn_metadata(
+    metadata: dict[str, Any] | None,
+    *,
+    max_chars: int,
+) -> tuple[dict[str, Any], bool, int]:
+    if isinstance(metadata, dict):
+        payload: dict[str, Any] = dict(metadata)
+    elif metadata is None:
+        payload = {}
+    else:
+        payload = {"value": str(metadata)}
+
+    safe_limit = max(1, int(max_chars))
+    try:
+        serialized = json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str)
+    except Exception:
+        payload = {"_unserializable_metadata": str(payload)}
+        serialized = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+
+    original_length = len(serialized)
+    if original_length <= safe_limit:
+        return payload, False, original_length
+
+    retained_keys = sorted(str(key) for key in payload.keys())[:32]
+    return (
+        {
+            "_truncated": True,
+            "key_count": len(payload),
+            "retained_key_count": len(retained_keys),
+            "retained_keys": retained_keys,
+            "original_char_count": original_length,
+        },
+        True,
+        original_length,
+    )
 
 
 def _infer_step_type_from_tool(tool_name: str) -> str:
@@ -68,6 +119,8 @@ class SessionManager:
         max_pending_plans_per_session: int = 20,
         session_ttl_seconds: int = 86_400,
         max_sessions_per_user: int = 200,
+        max_turn_content_chars: int = 8_192,
+        max_turn_metadata_chars: int = 4_096,
     ):
         self._sessions: dict[str, Session] = {}
         self._lock = RLock()
@@ -75,6 +128,8 @@ class SessionManager:
         self._max_pending_plans_per_session = max(1, int(max_pending_plans_per_session))
         self._session_ttl_seconds = max(1, int(session_ttl_seconds))
         self._max_sessions_per_user = max(1, int(max_sessions_per_user))
+        self._max_turn_content_chars = max(16, int(max_turn_content_chars))
+        self._max_turn_metadata_chars = max(32, int(max_turn_metadata_chars))
 
     @staticmethod
     def _touch_session(session: Session) -> None:
@@ -269,13 +324,37 @@ class SessionManager:
         with self._lock:
             self._prune_expired_sessions_locked()
             session = self.create(user_id=user_id, persona_id=persona_id, resume_session_id=session_id)
+            bounded_content, content_truncated, original_content_length = _truncate_text(
+                content,
+                max_chars=self._max_turn_content_chars,
+            )
+            bounded_metadata, metadata_truncated, original_metadata_length = _normalize_turn_metadata(
+                metadata,
+                max_chars=self._max_turn_metadata_chars,
+            )
+            if content_truncated or metadata_truncated:
+                bounded_metadata = dict(bounded_metadata)
+                retention_meta = bounded_metadata.get("_retention")
+                if not isinstance(retention_meta, dict):
+                    retention_meta = {}
+                retention_meta.update(
+                    {
+                        "content_truncated": bool(content_truncated),
+                        "content_original_length": int(original_content_length),
+                        "content_retained_length": len(bounded_content),
+                        "metadata_truncated": bool(metadata_truncated),
+                        "metadata_original_char_count": int(original_metadata_length),
+                        "metadata_max_char_count": int(self._max_turn_metadata_chars),
+                    }
+                )
+                bounded_metadata["_retention"] = retention_meta
             turn: dict[str, Any] = {
                 "turn_id": uuid.uuid4().hex,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "role": str(role or "unknown"),
                 "type": str(turn_type or "text"),
-                "content": str(content or ""),
-                "metadata": dict(metadata or {}),
+                "content": bounded_content,
+                "metadata": bounded_metadata,
             }
             session.turns.append(turn)
             self._trim_turns_locked(session)

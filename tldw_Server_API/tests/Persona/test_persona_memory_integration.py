@@ -129,6 +129,40 @@ def test_persist_turn_and_tool_outcome_when_opted_in(tmp_path, monkeypatch):
     assert any("Tool=rag_search" in c for c in contents)
 
 
+def test_persist_tool_outcome_is_bounded_and_privacy_safe(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    user_id = "1031"
+    db = _seed_memory_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    monkeypatch.setattr(mem, "_get_persona_tool_outcome_summary_max_chars", lambda: 256)
+
+    ok_tool = persist_tool_outcome(
+        user_id=user_id,
+        session_id="sess_tool_outcome_bounds",
+        persona_id="research_assistant",
+        tool_name="rag_search",
+        step_idx=0,
+        outcome={
+            "ok": True,
+            "reason_code": "DONE",
+            "output": {
+                "sensitive": "api-key-live-123456789",
+                "blob": "x" * 6000,
+            },
+        },
+        store_as_memory=True,
+    )
+    assert ok_tool is True
+
+    memories, _ = db.list_semantic_memories(user_id=user_id, limit=20, offset=0)
+    tool_entries = [str(item.get("content") or "") for item in memories if "Tool=rag_search" in str(item.get("content") or "")]
+    assert tool_entries
+    tool_entry = tool_entries[0]
+    assert len(tool_entry) <= 256
+    assert "api-key-live-123456789" not in tool_entry
+    assert "output_digest" in tool_entry
+
+
 def test_persist_turn_skips_when_opted_out(tmp_path, monkeypatch):
     user_id = "104"
     db = _seed_memory_db(tmp_path, monkeypatch, user_id=user_id, enabled=False)

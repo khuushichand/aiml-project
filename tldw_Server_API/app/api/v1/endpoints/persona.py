@@ -408,6 +408,56 @@ def _build_tool_result(
     return payload
 
 
+def _summarize_retention_value(value: Any) -> tuple[str, int | None, int | None, str]:
+    value_type = type(value).__name__
+    if value is None:
+        return value_type, 0, None, "na"
+    if isinstance(value, str):
+        digest = hashlib.sha1(value.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, len(value), None, digest
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        digest = hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:16]
+        return value_type, len(raw), None, digest
+    if isinstance(value, dict):
+        signature = f"dict:{len(value)}"
+        digest = hashlib.sha1(signature.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, None, len(value), digest
+    if isinstance(value, (list, tuple, set)):
+        signature = f"{value_type}:{len(value)}"
+        digest = hashlib.sha1(signature.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return value_type, None, len(value), digest
+    text = str(value)
+    digest = hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+    return value_type, len(text), None, digest
+
+
+def _summarize_tool_result_for_retention(result_payload: dict[str, Any] | None) -> str:
+    payload = dict(result_payload or {})
+    output_value = payload.get("output")
+    if "output" not in payload:
+        output_value = payload.get("result")
+    output_type, output_char_count, output_item_count, output_digest = _summarize_retention_value(output_value)
+    error_text = str(payload.get("error") or "").strip()
+    error_digest = (
+        hashlib.sha1(error_text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        if error_text
+        else "na"
+    )
+    summary = {
+        "ok": bool(payload.get("ok", False)),
+        "reason_code": str(payload.get("reason_code") or ""),
+        "output_type": output_type,
+        "output_char_count": output_char_count,
+        "output_item_count": output_item_count,
+        "output_digest": output_digest,
+        "error_present": bool(error_text),
+        "error_char_count": len(error_text),
+        "error_digest": error_digest,
+    }
+    return json.dumps(summary, ensure_ascii=True, sort_keys=True)
+
+
 def _max_base64_length_for_decoded_bytes(max_decoded_bytes: int) -> int:
     safe_limit = max(0, int(max_decoded_bytes))
     return ((safe_limit + 2) // 3) * 4
@@ -2652,7 +2702,7 @@ async def persona_stream(
                         await _record_turn(
                             session_id=session_id,
                             role="tool",
-                            content=json.dumps(result, ensure_ascii=True),
+                            content=_summarize_tool_result_for_retention(result),
                             turn_type="tool_result",
                             metadata={"tool": step.tool, "step_idx": step.idx, "step_type": step_type},
                             persist_as_memory=False,
@@ -2744,7 +2794,7 @@ async def persona_stream(
                     await _record_turn(
                         session_id=session_id,
                         role="tool",
-                        content=json.dumps(result, ensure_ascii=True),
+                        content=_summarize_tool_result_for_retention(result),
                         turn_type="tool_result",
                         metadata={"tool": step.tool, "step_idx": step.idx, "step_type": step_type},
                         persist_as_memory=False,

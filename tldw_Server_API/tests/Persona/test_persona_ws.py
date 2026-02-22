@@ -500,6 +500,55 @@ async def test_persona_stream_start_failure_executes_stream_stop(monkeypatch):
     assert lifecycle["stop_calls"] == 1
 
 
+@pytest.mark.asyncio
+async def test_persona_stream_disconnect_executes_stream_stop(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    lifecycle = {"stop_calls": 0}
+
+    class _DisconnectingStream:
+        def __init__(self, websocket, *args, **kwargs):
+            self.ws = websocket
+
+        async def start(self):
+            return None
+
+        async def receive_text(self):
+            raise WebSocketDisconnect(code=1000)
+
+        async def send_json(self, payload):
+            return None
+
+        async def stop(self):
+            lifecycle["stop_calls"] += 1
+
+        async def error(self, *args, **kwargs):
+            return None
+
+    class _FakeWebSocket:
+        headers = {}
+        query_params = {}
+        client = None
+
+        def __init__(self):
+            self.state = SimpleNamespace()
+
+        async def close(self, code: int = 1000):
+            return None
+
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
+
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+    monkeypatch.setattr(persona_ep, "WebSocketStream", _DisconnectingStream)
+    monkeypatch.setattr(persona_ep, "_open_persona_ws_db", lambda *args, **kwargs: None)
+    monkeypatch.setattr(persona_ep, "_get_persona_ws_auth_revalidate_interval_s", lambda: 0.0)
+
+    await persona_ep.persona_stream(_FakeWebSocket(), token=None, api_key=None)
+
+    assert lifecycle["stop_calls"] == 1
+
+
 def test_persona_cancel_clears_pending_plan():
 
     with TestClient(fastapi_app) as c:
@@ -1280,6 +1329,73 @@ def test_persona_persists_session_turns_and_tool_outcomes(monkeypatch):
     turns = manager.list_turns(session_id=session_id, user_id="777")
     assert any(t["role"] == "user" and t["content"] == "hello" for t in turns)
     assert any(t["role"] == "tool" and t["type"] == "tool_result" for t in turns)
+
+
+def test_persona_tool_result_turn_retention_uses_summary_not_raw_output(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import persona as persona_ep
+
+    manager = SessionManager(max_turn_content_chars=256)
+    secret_value = "secret-token-for-retention-test"
+
+    class _FakeServer:
+        def __init__(self):
+            self.initialized = True
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def handle_http_request(self, request, user_id=None, metadata=None):
+            return SimpleNamespace(
+                error=None,
+                result={
+                    "ok": True,
+                    "payload": "x" * 4000,
+                    "secret": secret_value,
+                },
+            )
+
+    async def _fake_resolve(*args, **kwargs):
+        return "1", True, True
+
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
+    monkeypatch.setattr(persona_ep, "get_mcp_server", lambda: _FakeServer())
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            session_id = "sess_retention_summary"
+            ws.send_text(
+                json.dumps(
+                    {"type": "user_message", "session_id": session_id, "text": "https://example.com"}
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+            first_idx = int(plan["steps"][0]["idx"])
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "confirm_plan",
+                        "session_id": session_id,
+                        "plan_id": plan["plan_id"],
+                        "approved_steps": [first_idx],
+                    }
+                )
+            )
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_call")
+            _ = _recv_until(ws, lambda d: d.get("event") == "tool_result")
+
+    turns = manager.list_turns(session_id="sess_retention_summary", user_id="1")
+    tool_turns = [turn for turn in turns if turn.get("type") == "tool_result"]
+    assert tool_turns
+    tool_turn = tool_turns[-1]
+    assert len(str(tool_turn.get("content") or "")) <= 256
+    assert secret_value not in str(tool_turn.get("content") or "")
+
+    tool_summary = json.loads(str(tool_turn.get("content") or "{}"))
+    assert tool_summary.get("ok") is True
+    assert "output_digest" in tool_summary
+    assert "output_char_count" in tool_summary
 
 
 def test_persona_memory_context_applied_when_opted_in(tmp_path, monkeypatch):

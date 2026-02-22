@@ -18,6 +18,7 @@ and this project adheres to Some kind of Versioning
   - Added IndexedDB offload path for heavy chat/artifact payloads with localStorage pointer metadata.
   - Added rollout controls for split-key and IndexedDB offload (env + localStorage feature flags).
   - Added development diagnostics for workspace persistence payload size/write-count tracking.
+  - Added design documentation: `Docs/Design/Workspace_Persistence_Architecture.md`.
 - Expanded regression coverage:
   - Added API client tests for `/api/v1/users/storage`.
   - Added workspace persistence tests for split-key migration/fallback, IndexedDB flag-off behavior, chat-retention bounds, and server-backed artifact truncation.
