@@ -422,6 +422,27 @@ Notes:
 In-process workers are fine for light dev use, but SQLite + multiple Uvicorn workers can increase lock contention; use sidecars or Postgres for heavier workloads.
 </details>
 
+<details>
+<summary>Model container cycling (optional, Docker)</summary>
+
+For low-VRAM dev rigs, you can cycle model containers instead of running all model stacks at once:
+
+```bash
+make model-cycle \
+  MODEL_CYCLE_FIRST=your-llm-container \
+  MODEL_CYCLE_SECOND=your-tts-container \
+  MODEL_CYCLE_EXCLUDED=postgres,redis \
+  MODEL_CYCLE_FIRST_BOOT_WAIT=30 \
+  MODEL_CYCLE_SECOND_BOOT_WAIT=10
+```
+
+Notes:
+- Runs `Helper_Scripts/model_container_cycle.py`.
+- Workflow is: stop all running containers except exclusions, start first model container, stop it, then start second model container.
+- Use `MODEL_CYCLE_DRY_RUN=true` to print Docker commands without executing them.
+- Container names are whatever Docker reports via `docker ps --format '{{.Names}}'`.
+</details>
+
 ### Run the Web UI (WIP)
 
 The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.

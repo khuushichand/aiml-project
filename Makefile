@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui verify pypi-build pypi-check tooling-install tooling-smoke
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
 
 PYTHON ?= python3
 VENV_DIR ?= .venv
@@ -12,6 +12,12 @@ DOCKER_BASE_COMPOSE ?= Dockerfiles/docker-compose.yml
 DOCKER_WEBUI_COMPOSE ?= Dockerfiles/docker-compose.webui.yml
 NEXT_PUBLIC_API_URL ?= http://localhost:8000
 PYPI_BUILD_ARGS ?= --no-isolation
+MODEL_CYCLE_FIRST ?=
+MODEL_CYCLE_SECOND ?=
+MODEL_CYCLE_EXCLUDED ?=postgres,redis
+MODEL_CYCLE_FIRST_BOOT_WAIT ?=0
+MODEL_CYCLE_SECOND_BOOT_WAIT ?=0
+MODEL_CYCLE_DRY_RUN ?=false
 
 quickstart-prereqs:
 	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[quickstart] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
@@ -91,6 +97,19 @@ quickstart-docker-webui: quickstart-docker-bootstrap
 	@echo "[quickstart-docker-webui] First-use auth initialization is handled automatically by the app entrypoint."
 	@echo "[quickstart-docker-webui] API:   http://localhost:8000"
 	@echo "[quickstart-docker-webui] WebUI: http://localhost:8080"
+
+model-cycle:
+	@command -v docker >/dev/null 2>&1 || (echo "[model-cycle] docker not found. Install Docker and retry." && exit 1)
+	@test -n "$(MODEL_CYCLE_FIRST)" || (echo "[model-cycle] Set MODEL_CYCLE_FIRST=<container_name>" && exit 1)
+	@test -n "$(MODEL_CYCLE_SECOND)" || (echo "[model-cycle] Set MODEL_CYCLE_SECOND=<container_name>" && exit 1)
+	@echo "[model-cycle] Cycling $(MODEL_CYCLE_FIRST) -> $(MODEL_CYCLE_SECOND) (excluded=$(MODEL_CYCLE_EXCLUDED), dry_run=$(MODEL_CYCLE_DRY_RUN))"
+	$(PYTHON) Helper_Scripts/model_container_cycle.py \
+		--first-container "$(MODEL_CYCLE_FIRST)" \
+		--second-container "$(MODEL_CYCLE_SECOND)" \
+		--excluded "$(MODEL_CYCLE_EXCLUDED)" \
+		--first-boot-wait "$(MODEL_CYCLE_FIRST_BOOT_WAIT)" \
+		--second-boot-wait "$(MODEL_CYCLE_SECOND_BOOT_WAIT)" \
+		$(if $(filter true TRUE 1 yes YES,$(MODEL_CYCLE_DRY_RUN)),--dry-run,)
 
 verify:
 	@echo "[verify] Checking server health..."
