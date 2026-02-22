@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Dropdown,
@@ -60,6 +60,12 @@ export const KanbanPlayground = () => {
 
   // Archive drawer state
   const [archiveDrawerOpen, setArchiveDrawerOpen] = useState(false)
+
+  // Ref for BoardView shortcut handlers (add-card / add-list)
+  const boardShortcutRef = useRef<{
+    startAddCard: () => void
+    startAddList: () => void
+  } | null>(null)
 
   // Fetch boards list
   const {
@@ -200,7 +206,9 @@ export const KanbanPlayground = () => {
 
   // Keyboard shortcuts
   const { helpOpen, setHelpOpen } = useKanbanShortcuts({
-    onNewBoard: () => setCreateModalOpen(true)
+    onNewBoard: () => setCreateModalOpen(true),
+    onNewCard: () => boardShortcutRef.current?.startAddCard(),
+    onNewList: () => boardShortcutRef.current?.startAddList()
   })
 
   const boards = boardsData?.boards ?? []
@@ -314,6 +322,7 @@ export const KanbanPlayground = () => {
             onQuickSetup={
               boardData.lists.length === 0 ? handleQuickSetup : undefined
             }
+            shortcutHandlersRef={boardShortcutRef}
           />
         </>
       )

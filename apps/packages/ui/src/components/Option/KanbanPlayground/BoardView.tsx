@@ -57,6 +57,11 @@ interface BoardViewProps {
   onDelete: () => void
   onArchive?: () => void
   onQuickSetup?: () => void
+  /** Expose triggers so the parent can start add-card / add-list from keyboard shortcuts */
+  shortcutHandlersRef?: React.RefObject<{
+    startAddCard: () => void
+    startAddList: () => void
+  } | null>
 }
 
 type DragStartEvent = Parameters<DragDropEvents["dragstart"]>[0]
@@ -73,7 +78,8 @@ export const BoardView = ({
   onRefresh,
   onDelete,
   onArchive,
-  onQuickSetup
+  onQuickSetup,
+  shortcutHandlersRef
 }: BoardViewProps) => {
   const queryClient = useQueryClient()
 
@@ -101,6 +107,25 @@ export const BoardView = ({
 
   // Add card state - tracks which list is in "add card" mode
   const [addingCardListId, setAddingCardListId] = useState<number | null>(null)
+
+  // Expose add-card / add-list triggers to parent via ref
+  useEffect(() => {
+    if (shortcutHandlersRef) {
+      shortcutHandlersRef.current = {
+        startAddCard: () => {
+          // Open add-card on the first list
+          const firstList = board.lists[0]
+          if (firstList) setAddingCardListId(firstList.id)
+        },
+        startAddList: () => {
+          setAddingList(true)
+        }
+      }
+    }
+    return () => {
+      if (shortcutHandlersRef) shortcutHandlersRef.current = null
+    }
+  }, [shortcutHandlersRef, board.lists])
 
   // Undo state
   const undoRef = useRef<UndoAction | null>(null)
