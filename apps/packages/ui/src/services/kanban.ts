@@ -20,7 +20,10 @@ import type {
   CardMoveRequest,
   ReorderRequest,
   ReorderResponse,
-  BoardImportResponse
+  BoardImportResponse,
+  Label,
+  LabelCreate,
+  LabelUpdate
 } from "@/types/kanban"
 
 // =============================================================================
@@ -281,6 +284,279 @@ export async function reorderCards(
     path: `/api/v1/kanban/lists/${listId}/cards/reorder`,
     method: "POST",
     body: { ids: cardIds } as ReorderRequest
+  })
+}
+
+// =============================================================================
+// Archive / Restore API
+// =============================================================================
+
+export async function archiveBoard(boardId: number): Promise<Board> {
+  return await bgRequest<Board>({
+    path: `/api/v1/kanban/boards/${boardId}/archive`,
+    method: "POST"
+  })
+}
+
+export async function unarchiveBoard(boardId: number): Promise<Board> {
+  return await bgRequest<Board>({
+    path: `/api/v1/kanban/boards/${boardId}/unarchive`,
+    method: "POST"
+  })
+}
+
+export async function archiveList(listId: number): Promise<KanbanList> {
+  return await bgRequest<KanbanList>({
+    path: `/api/v1/kanban/lists/${listId}/archive`,
+    method: "POST"
+  })
+}
+
+export async function unarchiveList(listId: number): Promise<KanbanList> {
+  return await bgRequest<KanbanList>({
+    path: `/api/v1/kanban/lists/${listId}/unarchive`,
+    method: "POST"
+  })
+}
+
+export async function archiveCard(cardId: number): Promise<Card> {
+  return await bgRequest<Card>({
+    path: `/api/v1/kanban/cards/${cardId}/archive`,
+    method: "POST"
+  })
+}
+
+export async function unarchiveCard(cardId: number): Promise<Card> {
+  return await bgRequest<Card>({
+    path: `/api/v1/kanban/cards/${cardId}/unarchive`,
+    method: "POST"
+  })
+}
+
+// =============================================================================
+// Export API
+// =============================================================================
+
+export async function exportBoard(boardId: number): Promise<Record<string, any>> {
+  return await bgRequest<Record<string, any>>({
+    path: `/api/v1/kanban/boards/${boardId}/export`,
+    method: "GET"
+  })
+}
+
+// =============================================================================
+// Label API
+// =============================================================================
+
+export async function listLabels(boardId: number): Promise<Label[]> {
+  return await bgRequest<Label[]>({
+    path: `/api/v1/kanban/boards/${boardId}/labels`,
+    method: "GET"
+  })
+}
+
+export async function createLabel(
+  boardId: number,
+  data: LabelCreate
+): Promise<Label> {
+  return await bgRequest<Label>({
+    path: `/api/v1/kanban/boards/${boardId}/labels`,
+    method: "POST",
+    body: data
+  })
+}
+
+export async function updateLabel(
+  labelId: number,
+  data: LabelUpdate
+): Promise<Label> {
+  return await bgRequest<Label>({
+    path: `/api/v1/kanban/labels/${labelId}`,
+    method: "PATCH",
+    body: data
+  })
+}
+
+export async function deleteLabel(labelId: number): Promise<void> {
+  await bgRequest<void>({
+    path: `/api/v1/kanban/labels/${labelId}`,
+    method: "DELETE"
+  })
+}
+
+export async function assignLabelToCard(
+  cardId: number,
+  labelId: number
+): Promise<void> {
+  await bgRequest<void>({
+    path: `/api/v1/kanban/cards/${cardId}/labels/${labelId}`,
+    method: "POST"
+  })
+}
+
+export async function removeLabelFromCard(
+  cardId: number,
+  labelId: number
+): Promise<void> {
+  await bgRequest<void>({
+    path: `/api/v1/kanban/cards/${cardId}/labels/${labelId}`,
+    method: "DELETE"
+  })
+}
+
+// =============================================================================
+// Card Copy API
+// =============================================================================
+
+export async function copyCard(cardId: number): Promise<Card> {
+  return await bgRequest<Card>({
+    path: `/api/v1/kanban/cards/${cardId}/copy`,
+    method: "POST"
+  })
+}
+
+// =============================================================================
+// Search API
+// =============================================================================
+
+export async function searchCards(params: {
+  query: string
+  boardId?: number
+  limit?: number
+}): Promise<CardsListResponse> {
+  const qs = new URLSearchParams()
+  qs.set("q", params.query)
+  if (params.boardId != null) qs.set("board_id", String(params.boardId))
+  if (params.limit != null) qs.set("limit", String(params.limit))
+  return await bgRequest<CardsListResponse>({
+    path: `/api/v1/kanban/cards/search?${qs.toString()}`,
+    method: "GET"
+  })
+}
+
+// =============================================================================
+// Checklist API
+// =============================================================================
+
+export interface Checklist {
+  id: number
+  uuid: string
+  card_id: number
+  title: string
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChecklistItem {
+  id: number
+  uuid: string
+  checklist_id: number
+  content: string
+  checked: boolean
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChecklistWithItems extends Checklist {
+  items: ChecklistItem[]
+}
+
+export async function listChecklists(cardId: number): Promise<ChecklistWithItems[]> {
+  return await bgRequest<ChecklistWithItems[]>({
+    path: `/api/v1/kanban/cards/${cardId}/checklists`,
+    method: "GET"
+  })
+}
+
+export async function createChecklist(
+  cardId: number,
+  data: { title: string; client_id: string }
+): Promise<Checklist> {
+  return await bgRequest<Checklist>({
+    path: `/api/v1/kanban/cards/${cardId}/checklists`,
+    method: "POST",
+    body: data
+  })
+}
+
+export async function updateChecklist(
+  checklistId: number,
+  data: { title?: string }
+): Promise<Checklist> {
+  return await bgRequest<Checklist>({
+    path: `/api/v1/kanban/checklists/${checklistId}`,
+    method: "PATCH",
+    body: data
+  })
+}
+
+export async function deleteChecklist(checklistId: number): Promise<void> {
+  await bgRequest<void>({
+    path: `/api/v1/kanban/checklists/${checklistId}`,
+    method: "DELETE"
+  })
+}
+
+export async function createChecklistItem(
+  checklistId: number,
+  data: { content: string; client_id: string }
+): Promise<ChecklistItem> {
+  return await bgRequest<ChecklistItem>({
+    path: `/api/v1/kanban/checklists/${checklistId}/items`,
+    method: "POST",
+    body: data
+  })
+}
+
+export async function updateChecklistItem(
+  itemId: number,
+  data: { content?: string; checked?: boolean }
+): Promise<ChecklistItem> {
+  return await bgRequest<ChecklistItem>({
+    path: `/api/v1/kanban/checklist-items/${itemId}`,
+    method: "PATCH",
+    body: data
+  })
+}
+
+export async function deleteChecklistItem(itemId: number): Promise<void> {
+  await bgRequest<void>({
+    path: `/api/v1/kanban/checklist-items/${itemId}`,
+    method: "DELETE"
+  })
+}
+
+// =============================================================================
+// Comment API
+// =============================================================================
+
+export interface Comment {
+  id: number
+  uuid: string
+  card_id: number
+  user_id: string
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+export async function listComments(cardId: number): Promise<Comment[]> {
+  return await bgRequest<Comment[]>({
+    path: `/api/v1/kanban/cards/${cardId}/comments`,
+    method: "GET"
+  })
+}
+
+export async function createComment(
+  cardId: number,
+  data: { content: string; client_id: string }
+): Promise<Comment> {
+  return await bgRequest<Comment>({
+    path: `/api/v1/kanban/cards/${cardId}/comments`,
+    method: "POST",
+    body: data
   })
 }
 
