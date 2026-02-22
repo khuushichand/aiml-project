@@ -366,3 +366,4 @@ Dockerfiles/Monitoring/secrets/
 /Docs/Product/WebUI/evidence
 /ux-audit
 /apps/tldw-frontend/ux-audit-v3
+/.worktrees/
