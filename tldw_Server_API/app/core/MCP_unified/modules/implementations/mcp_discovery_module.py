@@ -169,9 +169,14 @@ class MCPDiscoveryModule(BaseModule):
                 await _add_rows(rows, "org")
             elif org_ids:
                 placeholders, params = build_sqlite_in_clause(sorted(org_ids))
-                rows = await pool.fetchall(
+                org_ids_clause = f"({placeholders})"
+                org_catalogs_sql_template = (
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    "FROM tool_catalogs WHERE org_id IN {org_ids_clause} AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                org_catalogs_sql = org_catalogs_sql_template.format_map(locals())  # nosec B608
+                rows = await pool.fetchall(
+                    org_catalogs_sql,
                     params,
                 )
                 await _add_rows(rows, "org")
@@ -185,9 +190,14 @@ class MCPDiscoveryModule(BaseModule):
                 await _add_rows(rows, "team")
             elif team_ids:
                 placeholders, params = build_sqlite_in_clause(sorted(team_ids))
-                rows = await pool.fetchall(
+                team_ids_clause = f"({placeholders})"
+                team_catalogs_sql_template = (
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    "FROM tool_catalogs WHERE team_id IN {team_ids_clause} ORDER BY created_at DESC"
+                )
+                team_catalogs_sql = team_catalogs_sql_template.format_map(locals())  # nosec B608
+                rows = await pool.fetchall(
+                    team_catalogs_sql,
                     params,
                 )
                 await _add_rows(rows, "team")

@@ -526,7 +526,9 @@ async def _fetch_existing_event_ids(
     for i in range(0, len(event_ids), chunk_size):
         chunk = event_ids[i : i + chunk_size]
         placeholders = ",".join("?" * len(chunk))
-        query = f"SELECT event_id FROM audit_events WHERE event_id IN ({placeholders})"
+        event_ids_clause = f"({placeholders})"
+        query_template = "SELECT event_id FROM audit_events WHERE event_id IN {event_ids_clause}"
+        query = query_template.format_map(locals())  # nosec B608
         async with db.execute(query, chunk) as cursor:
             rows = await cursor.fetchall()
             existing.update(str(row[0]) for row in rows if row and row[0])

@@ -12,7 +12,7 @@ import type { TutorialDefinition } from "../registry"
  */
 const playgroundBasics: TutorialDefinition = {
   id: "playground-basics",
-  routePattern: "/options/playground",
+  routePattern: "/chat",
   labelKey: "tutorials:playground.basics.label",
   labelFallback: "Chat Basics",
   descriptionKey: "tutorials:playground.basics.description",
@@ -75,7 +75,7 @@ const playgroundBasics: TutorialDefinition = {
  */
 const playgroundTools: TutorialDefinition = {
   id: "playground-tools",
-  routePattern: "/options/playground",
+  routePattern: "/chat",
   labelKey: "tutorials:playground.tools.label",
   labelFallback: "Tools & Attachments",
   descriptionKey: "tutorials:playground.tools.description",
@@ -140,7 +140,7 @@ const playgroundTools: TutorialDefinition = {
  */
 const playgroundVoice: TutorialDefinition = {
   id: "playground-voice",
-  routePattern: "/options/playground",
+  routePattern: "/chat",
   labelKey: "tutorials:playground.voice.label",
   labelFallback: "Voice Chat",
   descriptionKey: "tutorials:playground.voice.description",

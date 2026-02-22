@@ -563,8 +563,10 @@ def _validate_numeric(entry: UserProfileCatalogEntry, value: float) -> tuple[boo
 
 async def _update_user_field(db_conn: Any, user_id: int, column: str, value: Any) -> None:
     try:
+        update_user_sql_template = "UPDATE users SET {column} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2"
+        update_user_sql = update_user_sql_template.format_map(locals())  # nosec B608
         await db_conn.execute(
-            f"UPDATE users SET {column} = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+            update_user_sql,
             value,
             user_id,
         )

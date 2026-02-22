@@ -107,7 +107,8 @@ class AuthnzApiKeysRepo:
                 # SECURITY: Using build_sqlite_in_clause helper to safely generate
                 # parameterized placeholders - see database.py for implementation details
                 placeholders, hash_params = build_sqlite_in_clause(hash_candidates)
-                query = f"""
+                hash_candidates_clause = f"({placeholders})"
+                query_template = """
                     SELECT id, user_id, name, scope, status, expires_at,
                            rate_limit, allowed_ips, usage_count, key_hash,
                            COALESCE(is_virtual, 0) AS is_virtual,
@@ -117,10 +118,11 @@ class AuthnzApiKeysRepo:
                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                            metadata
                     FROM api_keys
-                    WHERE key_hash IN ({placeholders}) AND status = ?
+                    WHERE key_hash IN {hash_candidates_clause} AND status = ?
                     ORDER BY created_at DESC
                     LIMIT 1
                     """
+                query = query_template.format_map(locals())  # nosec B608
                 params = (*hash_params, "active")
                 row = await self.db_pool.fetchone(query, params)
 

@@ -45,13 +45,22 @@ async def list_tool_catalogs(db, *, org_id: int | None, team_id: int | None, lim
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
     try:
         if pg:
-            q = (
-                f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,TRUE) as is_active, created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT $ {len(params)+1} OFFSET $ {len(params)+2}"
-            ).replace('$ ', '$')
+            limit_param = len(params) + 1
+            offset_param = len(params) + 2
+            list_catalogs_sql_template = (
+                "SELECT id, name, description, org_id, team_id, COALESCE(is_active,TRUE) as is_active, created_at, updated_at "
+                "FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ${limit_param} OFFSET ${offset_param}"
+            )
+            q = list_catalogs_sql_template.format_map(locals())  # nosec B608
             rows = await db.fetch(q, *params, limit, offset)
             return [dict(r) for r in rows]
+        list_catalogs_sql_template = (
+            "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+            "FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        list_catalogs_sql = list_catalogs_sql_template.format_map(locals())  # nosec B608
         cur = await db.execute(
-            f"SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at FROM tool_catalogs{where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",  # nosec B608
+            list_catalogs_sql,
             [*params, limit, offset],
         )
         rows = await cur.fetchall()
@@ -170,9 +179,13 @@ async def list_visible_tool_catalogs(
                 )
             else:
                 placeholders, params = build_sqlite_in_clause(sorted(org_ids))
-                cur = await db.execute(
+                org_catalogs_sql_template = (
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    "FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                org_catalogs_sql = org_catalogs_sql_template.format_map(locals())  # nosec B608
+                cur = await db.execute(
+                    org_catalogs_sql,
                     params,
                 )
                 rows = await cur.fetchall()
@@ -188,9 +201,13 @@ async def list_visible_tool_catalogs(
                 )
             else:
                 placeholders, params = build_sqlite_in_clause(sorted(team_ids))
-                cur = await db.execute(
+                team_catalogs_sql_template = (
                     "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
-                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    "FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC"
+                )
+                team_catalogs_sql = team_catalogs_sql_template.format_map(locals())  # nosec B608
+                cur = await db.execute(
+                    team_catalogs_sql,
                     params,
                 )
                 rows = await cur.fetchall()

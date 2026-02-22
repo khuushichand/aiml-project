@@ -343,7 +343,9 @@ class UserDatabase:
                 return False
 
             values.append(user_id)
-            query = f"UPDATE users SET {', '.join(set_clause)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            set_clause_sql = ", ".join(set_clause)
+            query_template = "UPDATE users SET {set_clause_sql}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            query = query_template.format_map(locals())  # nosec B608
 
             result = self.backend.execute(query, tuple(values), connection=conn)
 

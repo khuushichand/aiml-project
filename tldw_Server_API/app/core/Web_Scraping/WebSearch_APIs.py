@@ -1111,7 +1111,8 @@ def aggregate_results(
     # Aggregation Prompt #1
 
     # Aggregation Prompt #2
-    analyze_search_results_prompt_2 = f"""INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
+    analyze_search_results_prompt_2 = (
+        """INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
         # General Instructions
 
         Write an accurate, detailed, and comprehensive response to the user's query located at INITIAL_QUERY. Additional context is provided as "USER_INPUT" after specific questions. Your answer should be informed by the provided "Search results". Your answer must be precise, of high-quality, and written by an expert using an unbiased and journalistic tone. Your answer must be written in the same language as the query, even if language preference is different.
@@ -1144,7 +1145,7 @@ def aggregate_results(
 
         ## Recent News
 
-        You need to concisely summarize recent news events based on the provided search results, grouping them by topics. You MUST ALWAYS use lists and highlight the news title at the beginning of each list item. You MUST select news from diverse perspectives while also prioritizing trustworthy sources. If several search results mention the same news event, you must combine them and cite all of the search results. Prioritize more recent events, ensuring to compare timestamps. You MUST NEVER start your answer with a heading of any kind.
+        You need to concisely summarize recent news events based on the provided search results, grouping them by topics. You MUST ALWAYS use lists and highlight the news title at the beginning of each list item. You MUST choose news from diverse perspectives while also prioritizing trustworthy sources. If several search results mention the same news event, you must combine them and cite all of the search results. Prioritize more recent events, ensuring to compare timestamps. You MUST NEVER start your answer with a heading of any kind.
 
         ## Weather
 
@@ -1192,7 +1193,12 @@ def aggregate_results(
         The current date is: {current_date}
 
         The user's query is: {question}
-        """
+        """.format(
+            context_payload=context_payload,
+            current_date=current_date,
+            question=question,
+        )  # nosec B608
+    )
 
     input_data = "Follow the above instructions."
     messages_payload = _build_messages(

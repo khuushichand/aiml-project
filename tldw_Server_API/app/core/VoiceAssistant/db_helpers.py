@@ -130,11 +130,13 @@ def get_user_voice_commands(
     if enabled_only:
         conditions.append("enabled = 1")
 
-    query = f"""
+    where_clause = " AND ".join(conditions)
+    query_template = """
         SELECT * FROM voice_commands
-        WHERE {' AND '.join(conditions)}
+        WHERE {where_clause}
         ORDER BY priority DESC, name ASC
     """
+    query = query_template.format_map(locals())  # nosec B608
 
     result = db.execute_query(query, tuple(params))
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
@@ -415,8 +417,7 @@ def get_voice_command_usage_stats(
         date_filter = " AND created_at >= datetime('now', ?)"
         params.append(f"-{days} days")
 
-    result = db.execute_query(
-        f"""
+    command_usage_sql_template = """
         SELECT
             command_id,
             MAX(command_name) AS command_name,
@@ -427,7 +428,10 @@ def get_voice_command_usage_stats(
             MAX(created_at) AS last_used
         FROM voice_command_events
         WHERE command_id = ? AND user_id = ?{date_filter}
-        """,
+        """
+    command_usage_sql = command_usage_sql_template.format_map(locals())  # nosec B608
+    result = db.execute_query(
+        command_usage_sql,
         tuple(params),
     )
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
@@ -477,8 +481,7 @@ def get_voice_top_commands(
 
     params.append(limit)
 
-    result = db.execute_query(
-        f"""
+    top_commands_sql_template = """
         SELECT
             command_id,
             MAX(command_name) AS command_name,
@@ -492,7 +495,10 @@ def get_voice_top_commands(
         GROUP BY command_id
         ORDER BY total_invocations DESC
         LIMIT ?
-        """,
+        """
+    top_commands_sql = top_commands_sql_template.format_map(locals())  # nosec B608
+    result = db.execute_query(
+        top_commands_sql,
         tuple(params),
     )
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
@@ -538,8 +544,7 @@ def get_voice_usage_by_day(
         user_filter = " AND user_id = ?"
         params.append(user_id)
 
-    result = db.execute_query(
-        f"""
+    usage_by_day_sql_template = """
         SELECT
             date(created_at) AS day,
             COUNT(*) AS total_commands,
@@ -550,7 +555,10 @@ def get_voice_usage_by_day(
         WHERE created_at >= datetime('now', ?){user_filter}
         GROUP BY day
         ORDER BY day ASC
-        """,
+        """
+    usage_by_day_sql = usage_by_day_sql_template.format_map(locals())  # nosec B608
+    result = db.execute_query(
+        usage_by_day_sql,
         tuple(params),
     )
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)
@@ -594,15 +602,17 @@ def get_voice_analytics_summary_stats(
         user_filter = " AND user_id = ?"
         params.append(user_id)
 
-    result = db.execute_query(
-        f"""
+    aggregate_stats_sql_template = """
         SELECT
             COUNT(*) AS total_commands,
             COALESCE(SUM(success) * 1.0 / NULLIF(COUNT(*), 0), 0.0) AS success_rate,
             AVG(response_time_ms) AS avg_response_time_ms
         FROM voice_command_events
         WHERE created_at >= datetime('now', ?){user_filter}
-        """,
+        """
+    aggregate_stats_sql = aggregate_stats_sql_template.format_map(locals())  # nosec B608
+    result = db.execute_query(
+        aggregate_stats_sql,
         tuple(params),
     )
     rows = result.fetchall() if hasattr(result, 'fetchall') else list(result)

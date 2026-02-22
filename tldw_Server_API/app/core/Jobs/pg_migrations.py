@@ -556,8 +556,7 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
             # job_attachments policies (join to jobs for domain/owner)
             try:
                 cur.execute("DROP POLICY IF EXISTS job_attachments_select ON job_attachments")
-                cur.execute(
-                    f"""
+                job_attachments_select_policy_template = """
                         CREATE POLICY job_attachments_select ON job_attachments FOR SELECT
                         USING (
                           {admin_expr} OR EXISTS (
@@ -568,10 +567,12 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
+                job_attachments_select_policy_sql = job_attachments_select_policy_template.format_map(locals())  # nosec B608
+                cur.execute(
+                    job_attachments_select_policy_sql
                 )
                 cur.execute("DROP POLICY IF EXISTS job_attachments_modify ON job_attachments")
-                cur.execute(
-                    f"""
+                job_attachments_modify_policy_template = """
                         CREATE POLICY job_attachments_modify ON job_attachments FOR ALL
                         USING (
                           {admin_expr} OR EXISTS (
@@ -582,14 +583,16 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
+                job_attachments_modify_policy_sql = job_attachments_modify_policy_template.format_map(locals())  # nosec B608
+                cur.execute(
+                    job_attachments_modify_policy_sql
                 )
             except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass
             # job_dependencies policies (join to jobs for domain/owner)
             try:
                 cur.execute("DROP POLICY IF EXISTS job_dependencies_select ON job_dependencies")
-                cur.execute(
-                    f"""
+                job_dependencies_select_policy_template = """
                         CREATE POLICY job_dependencies_select ON job_dependencies FOR SELECT
                         USING (
                           {admin_expr} OR EXISTS (
@@ -600,10 +603,12 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
+                job_dependencies_select_policy_sql = job_dependencies_select_policy_template.format_map(locals())  # nosec B608
+                cur.execute(
+                    job_dependencies_select_policy_sql
                 )
                 cur.execute("DROP POLICY IF EXISTS job_dependencies_modify ON job_dependencies")
-                cur.execute(
-                    f"""
+                job_dependencies_modify_policy_template = """
                         CREATE POLICY job_dependencies_modify ON job_dependencies FOR ALL
                         USING (
                           {admin_expr} OR EXISTS (
@@ -614,6 +619,9 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
                           )
                         )
                         """
+                job_dependencies_modify_policy_sql = job_dependencies_modify_policy_template.format_map(locals())  # nosec B608
+                cur.execute(
+                    job_dependencies_modify_policy_sql
                 )
             except _JOBS_PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
                 pass

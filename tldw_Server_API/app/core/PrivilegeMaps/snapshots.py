@@ -87,8 +87,10 @@ class PrivilegeSnapshotStore:
             params.append(f"%|{scope}|%")
 
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        count_sql_template = "SELECT COUNT(*) AS total FROM privilege_snapshots {where_clause}"
+        count_sql = count_sql_template.format_map(locals())  # nosec B608
         count_row = await pool.fetchone(
-            f"SELECT COUNT(*) AS total FROM privilege_snapshots {where_clause}",
+            count_sql,
             tuple(params),
         )
         if not count_row:
@@ -105,15 +107,17 @@ class PrivilegeSnapshotStore:
         offset = (page - 1) * page_size
         data_params = list(params) + [page_size, offset]
 
-        rows = await pool.fetchall(
-            f"""
+        list_sql_template = """
             SELECT snapshot_id, generated_at, generated_by, target_scope, org_id, team_id,
                    catalog_version, summary_json
             FROM privilege_snapshots
             {where_clause}
             ORDER BY generated_at DESC
             LIMIT ? OFFSET ?
-            """,
+            """
+        list_sql = list_sql_template.format_map(locals())  # nosec B608
+        rows = await pool.fetchall(
+            list_sql,
             tuple(data_params),
         )
 

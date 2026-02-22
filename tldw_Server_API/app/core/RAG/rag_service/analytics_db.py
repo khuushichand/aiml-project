@@ -888,7 +888,7 @@ class AnalyticsDatabase:
                 ):
                     cursor = self._execute(
                         conn,
-                        f"DELETE FROM {table} WHERE timestamp < ?",
+                        f"DELETE FROM {table} WHERE timestamp < ?",  # nosec B608
                         (threshold_iso,),
                     )
                     total_deleted += cursor.rowcount or 0

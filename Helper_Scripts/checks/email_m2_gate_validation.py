@@ -72,7 +72,7 @@ def _fetch_metrics_text(
     if bearer:
         req.add_header("Authorization", f"Bearer {bearer}")
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:  # nosec B310
             status = int(resp.getcode())
             body = _decode_body(resp.read() or b"")
     except HTTPError as exc:

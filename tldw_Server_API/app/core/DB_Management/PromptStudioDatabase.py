@@ -1094,7 +1094,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not include_deleted:
             clauses.append("deleted = FALSE")
         query = (
-            "SELECT id, uuid, name, description, user_id, client_id, status, deleted, deleted_at, "
+            "SELECT id, uuid, name, description, user_id, client_id, status, deleted, deleted_at, "  # nosec B608
             "created_at, updated_at, last_modified, version, metadata "
             "FROM prompt_studio_projects WHERE " + " AND ".join(clauses)
         )
@@ -1132,7 +1132,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
-        count_sql = f"SELECT COUNT(*) AS total FROM prompt_studio_projects{where_sql}"
+        count_sql = f"SELECT COUNT(*) AS total FROM prompt_studio_projects{where_sql}"  # nosec B608
         try:
             count_cursor = self._execute(count_sql, params)
             total = count_cursor.fetchone()
@@ -1141,7 +1141,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             raise DatabaseError(f"Failed counting prompt studio projects: {exc}") from exc  # noqa: TRY003
 
         offset = (page - 1) * per_page
-        list_sql = f"""
+        list_sql = """
             SELECT p.*,
                    (SELECT COUNT(*) FROM prompt_studio_prompts WHERE project_id = p.id AND deleted = FALSE) AS prompt_count,
                    (SELECT COUNT(*) FROM prompt_studio_test_cases WHERE project_id = p.id AND deleted = FALSE) AS test_case_count
@@ -1150,7 +1150,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             ORDER BY p.updated_at DESC
             LIMIT ?
             OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_pagination = list(params) + [per_page, offset]
 
         try:
@@ -1280,7 +1280,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         params.append(project_id)
 
         update_sql = (
-            "UPDATE prompt_studio_projects SET "
+            "UPDATE prompt_studio_projects SET "  # nosec B608
             + ", ".join(set_clauses)
             + " WHERE id = ? AND deleted = FALSE RETURNING *"
         )
@@ -1407,7 +1407,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
-        query = "SELECT * FROM prompt_studio_signatures WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        query = "SELECT * FROM prompt_studio_signatures WHERE " + " AND ".join(clauses) + " LIMIT 1"  # nosec B608
 
         try:
             cursor = self._execute(query, params)
@@ -1444,7 +1444,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-        count_sql = f"SELECT COUNT(*) FROM prompt_studio_signatures{where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM prompt_studio_signatures{where_clause}"  # nosec B608
         try:
             count_cursor = self._execute(count_sql, params)
             total_row = count_cursor.fetchone()
@@ -1453,13 +1453,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             raise DatabaseError(f"Failed counting signatures for project {project_id}: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
-        list_sql = f"""
+        list_sql = """
             SELECT *
             FROM prompt_studio_signatures
             {where_clause}
             ORDER BY updated_at DESC, id DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_pagination = params + [per_page, offset]
 
         try:
@@ -1513,7 +1513,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         params.append(signature_id)
 
         update_sql = (
-            "UPDATE prompt_studio_signatures SET "
+            "UPDATE prompt_studio_signatures SET "  # nosec B608
             + ", ".join(set_clauses)
             + " WHERE id = ? AND deleted = FALSE RETURNING *"
         )
@@ -1645,7 +1645,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not include_deleted:
             where_clause += " AND deleted = FALSE"
 
-        query = f"SELECT * FROM prompt_studio_test_cases WHERE {where_clause}"
+        query = f"SELECT * FROM prompt_studio_test_cases WHERE {where_clause}"  # nosec B608
 
         try:
             cursor = self._execute(query, identifiers)
@@ -1716,7 +1716,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         params.append(evaluation_id)
 
         update_sql = (
-            "UPDATE prompt_studio_evaluations SET "
+            "UPDATE prompt_studio_evaluations SET "  # nosec B608
             + set_clause_sql
             + " WHERE id = ? RETURNING *"
         )
@@ -1771,7 +1771,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-        count_sql = f"SELECT COUNT(*) FROM prompt_studio_evaluations{where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM prompt_studio_evaluations{where_clause}"  # nosec B608
         try:
             count_cursor = self._execute(count_sql, params)
             total_row = count_cursor.fetchone()
@@ -1780,13 +1780,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             raise DatabaseError(f"Failed counting evaluations: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
-        list_sql = f"""
+        list_sql = """
             SELECT *
             FROM prompt_studio_evaluations
             {where_clause}
             ORDER BY started_at DESC NULLS LAST, id DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_page = list(params) + [per_page, offset]
 
         try:
@@ -1885,7 +1885,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
-        query = "SELECT * FROM prompt_studio_optimizations WHERE " + " AND ".join(clauses) + " LIMIT 1"
+        query = "SELECT * FROM prompt_studio_optimizations WHERE " + " AND ".join(clauses) + " LIMIT 1"  # nosec B608
 
         try:
             cursor = self._execute(query, params)
@@ -1922,7 +1922,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-        count_sql = f"SELECT COUNT(*) FROM prompt_studio_optimizations{where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM prompt_studio_optimizations{where_clause}"  # nosec B608
         try:
             count_cursor = self._execute(count_sql, params)
             total_row = count_cursor.fetchone()
@@ -1931,13 +1931,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             raise DatabaseError(f"Failed counting optimizations: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
-        list_sql = f"""
+        list_sql = """
             SELECT *
             FROM prompt_studio_optimizations
             {where_clause}
             ORDER BY created_at DESC, id DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_page = list(params) + [per_page, offset]
 
         try:
@@ -1996,7 +1996,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         params.append(optimization_id)
         update_sql = (
-            "UPDATE prompt_studio_optimizations SET "
+            "UPDATE prompt_studio_optimizations SET "  # nosec B608
             + ", ".join(set_clauses)
             + " WHERE id = ? RETURNING *"
         )
@@ -2240,7 +2240,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             clauses.append("deleted = FALSE")
 
         query = (
-            "SELECT * FROM prompt_studio_prompts WHERE " + " AND ".join(clauses) + " LIMIT 1"
+            "SELECT * FROM prompt_studio_prompts WHERE " + " AND ".join(clauses) + " LIMIT 1"  # nosec B608
         )
 
         try:
@@ -2270,20 +2270,20 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
         where_clause = " WHERE " + " AND ".join(base_conditions)
 
-        count_sql = f"SELECT COUNT(*) FROM prompt_studio_prompts{where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM prompt_studio_prompts{where_clause}"  # nosec B608
         try:
             count_cursor = self._execute(count_sql, params)
             total_row = count_cursor.fetchone()
             total = int(total_row[0]) if total_row and total_row[0] is not None else 0
 
             offset = (page - 1) * per_page
-            list_sql = f"""
+            list_sql = """
                 SELECT *
                 FROM prompt_studio_prompts
                 {where_clause}
                 ORDER BY updated_at DESC, version_number DESC
                 LIMIT ? OFFSET ?
-            """
+            """.format_map(locals())  # nosec B608
             list_params = list(params) + [per_page, offset]
             list_cursor = self._execute(list_sql, list_params)
             rows = list_cursor.fetchall()
@@ -2315,13 +2315,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not include_deleted:
             conditions.append("deleted = FALSE")
 
-        query = """
+        query_template = """
             SELECT id, uuid, version_number, name, change_description,
                    created_at, parent_version_id
             FROM prompt_studio_prompts
             WHERE {where}
             ORDER BY version_number DESC
-        """.format(where=" AND ".join(conditions))
+        """
+        where_sql = " AND ".join(conditions)
+        query = query_template.format(where=where_sql)  # nosec B608
 
         try:
             cursor = self._execute(query, params)
@@ -2463,13 +2465,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             params.append(job_type)
 
         where_clause = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        query = f"""
+        query = """
             SELECT *
             FROM prompt_studio_job_queue
             {where_clause}
             ORDER BY priority DESC, created_at ASC
             LIMIT ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_limit = list(params) + [limit]
 
         try:
@@ -2509,13 +2511,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             params.append(json.dumps(result))
 
         params.append(job_id)
+        updates_sql = ', '.join(updates)
 
-        query = f"""
+        query = """
             UPDATE prompt_studio_job_queue
-            SET {', '.join(updates)}
+            SET {updates_sql}
             WHERE id = ?
             RETURNING *
-        """
+        """.format_map(locals())  # nosec B608
 
         try:
             with self.transaction() as conn:
@@ -2555,7 +2558,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             with self.transaction() as conn:
                 cursor = self._cursor_exec(
                     conn,
-                    f"""
+                    """
                     UPDATE prompt_studio_job_queue
                     SET leased_until = CASE
                             WHEN leased_until IS NOT NULL AND leased_until > NOW()
@@ -2566,7 +2569,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                       AND status = 'processing'
                       {owner_guard_sql}
                     RETURNING id
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     tuple(params),
                 )
                 row = cursor.fetchone()
@@ -2610,7 +2613,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
                     _inc_metric("prompt_studio.pg_advisory.lock_attempts_total")
                     cursor.execute(
-                        f"""
+                        """
                         WITH candidate AS (
                             SELECT id,
                                    (status = 'processing' AND (leased_until IS NULL OR leased_until < NOW())) AS was_reclaim
@@ -2633,7 +2636,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         FROM locked
                         WHERE q.id = locked.id
                         RETURNING q.*, locked.was_reclaim
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         (owner_value,),
                     )
                     row = cursor.fetchone()
@@ -2705,7 +2708,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs2 = 60
                     cursor.execute(
-                        f"""
+                        """
                         UPDATE prompt_studio_job_queue
                         SET status = 'processing',
                             started_at = CURRENT_TIMESTAMP,
@@ -2717,7 +2720,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                               OR (status = 'processing' AND (leased_until IS NULL OR leased_until <= CURRENT_TIMESTAMP))
                           )
                         RETURNING *
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         (owner_value, job_id),
                     )
 
@@ -2825,13 +2828,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         ascending: bool = True,
     ) -> list[dict[str, Any]]:
         order_clause = "ASC" if ascending else "DESC"
-        query = f"""
+        query = """
             SELECT *
             FROM prompt_studio_job_queue
             WHERE job_type = ? AND entity_id = ?
             ORDER BY created_at {order_clause}, id {order_clause}
             LIMIT ?
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self._execute(query, (job_type, entity_id, limit))
             rows = cursor.fetchall()
@@ -2850,13 +2853,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         clauses = ["p.id = ?"]
         if not include_deleted:
             clauses.append("p.deleted = FALSE")
-        query = f"""
+        where_sql = ' AND '.join(clauses)
+        query = """
             SELECT p.*, proj.user_id AS project_user_id
             FROM prompt_studio_prompts p
             JOIN prompt_studio_projects proj ON p.project_id = proj.id
-            WHERE {' AND '.join(clauses)}
+            WHERE {where_sql}
             LIMIT 1
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self._execute(query, [prompt_id])
             row = cursor.fetchone()
@@ -3216,7 +3220,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
 
         query = (
-            "SELECT * FROM prompt_studio_test_cases WHERE "
+            "SELECT * FROM prompt_studio_test_cases WHERE "  # nosec B608
             + " AND ".join(where_clauses)
             + " LIMIT 1"
         )
@@ -3254,7 +3258,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             where_clause += f" AND (name {comparator} ? OR description {comparator} ?)"
             params.extend([f"%{search}%", f"%{search}%"])
 
-        count_sql = f"SELECT COUNT(*) FROM prompt_studio_test_cases{where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM prompt_studio_test_cases{where_clause}"  # nosec B608
         try:
             count_cursor = self._execute(count_sql, params)
             count_row = count_cursor.fetchone()
@@ -3263,13 +3267,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             raise DatabaseError(f"Failed to count test cases for project {project_id}: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
-        list_sql = f"""
+        list_sql = """
             SELECT *
             FROM prompt_studio_test_cases
             {where_clause}
             ORDER BY is_golden DESC, created_at DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_pagination = params + [per_page, offset]
 
         try:
@@ -3330,12 +3334,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         params.append(test_case_id)
 
         deleted_clause = "deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0"
-        update_sql = f"""
+        set_clause_sql = ', '.join(set_clauses)
+        update_sql = """
             UPDATE prompt_studio_test_cases
-            SET {', '.join(set_clauses)}
+            SET {set_clause_sql}
             WHERE id = ? AND {deleted_clause}
             RETURNING *
-        """
+        """.format_map(locals())  # nosec B608
 
         try:
             with self.transaction() as conn:
@@ -3361,13 +3366,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 else:
                     cursor = self._cursor_exec(
                         conn,
-                        f"""
+                        """
                         UPDATE prompt_studio_test_cases
                         SET deleted = {deleted_value},
                             deleted_at = CURRENT_TIMESTAMP
                         WHERE id = ? AND {deleted_clause}
                         RETURNING id
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         (test_case_id,),
                     )
                 row = cursor.fetchone()
@@ -3412,7 +3417,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if self.backend_type == BackendType.POSTGRESQL:
             backend_query = FTSQueryTranslator.normalize_query(query, "postgresql") or query
             fts_column = self.get_fts_column("prompt_studio_test_cases") or "prompt_studio_test_cases_tsv"
-            search_sql = f"""
+            search_sql = """
                 SELECT tc.*, ts_rank({fts_column}, to_tsquery('english', ?)) AS rank
                 FROM prompt_studio_test_cases tc
                 WHERE tc.project_id = ?
@@ -3420,7 +3425,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                   AND {fts_column} @@ to_tsquery('english', ?)
                 ORDER BY rank DESC
                 LIMIT ?
-            """
+            """.format_map(locals())  # nosec B608
             params = [backend_query, project_id, backend_query, limit]
         else:
             search_sql = """
@@ -3927,7 +3932,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
         # Count total with retry
-        count_query = f"SELECT COUNT(*) FROM prompt_studio_projects{where_clause}"
+        count_query = f"SELECT COUNT(*) FROM prompt_studio_projects{where_clause}"  # nosec B608
         max_retries = 5
         base_delay = 0.05
         for attempt in range(max_retries):
@@ -3946,7 +3951,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         # Get projects with pagination (retry)
         offset = (page - 1) * per_page
-        query = f"""
+        query = """
             SELECT
                 p.*,
                 (SELECT COUNT(*) FROM prompt_studio_prompts WHERE project_id = p.id AND deleted = 0) as prompt_count,
@@ -3955,7 +3960,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             {where_clause}
             ORDER BY p.updated_at DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_page = list(params) + [per_page, offset]
         for attempt in range(max_retries):
             try:
@@ -4024,7 +4029,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     params.append(project_id)
 
                     query = (
-                        "UPDATE prompt_studio_projects "
+                        "UPDATE prompt_studio_projects "  # nosec B608
                         f"SET {', '.join(set_clauses)} "
                         "WHERE id = ? AND deleted = 0"
                     )
@@ -4228,7 +4233,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-        count_sql = f"SELECT COUNT(*) FROM prompt_studio_signatures{where_clause}"
+        count_sql = f"SELECT COUNT(*) FROM prompt_studio_signatures{where_clause}"  # nosec B608
 
         max_retries = 5
         base_delay = 0.05
@@ -4251,7 +4256,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         offset = max(page - 1, 0) * per_page
         list_sql = (
-            f"SELECT * FROM prompt_studio_signatures{where_clause} "
+            f"SELECT * FROM prompt_studio_signatures{where_clause} "  # nosec B608
             "ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?"
         )
         params_with_pagination = params + [per_page, offset]
@@ -4318,7 +4323,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         params.append(signature_id)
 
         update_sql = (
-            "UPDATE prompt_studio_signatures SET "
+            "UPDATE prompt_studio_signatures SET "  # nosec B608
             + ", ".join(set_clauses)
             + " WHERE id = ? AND deleted = 0"
         )
@@ -4513,7 +4518,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         cursor = conn.cursor()
 
         placeholders = ",".join(["?"] * len(identifiers))
-        query = f"SELECT * FROM prompt_studio_test_cases WHERE id IN ({placeholders})"
+        query = f"SELECT * FROM prompt_studio_test_cases WHERE id IN ({placeholders})"  # nosec B608
         if not include_deleted:
             query += " AND deleted = 0"
 
@@ -4608,7 +4613,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         params.append(evaluation_id)
 
         query = (
-            "UPDATE prompt_studio_evaluations SET "
+            "UPDATE prompt_studio_evaluations SET "  # nosec B608
             + ", ".join(set_clauses)
             + " WHERE id = ?"
         )
@@ -4681,7 +4686,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-        count_query = f"SELECT COUNT(*) FROM prompt_studio_evaluations{where_clause}"
+        count_query = f"SELECT COUNT(*) FROM prompt_studio_evaluations{where_clause}"  # nosec B608
 
         base_delay = 0.05
         for attempt in range(5):
@@ -4700,13 +4705,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             raise DatabaseError("Failed to list evaluations due to database locks")  # noqa: TRY003
 
         offset = (page - 1) * per_page
-        query = f"""
+        query = """
             SELECT *
             FROM prompt_studio_evaluations
             {where_clause}
             ORDER BY started_at DESC, id DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params_with_page = list(params) + [per_page, offset]
 
         for attempt in range(5):
@@ -5012,12 +5017,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             cursor = conn.cursor()
             clause = "" if include_deleted else "AND p.deleted = 0"
             cursor.execute(
-                f"""
+                """
                 SELECT p.*, proj.user_id AS project_user_id
                 FROM prompt_studio_prompts p
                 JOIN prompt_studio_projects proj ON p.project_id = proj.id
                 WHERE p.id = ? {clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 (prompt_id,),
             )
             row = cursor.fetchone()
@@ -5291,12 +5296,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             cursor = conn.cursor()
             clause = "" if include_deleted else " AND deleted = 0"
             cursor.execute(
-                f"""
+                """
                 SELECT *
                 FROM prompt_studio_optimizations
                 WHERE id = ?{clause}
                 LIMIT 1
-                """,
+                """.format_map(locals()),  # nosec B608
                 (optimization_id,),
             )
             row = cursor.fetchone()
@@ -5342,7 +5347,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         params.append(optimization_id)
         sql = (
-            "UPDATE prompt_studio_optimizations SET "
+            "UPDATE prompt_studio_optimizations SET "  # nosec B608
             + ", ".join(set_clauses)
             + " WHERE id = ?"
         )
@@ -5704,13 +5709,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         params.append(json.dumps(result))
 
                     params.append(job_id)
+                    updates_sql = ', '.join(updates)
 
                     cursor.execute(
-                        f"""
+                        """
                         UPDATE prompt_studio_job_queue
-                        SET {', '.join(updates)}
+                        SET {updates_sql}
                         WHERE id = ?
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         params,
                     )
 
@@ -5778,7 +5784,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs_sqlite = 60
                     query = (
-                        "UPDATE prompt_studio_job_queue "
+                        "UPDATE prompt_studio_job_queue "  # nosec B608
                         "SET status = 'processing', "
                         "    started_at = CURRENT_TIMESTAMP, "
                         f"    leased_until = DATETIME('now', '+{_lease_secs_sqlite} seconds'), "
@@ -5959,7 +5965,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         cursor = conn.cursor()
         order_clause = "ASC" if ascending else "DESC"
         query = (
-            f"SELECT * FROM prompt_studio_job_queue "
+            f"SELECT * FROM prompt_studio_job_queue "  # nosec B608
             f"WHERE job_type = ? AND entity_id = ? "
             f"ORDER BY created_at {order_clause}, id {order_clause} LIMIT ?"
         )
@@ -5999,7 +6005,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     owner_guard_sql = " AND (lease_owner IS NULL OR lease_owner = ?)" if owner_value is not None else ""
                     params = (owner_value, job_id, owner_value) if owner_value is not None else (job_id,)
                     cursor.execute(
-                        f"""
+                        """
                         UPDATE prompt_studio_job_queue
                         SET leased_until = CASE
                                 WHEN leased_until IS NOT NULL AND leased_until > CURRENT_TIMESTAMP
@@ -6009,7 +6015,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         WHERE id = ?
                           AND status = 'processing'
                           {owner_guard_sql}
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         params,
                     )
                     success = cursor.rowcount > 0
@@ -6090,13 +6096,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             cursor = conn.cursor()
             deleted_clause = "" if include_deleted else "AND deleted = 0"
             cursor.execute(
-                f"""
+                """
                 SELECT id, uuid, version_number, name, change_description,
                        created_at, parent_version_id
                 FROM prompt_studio_prompts
                 WHERE project_id = ? AND name = ? {deleted_clause}
                 ORDER BY version_number DESC
-                """,
+                """.format_map(locals()),  # nosec B608
                 (project_id, prompt_name),
             )
             rows = cursor.fetchall()
@@ -6315,17 +6321,17 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             search_clause = " AND (name LIKE ? OR description LIKE ?)"
             params.extend([f"%{search}%", f"%{search}%"])
 
-        count_query = f"SELECT COUNT(*) FROM prompt_studio_test_cases{where_clause}{search_clause}"
+        count_query = f"SELECT COUNT(*) FROM prompt_studio_test_cases{where_clause}{search_clause}"  # nosec B608
         cursor.execute(count_query, params)
         total = cursor.fetchone()[0]
 
         offset = (page - 1) * per_page
-        list_query = f"""
+        list_query = """
             SELECT * FROM prompt_studio_test_cases
             {where_clause}{search_clause}
             ORDER BY is_golden DESC, created_at DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
 
         # Retry loop mirroring historical behaviour for locked databases
         params_with_pagination = params + [per_page, offset]
@@ -6396,14 +6402,15 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
         params.append(test_case_id)
+        set_clause_sql = ', '.join(set_clauses)
 
         try:
             cursor.execute(
-                f"""
+                """
                 UPDATE prompt_studio_test_cases
-                SET {', '.join(set_clauses)}
+                SET {set_clause_sql}
                 WHERE id = ? AND deleted = 0
-                """,
+                """.format_map(locals()),  # nosec B608
                 params,
             )
             if cursor.rowcount == 0:

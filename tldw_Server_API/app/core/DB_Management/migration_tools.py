@@ -143,7 +143,7 @@ def migrate_workflows_sqlite_to_postgres(
 
         with backend.transaction() as pg_conn:
             for table in ('workflow_artifacts', 'workflow_events', 'workflow_step_runs', 'workflow_runs', 'workflows'):
-                backend.execute(f'DELETE FROM {table}', connection=pg_conn)
+                backend.execute(f'DELETE FROM {table}', connection=pg_conn)  # nosec B608
 
         cursor = sqlite_conn.execute("SELECT * FROM workflows")
         with backend.transaction() as pg_conn:
@@ -181,7 +181,7 @@ def migrate_workflows_sqlite_to_postgres(
         ):
             name, pk = table
             columns = [col['name'] for col in sqlite_conn.execute(f'PRAGMA table_info("{name}")')]
-            select_sql = f'SELECT {", ".join(columns)} FROM "{name}"'
+            select_sql = f'SELECT {", ".join(columns)} FROM "{name}"'  # nosec B608
             cursor = sqlite_conn.execute(select_sql)
             with backend.transaction() as pg_conn:
                 # Discover boolean columns for coercion
@@ -215,7 +215,7 @@ def migrate_workflows_sqlite_to_postgres(
                     placeholders = ', '.join(['%s'] * len(columns))
                     backend.execute_many(
                         (
-                            f'INSERT INTO {name} ({", ".join(columns)}) '
+                            f'INSERT INTO {name} ({", ".join(columns)}) '  # nosec B608
                             f'VALUES ({placeholders}) ON CONFLICT ({pk}) DO NOTHING'
                         ),
                         params,
@@ -336,7 +336,7 @@ def _truncate_tables(
         user_col_ident = _escape_backend_identifier(backend, "user_id")
         has_user_id = bool(meta and any(col.lower() == "user_id" for col in meta.columns))
         if user_id and has_user_id:
-            sql = f'DELETE FROM {table_ident} WHERE {user_col_ident} = %s'
+            sql = f'DELETE FROM {table_ident} WHERE {user_col_ident} = %s'  # nosec B608
             params = (user_id,)
         elif user_id and not has_user_id:
             logger.info(
@@ -345,7 +345,7 @@ def _truncate_tables(
             )
             continue
         else:
-            sql = f'DELETE FROM {table_ident}'
+            sql = f'DELETE FROM {table_ident}'  # nosec B608
             params = None
         try:
             backend.execute(sql, params, connection=pg_conn)
@@ -363,7 +363,7 @@ def _copy_table(
 ) -> None:
     sqlite_column_list = ', '.join(_sqlite_quote_identifier(col) for col in meta.columns)
     sqlite_table_name = _sqlite_quote_identifier(meta.source_name)
-    select_sql = f'SELECT {sqlite_column_list} FROM {sqlite_table_name}'
+    select_sql = f'SELECT {sqlite_column_list} FROM {sqlite_table_name}'  # nosec B608
     select_params: tuple[Any, ...] = ()
     has_user_id = any(col.lower() == "user_id" for col in meta.columns)
     if user_id and has_user_id:
@@ -373,7 +373,7 @@ def _copy_table(
     insert_columns = ', '.join(_escape_backend_identifier(backend, col) for col in meta.pg_columns)
     placeholders = ', '.join(['%s'] * len(meta.pg_columns))
     insert_sql = (
-        f'INSERT INTO {insert_table} ({insert_columns}) '
+        f'INSERT INTO {insert_table} ({insert_columns}) '  # nosec B608
         f'VALUES ({placeholders}) ON CONFLICT DO NOTHING'
     )
 
@@ -434,7 +434,7 @@ def _sync_sequences(
             serial_table_name = meta.name.replace("'", "''")
             serial_column_name = column.replace("'", "''")
             sql = (
-                f"SELECT setval("
+                f"SELECT setval("  # nosec B608
                 f"pg_get_serial_sequence('{serial_table_name}', '{serial_column_name}'), "
                 f"COALESCE((SELECT MAX({column_ident}) FROM {table_ident}), 0) + 1, false)"
             )

@@ -188,15 +188,18 @@ class AuthnzByokOAuthStateRepo:
                     where.append(f"expires_at > ${idx}")
                     params.append(_strip_tzinfo(lookup_time))
                     idx += 1
-                row = await self.db_pool.fetchone(
-                    f"""
+                where_clause = " AND ".join(where)
+                fetch_state_sql_template = """
                     SELECT state, user_id, provider, auth_session_id, redirect_uri,
                            pkce_verifier_encrypted, created_at, expires_at, consumed_at, return_path
                     FROM byok_oauth_state
-                    WHERE {' AND '.join(where)}
+                    WHERE {where_clause}
                     ORDER BY created_at DESC
                     LIMIT 1
-                    """,
+                    """
+                fetch_state_sql = fetch_state_sql_template.format_map(locals())  # nosec B608
+                row = await self.db_pool.fetchone(
+                    fetch_state_sql,
                     *params,
                 )
                 return self._row_to_dict(row) if row else None
@@ -208,15 +211,18 @@ class AuthnzByokOAuthStateRepo:
             if not include_expired:
                 where_sqlite.append("datetime(expires_at) > datetime(?)")
                 params_sqlite.append(lookup_time.isoformat())
-            row = await self.db_pool.fetchone(
-                f"""
+            where_clause = " AND ".join(where_sqlite)
+            fetch_state_sql_template = """
                 SELECT state, user_id, provider, auth_session_id, redirect_uri,
                        pkce_verifier_encrypted, created_at, expires_at, consumed_at, return_path
                 FROM byok_oauth_state
-                WHERE {' AND '.join(where_sqlite)}
+                WHERE {where_clause}
                 ORDER BY created_at DESC
                 LIMIT 1
-                """,
+                """
+            fetch_state_sql = fetch_state_sql_template.format_map(locals())  # nosec B608
+            row = await self.db_pool.fetchone(
+                fetch_state_sql,
                 tuple(params_sqlite),
             )
             return self._row_to_dict(row) if row else None

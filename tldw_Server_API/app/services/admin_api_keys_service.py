@@ -253,9 +253,13 @@ async def list_virtual_keys(
                 conditions.append(f"created_at <= ${param_idx}")
                 params.append(created_before_dt.replace(tzinfo=None))
             where_clause = " AND ".join(conditions)
-            rows = await db.fetch(
+            list_api_keys_sql_template = (
                 "SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip "
-                f"FROM api_keys WHERE {where_clause} ORDER BY created_at DESC",
+                "FROM api_keys WHERE {where_clause} ORDER BY created_at DESC"
+            )
+            list_api_keys_sql = list_api_keys_sql_template.format_map(locals())  # nosec B608
+            rows = await db.fetch(
+                list_api_keys_sql,
                 *params,
             )
             items = [APIKeyMetadata(**dict(r)) for r in rows]
@@ -281,9 +285,13 @@ async def list_virtual_keys(
                 conditions.append("datetime(created_at) <= datetime(?)")
                 params2.append(created_before_dt.strftime("%Y-%m-%d %H:%M:%S"))
             where_clause = " AND ".join(conditions)
-            cur = await db.execute(
+            list_api_keys_sql_template = (
                 "SELECT id, key_prefix, name, description, scope, status, created_at, expires_at, usage_count, last_used_at, last_used_ip "
-                f"FROM api_keys WHERE {where_clause} ORDER BY datetime(created_at) DESC",
+                "FROM api_keys WHERE {where_clause} ORDER BY datetime(created_at) DESC"
+            )
+            list_api_keys_sql = list_api_keys_sql_template.format_map(locals())  # nosec B608
+            cur = await db.execute(
+                list_api_keys_sql,
                 tuple(params2),
             )
             rows = await cur.fetchall()

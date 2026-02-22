@@ -160,7 +160,7 @@ def main() -> int:
 
     try:
         request_start = time.monotonic()
-        with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+        with urllib.request.urlopen(req, timeout=args.timeout) as resp:  # nosec B310
             headers_ms = (time.monotonic() - request_start) * 1000.0
             stats = _write_audio(args.output, args.stream, resp, request_start)
             total = int(stats.get("total", 0))

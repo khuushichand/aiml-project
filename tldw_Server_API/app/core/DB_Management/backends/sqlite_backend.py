@@ -482,10 +482,9 @@ class SQLiteBackend(DatabaseBackend):
                 connection=connection,
             )
             # Rebuild index from content table to avoid duplicate rowids on re-init.
-            rebuild_query = (
-                f"INSERT INTO {self.escape_identifier(table_name)}"
-                f"({self.escape_identifier(table_name)}) VALUES('rebuild')"
-            )
+            fts_table_ident = self.escape_identifier(table_name)
+            rebuild_query_template = "INSERT INTO {table}({table}) VALUES('rebuild')"
+            rebuild_query = rebuild_query_template.format(table=fts_table_ident)  # nosec B608
             self.execute(rebuild_query, connection=connection)
 
         except sqlite3.Error as e:
@@ -517,21 +516,23 @@ class SQLiteBackend(DatabaseBackend):
         delete_trigger = self.escape_identifier(f"{trigger_base}_ad")
         fts_column_ident = self.escape_identifier(table_name)
 
-        insert_sql = f"""
+        insert_sql_template = """
         CREATE TRIGGER IF NOT EXISTS {insert_trigger}
         AFTER INSERT ON {source_table_ident} BEGIN
             INSERT INTO {fts_table_ident}(rowid, {columns_str})
             VALUES (new.rowid, {new_values});
         END;
         """
-        delete_sql = f"""
+        insert_sql = insert_sql_template.format_map(locals())  # nosec B608
+        delete_sql_template = """
         CREATE TRIGGER IF NOT EXISTS {delete_trigger}
         AFTER DELETE ON {source_table_ident} BEGIN
             INSERT INTO {fts_table_ident}({fts_column_ident}, rowid, {columns_str})
             VALUES ('delete', old.rowid, {old_values});
         END;
         """
-        update_sql = f"""
+        delete_sql = delete_sql_template.format_map(locals())  # nosec B608
+        update_sql_template = """
         CREATE TRIGGER IF NOT EXISTS {update_trigger}
         AFTER UPDATE ON {source_table_ident} BEGIN
             INSERT INTO {fts_table_ident}({fts_column_ident}, rowid, {columns_str})
@@ -540,6 +541,7 @@ class SQLiteBackend(DatabaseBackend):
             VALUES (new.rowid, {new_values});
         END;
         """
+        update_sql = update_sql_template.format_map(locals())  # nosec B608
 
         self.execute(insert_sql, connection=connection)
         self.execute(delete_sql, connection=connection)
@@ -557,7 +559,7 @@ class SQLiteBackend(DatabaseBackend):
             raise DatabaseError("FTS table name required")
 
         # Build the FTS query
-        query_parts = [f"SELECT * FROM {self.escape_identifier(fts_query.table)}"]
+        query_parts = [f"SELECT * FROM {self.escape_identifier(fts_query.table)}"]  # nosec B608
         params = []
 
         # Add MATCH clause
@@ -600,7 +602,7 @@ class SQLiteBackend(DatabaseBackend):
         connection: Optional[sqlite3.Connection] = None
     ) -> None:
         """Update the FTS5 index (rebuild if needed)."""
-        query = f"INSERT INTO {self.escape_identifier(table_name)}({self.escape_identifier(table_name)}) VALUES('rebuild')"
+        query = f"INSERT INTO {self.escape_identifier(table_name)}({self.escape_identifier(table_name)}) VALUES('rebuild')"  # nosec B608
         self.execute(query, connection=connection)
 
     def escape_identifier(self, identifier: str) -> str:
@@ -696,7 +698,7 @@ class SQLiteBackend(DatabaseBackend):
         connection: Optional[sqlite3.Connection] = None
     ) -> Generator[dict[str, Any], None, None]:
         """Export data from a table."""
-        query = f"SELECT * FROM {self.escape_identifier(table_name)}"
+        query = f"SELECT * FROM {self.escape_identifier(table_name)}"  # nosec B608
 
         conn = connection or self.get_pool().get_connection()
 

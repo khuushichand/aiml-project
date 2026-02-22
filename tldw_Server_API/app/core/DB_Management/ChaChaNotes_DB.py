@@ -4556,7 +4556,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return
             placeholders = ",".join(["?"] * len(required))
             cur = conn.execute(
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",  # nosec B608
                 tuple(sorted(required)),
             )
             existing = {row[0] for row in cur.fetchall()}
@@ -4932,7 +4932,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 concat_expr = "''"
 
             update_sql = (
-                f"UPDATE {backend.escape_identifier(actual_source)} "
+                f"UPDATE {backend.escape_identifier(actual_source)} "  # nosec B608
                 f"SET {backend.escape_identifier(fts_column)} = "
                 f"to_tsvector('english', {concat_expr})"
             )
@@ -4977,7 +4977,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             try:
                 with self.transaction() as conn:
                     for fts_table, _, _ in self._FTS_CONFIG:
-                        conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")
+                        conn.execute(f"INSERT INTO {fts_table}({fts_table}) VALUES('rebuild')")  # nosec B608
             except sqlite3.Error as exc:
                 raise CharactersRAGDBError(f"Failed to rebuild SQLite FTS structures: {exc}") from exc  # noqa: TRY003
             return
@@ -5494,7 +5494,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             clauses.append("user_invocable = 1")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         query = (
-            "SELECT * FROM skill_registry "
+            "SELECT * FROM skill_registry "  # nosec B608
             f"{where_sql} "
             "ORDER BY name ASC LIMIT ? OFFSET ?"
         )
@@ -5521,7 +5521,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not include_hidden:
             clauses.append("user_invocable = 1")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        query = f"SELECT COUNT(*) AS cnt FROM skill_registry {where_sql}"
+        query = f"SELECT COUNT(*) AS cnt FROM skill_registry {where_sql}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
@@ -5653,7 +5653,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         params.append(now)
         params.extend([name, expected_version])
         query = (
-            f"UPDATE skill_registry SET {', '.join(set_parts)} "
+            f"UPDATE skill_registry SET {', '.join(set_parts)} "  # nosec B608
             "WHERE name = ? AND version = ? AND deleted = 0"
         )
 
@@ -6260,7 +6260,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 max_result = backend.execute(
                     (
-                        f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "
+                        f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "  # nosec B608
                         f"FROM {ident(table_name)}"
                     ),
                     connection=conn,
@@ -6411,7 +6411,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
                 assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
                 conn.execute(
-                    f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                     ("note_edges", edge_id, "create", now_iso, self.client_id, 1, json.dumps(payload)),
                 )
 
@@ -6467,7 +6467,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
                     assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
                     conn.execute(
-                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                         ("note_edges", edge_id, "delete", now_iso, self.client_id, 1, json.dumps({"edge_id": edge_id})),
                     )
                 return deleted
@@ -6490,7 +6490,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
             ph = ",".join(["?"] * len(batch))
             query = (
-                f"SELECT edge_id, user_id, from_note_id, to_note_id, type, directed, weight, "
+                f"SELECT edge_id, user_id, from_note_id, to_note_id, type, directed, weight, "  # nosec B608
                 f"created_at, created_by, metadata "
                 f"FROM note_edges "
                 f"WHERE user_id = ? AND (from_note_id IN ({ph}) OR to_note_id IN ({ph}))"
@@ -6521,7 +6521,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             ph = ",".join(["?"] * len(batch))
             deleted_clause = "" if include_deleted else " AND deleted = 0"
             query = (
-                f"SELECT id, title, content, created_at, last_modified, deleted, conversation_id "
+                f"SELECT id, title, content, created_at, last_modified, deleted, conversation_id "  # nosec B608
                 f"FROM notes WHERE id IN ({ph}){deleted_clause}"
             )
             cur = self.execute_query(query, tuple(batch))
@@ -6537,7 +6537,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_all_note_ids_for_graph(self, include_deleted: bool = True, limit: int = 500) -> list[str]:
         """Return note IDs ordered by last_modified DESC, id ASC. For seedless graph."""
         deleted_clause = "" if include_deleted else " WHERE deleted = 0"
-        query = f"SELECT id FROM notes{deleted_clause} ORDER BY last_modified DESC, id ASC LIMIT ?"
+        query = f"SELECT id FROM notes{deleted_clause} ORDER BY last_modified DESC, id ASC LIMIT ?"  # nosec B608
         cur = self.execute_query(query, (limit,))
         return [row[0] for row in cur.fetchall()]
 
@@ -6549,7 +6549,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
             ph = ",".join(["?"] * len(batch))
             query = (
-                f"SELECT nk.note_id, k.id AS keyword_id, k.keyword "
+                f"SELECT nk.note_id, k.id AS keyword_id, k.keyword "  # nosec B608
                 f"FROM note_keywords nk "
                 f"JOIN keywords k ON k.id = nk.keyword_id "
                 f"WHERE nk.note_id IN ({ph}) AND k.deleted = 0"
@@ -6582,7 +6582,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for batch in self._chunk_list(note_ids, self._SQLITE_PARAM_LIMIT):
             ph = ",".join(["?"] * len(batch))
             query = (
-                f"SELECT n.id AS note_id, c.id AS conversation_id, c.source, c.external_ref "
+                f"SELECT n.id AS note_id, c.id AS conversation_id, c.source, c.external_ref "  # nosec B608
                 f"FROM notes n "
                 f"JOIN conversations c ON c.id = n.conversation_id "
                 f"WHERE n.id IN ({ph}) AND c.source IS NOT NULL"
@@ -6634,7 +6634,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(  # noqa: TRY003
                 f"Unsafe identifier in version lookup: table={table_name!r}, column={pk_col_name!r}"
             )
-        cursor = conn.execute(f"SELECT version, deleted FROM {table_name} WHERE {pk_col_name} = ?", (pk_value,))
+        cursor = conn.execute(f"SELECT version, deleted FROM {table_name} WHERE {pk_col_name} = ?", (pk_value,))  # nosec B608
         row = cursor.fetchone()
 
         if not row:
@@ -6985,11 +6985,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         deleted_true = "TRUE" if self.backend_type == BackendType.POSTGRESQL else "1"
         updated_expr = "COALESCE(cc.last_modified, cc.created_at)"
         conversation_count_expr = (
-            "SELECT COUNT(1) FROM conversations conv "
+            "SELECT COUNT(1) FROM conversations conv "  # nosec B608
             f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
         )
         last_used_expr = (
-            "COALESCE(("
+            "COALESCE(("  # nosec B608
             "SELECT MAX(conv.last_modified) FROM conversations conv "
             f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
             "), cc.created_at)"
@@ -7038,14 +7038,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         if has_conversations is True:
             filters.append(
-                "EXISTS ("
+                "EXISTS ("  # nosec B608
                 "SELECT 1 FROM conversations conv "
                 f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
                 ")"
             )
         elif has_conversations is False:
             filters.append(
-                "NOT EXISTS ("
+                "NOT EXISTS ("  # nosec B608
                 "SELECT 1 FROM conversations conv "
                 f"WHERE conv.deleted = {deleted_false} AND conv.character_id = cc.id"
                 ")"
@@ -7392,7 +7392,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 # Construct the final query
                 # The set_clauses_sql will always have at least the metadata updates if this point is reached.
-                final_update_query = f"UPDATE character_cards SET {', '.join(set_clauses_sql)} WHERE id = ? AND version = ? AND deleted = 0"
+                final_update_query = f"UPDATE character_cards SET {', '.join(set_clauses_sql)} WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
 
                 # WHERE clause parameters
                 where_params = [character_id, expected_version]
@@ -7858,7 +7858,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             # Build query with JSON_EACH to extract and check tags
             placeholders = ','.join('?' for _ in normalized_tags)
-            query = f"""
+            query = """
                 SELECT DISTINCT cc.*
                 FROM character_cards cc,
                      json_each(cc.tags) je
@@ -7868,7 +7868,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   AND lower(trim(je.value)) IN ({placeholders})
                 ORDER BY cc.name
                 LIMIT ?
-            """
+            """.format_map(locals())  # nosec B608
 
             params = normalized_tags + [limit]
             cursor = self.execute_query(query, params)
@@ -8151,12 +8151,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     ) -> dict[str, Any] | None:
         """Fetch a character exemplar by ID."""
         deleted_clause = "" if include_deleted else "AND is_deleted = 0"
-        query = f"""
+        query = """
             SELECT *
             FROM character_exemplars
             WHERE id = ? AND character_id = ? {deleted_clause}
             LIMIT 1
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self.execute_query(query, (exemplar_id, character_id))
             row = cursor.fetchone()
@@ -8301,11 +8301,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         set_clauses.append("updated_at = ?")
         params.append(self._get_current_utc_timestamp_iso())
 
-        query = f"""
+        set_clause_sql = ", ".join(set_clauses)
+        query = """
             UPDATE character_exemplars
-            SET {", ".join(set_clauses)}
+            SET {set_clause_sql}
             WHERE id = ? AND character_id = ? AND is_deleted = ?
-        """
+        """.format_map(locals())  # nosec B608
         params.extend(
             [
                 exemplar_id,
@@ -8412,42 +8413,42 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if normalized_query and self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(normalized_query, 'postgresql')
             if tsquery:
-                sql = f"""
+                sql = """
                     SELECT ce.*, ts_rank(ce.character_exemplars_fts_tsv, to_tsquery('english', ?)) AS rank
                     FROM character_exemplars ce
                     WHERE {where_sql}
                       AND ce.character_exemplars_fts_tsv @@ to_tsquery('english', ?)
                     ORDER BY rank DESC, ce.updated_at DESC
-                """
+                """.format_map(locals())  # nosec B608
                 query_params = [tsquery] + params + [tsquery]
             else:
-                sql = f"""
+                sql = """
                     SELECT ce.*
                     FROM character_exemplars ce
                     WHERE {where_sql}
                       AND ce.text ILIKE ?
                     ORDER BY ce.updated_at DESC
-                """
+                """.format_map(locals())  # nosec B608
                 query_params = params + [f"%{normalized_query}%"]
         elif normalized_query:
             safe_literal = normalized_query.replace('"', '""')
             safe_fts = f'"{safe_literal}"'
-            sql = f"""
+            sql = """
                 SELECT ce.*, bm25(character_exemplars_fts) AS bm25_score
                 FROM character_exemplars_fts
                 JOIN character_exemplars ce ON character_exemplars_fts.rowid = ce.rowid
                 WHERE character_exemplars_fts MATCH ?
                   AND {where_sql}
                 ORDER BY bm25_score, ce.updated_at DESC
-            """
+            """.format_map(locals())  # nosec B608
             query_params = [safe_fts] + params
         else:
-            sql = f"""
+            sql = """
                 SELECT ce.*
                 FROM character_exemplars ce
                 WHERE {where_sql}
                 ORDER BY ce.updated_at DESC
-            """
+            """.format_map(locals())  # nosec B608
             query_params = params
 
         try:
@@ -8695,7 +8696,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "1 = 1"
         else:
             deleted_clause = "deleted = 0"
-        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND {deleted_clause}"
+        query = f"SELECT COUNT(*) as cnt FROM conversations WHERE client_id = ? AND {deleted_clause}"  # nosec B608
         try:
             cursor = self.execute_query(query, (client_id,))
             row = cursor.fetchone()
@@ -8734,7 +8735,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "deleted = 0"
 
         query = (
-            "SELECT * FROM conversations "
+            "SELECT * FROM conversations "  # nosec B608
             f"WHERE client_id = ? AND {deleted_clause} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
@@ -8801,7 +8802,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return {}
         placeholders = ",".join(["?"] * len(conversation_ids))
         base_query = (
-            f"SELECT m.conversation_id, COUNT(1) as cnt "
+            f"SELECT m.conversation_id, COUNT(1) as cnt "  # nosec B608
             f"FROM messages m "
             f"JOIN conversations c ON m.conversation_id = c.id "
             f"WHERE m.conversation_id IN ({placeholders}) AND c.deleted = 0"
@@ -8974,7 +8975,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
         query = (
-            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause}"
+            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause}"  # nosec B608
         )
         try:
             cursor = self.execute_query(query, (client_id, character_id))
@@ -9023,7 +9024,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "deleted = 0"
 
         query = (
-            "SELECT * FROM conversations "
+            "SELECT * FROM conversations "  # nosec B608
             f"WHERE client_id = ? AND character_id = ? AND {deleted_clause} "
             "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
@@ -9201,7 +9202,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     final_set_values = params_for_set_clause[:]  # Copy of values for specific fields
                     final_set_values.extend([now, next_version_val])  # Add values for metadata fields
 
-                    main_update_query = f"UPDATE conversations SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"
+                    main_update_query = f"UPDATE conversations SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
                     main_update_params = tuple(final_set_values + [conversation_id, expected_version])
 
                 logger.debug(f"Executing MAIN conversation update query: {main_update_query}")
@@ -9536,12 +9537,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_clause = " AND ".join(filters)
 
-        select_query = f"""
+        select_query = """
             SELECT c.*, bm25(conversations_fts) AS bm25_raw
             FROM conversations_fts
             JOIN conversations c ON conversations_fts.rowid = c.rowid
             WHERE {where_clause}
-        """
+        """.format_map(locals())  # nosec B608
 
         try:
             cursor = self.execute_query(select_query, tuple(params_filters))
@@ -9643,7 +9644,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if keywords:
                 for kw in keywords:
                     filters.append(
-                        f"EXISTS (SELECT 1 FROM conversation_keywords ck "
+                        f"EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
                         f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
                         f"WHERE ck.conversation_id = c.id AND k.deleted = FALSE AND LOWER(k.keyword) = ?)"
                     )
@@ -9702,7 +9703,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if keywords:
             for kw in keywords:
                 filters.append(
-                    "EXISTS (SELECT 1 FROM conversation_keywords ck "
+                    "EXISTS (SELECT 1 FROM conversation_keywords ck "  # nosec B608
                     f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
                     "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
                 )
@@ -9975,7 +9976,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # The new query joins with conversations to check its 'deleted' status.
         delete_clause = "" if include_deleted else "AND m.deleted = 0"
 
-        query = f"""
+        query = """
             SELECT m.id, m.conversation_id, m.parent_message_id, m.sender, m.content,
                    m.image_data, m.image_mime_type, m.timestamp, m.ranking,
                    m.last_modified, m.version, m.client_id, m.deleted
@@ -9986,7 +9987,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               AND c.deleted = 0
             ORDER BY m.timestamp {order_by_timestamp}
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self.execute_query(query, (conversation_id, limit, offset))
             raw_rows = cursor.fetchall()
@@ -10036,7 +10037,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Fetch root (parentless) messages with minimal columns for tree building."""
         if order_by_timestamp.upper() not in ["ASC", "DESC"]:
             raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")  # noqa: TRY003
-        query = f"""
+        query = """
             SELECT m.id, m.parent_message_id, m.sender, m.content, m.timestamp
             FROM messages m
             JOIN conversations c ON m.conversation_id = c.id
@@ -10046,7 +10047,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               AND c.deleted = 0
             ORDER BY m.timestamp {order_by_timestamp}
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self.execute_query(query, (conversation_id, limit, offset))
             rows = cursor.fetchall()
@@ -10073,7 +10074,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if order_by_timestamp.upper() not in ["ASC", "DESC"]:
             raise InputError("order_by_timestamp must be 'ASC' or 'DESC'.")  # noqa: TRY003
         placeholders = ",".join(["?"] * len(parent_ids))
-        query = f"""
+        query = """
             SELECT m.id, m.parent_message_id, m.sender, m.content, m.timestamp
             FROM messages m
             JOIN conversations c ON m.conversation_id = c.id
@@ -10082,7 +10083,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               AND m.deleted = 0
               AND c.deleted = 0
             ORDER BY m.timestamp {order_by_timestamp}
-        """
+        """.format_map(locals())  # nosec B608
         params = [conversation_id, *parent_ids]
         try:
             cursor = self.execute_query(query, tuple(params))
@@ -10215,7 +10216,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         where_values = [message_id, expected_version]
         final_params_for_execute = tuple(current_params_for_set_clause + where_values)
 
-        query = f"UPDATE messages SET {', '.join(current_fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"
+        query = f"UPDATE messages SET {', '.join(current_fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
 
         try:
             with self.transaction() as conn:
@@ -10468,11 +10469,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_value = 0
 
         table_name = self._map_table_for_backend(table_name)
-        query = f"""
+        insert_cols_sql = ', '.join(cols_str_list_insert)
+        insert_placeholders_sql = ', '.join(placeholders_str_list_insert)
+        query = """
             INSERT INTO {table_name} (
-                {', '.join(cols_str_list_insert)}
-            ) VALUES ({', '.join(placeholders_str_list_insert)})
-        """
+                {insert_cols_sql}
+            ) VALUES ({insert_placeholders_sql})
+        """.format_map(locals())  # nosec B608
         # Params for INSERT: main_value, other_values..., created_at, last_modified, client_id
         if self.backend_type == BackendType.POSTGRESQL:
             params_tuple_insert = tuple([main_col_value] + other_values + [now, now, client_id_to_use, version_value, deleted_value])
@@ -10484,7 +10487,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             with self.transaction() as conn:
                 # Check if a soft-deleted item exists and undelete it
                 undelete_cursor = conn.execute(
-                    f"SELECT id, version FROM {table_name} WHERE {unique_col_name} = ? AND deleted = 1",
+                    f"SELECT id, version FROM {table_name} WHERE {unique_col_name} = ? AND deleted = 1",  # nosec B608
                     (main_col_value,))
                 existing_deleted = undelete_cursor.fetchone()
                 if existing_deleted:
@@ -10501,7 +10504,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     undelete_where_params = [item_id, current_version]
                     full_undelete_params = tuple(update_params_list + [now, next_version, client_id_to_use] + undelete_where_params)
 
-                    undelete_query = f"UPDATE {table_name} SET {', '.join(update_set_parts)} WHERE id = ? AND version = ?"
+                    undelete_query = f"UPDATE {table_name} SET {', '.join(update_set_parts)} WHERE id = ? AND version = ?"  # nosec B608
 
                     row_count_undelete = conn.execute(undelete_query, full_undelete_params).rowcount
                     if row_count_undelete == 0:
@@ -10517,7 +10520,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 item_id_insert = cursor_insert.lastrowid if hasattr(cursor_insert, 'lastrowid') else None
                 if item_id_insert is None and self.backend_type == BackendType.POSTGRESQL:
                     sel = conn.execute(
-                        f"SELECT id FROM {table_name} WHERE {unique_col_name} = ?",
+                        f"SELECT id FROM {table_name} WHERE {unique_col_name} = ?",  # nosec B608
                         (main_col_value,)
                     )
                     row = sel.fetchone()
@@ -10553,7 +10556,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             CharactersRAGDBError: For database errors.
         """
         table_name = self._map_table_for_backend(table_name)
-        query = f"SELECT * FROM {table_name} WHERE id = ? AND deleted = 0"
+        query = f"SELECT * FROM {table_name} WHERE id = ? AND deleted = 0"  # nosec B608
         try:
             cursor = self.execute_query(query, (item_id,))
             row = cursor.fetchone()
@@ -10579,7 +10582,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             CharactersRAGDBError: For database errors.
         """
         table_name = self._map_table_for_backend(table_name)
-        query = f"SELECT * FROM {table_name} WHERE {unique_col_name} = ? AND deleted = 0"
+        query = f"SELECT * FROM {table_name} WHERE {unique_col_name} = ? AND deleted = 0"  # nosec B608
         try:
             cursor = self.execute_query(query, (value,))
             row = cursor.fetchone()
@@ -10628,7 +10631,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             order_expression = self._case_insensitive_order_expression(base.strip(), direction.strip() or None)
 
         table_name = self._map_table_for_backend(table_name)
-        query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_expression} LIMIT ? OFFSET ?"
+        query = f"SELECT * FROM {table_name} WHERE deleted = 0 ORDER BY {order_expression} LIMIT ? OFFSET ?"  # nosec B608
         try:
             cursor = self.execute_query(query, (limit, offset))
             return [dict(row) for row in cursor.fetchall()]
@@ -10705,7 +10708,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         where_clause_values = [item_id, expected_version]
         final_query_params = tuple(current_params_for_set_clause + where_clause_values)
 
-        query = f"UPDATE {table_name} SET {', '.join(current_fields_to_update_sql)} WHERE {pk_col_name} = ? AND version = ? AND deleted = 0"
+        query = f"UPDATE {table_name} SET {', '.join(current_fields_to_update_sql)} WHERE {pk_col_name} = ? AND version = ? AND deleted = 0"  # nosec B608
 
         try:
             with self.transaction() as conn:
@@ -10725,7 +10728,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # This state implies the record was active with expected_version during the _get_current_db_version check,
                     # but was either deleted or its version changed *just before* the UPDATE SQL executed.
                     check_again_cursor = conn.execute(
-                        f"SELECT version, deleted FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))
+                        f"SELECT version, deleted FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))  # nosec B608
                     final_state = check_again_cursor.fetchone()
                     msg = f"Update for {table_name} ID {item_id} (expected version {expected_version}) affected 0 rows."
                     if not final_state:
@@ -10791,7 +10794,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         now = self._get_current_utc_timestamp_iso()
         next_version_val = expected_version + 1
 
-        query = f"UPDATE {table_name} SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE {pk_col_name} = ? AND version = ? AND deleted = 0"
+        query = f"UPDATE {table_name} SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE {pk_col_name} = ? AND version = ? AND deleted = 0"  # nosec B608
         params = (now, next_version_val, self.client_id, item_id, expected_version)
 
         try:
@@ -10803,7 +10806,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Check if the ConflictError is because it's already soft-deleted.
                     # Query again to be absolutely sure of the 'deleted' status.
                     check_deleted_cursor = conn.execute(
-                        f"SELECT deleted, version FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))
+                        f"SELECT deleted, version FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))  # nosec B608
                     record_status = check_deleted_cursor.fetchone()
 
                     if record_status and record_status['deleted']:
@@ -10824,7 +10827,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # This means the record (which was active with expected_version) changed state
                     # between the _get_current_db_version check and the UPDATE execution.
                     check_again_cursor = conn.execute(
-                        f"SELECT deleted, version FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))
+                        f"SELECT deleted, version FROM {table_name} WHERE {pk_col_name} = ?", (item_id,))  # nosec B608
                     changed_record = check_again_cursor.fetchone()
                     if not changed_record:
                         raise ConflictError(  # noqa: TRY003, TRY301
@@ -10906,14 +10909,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 return []
 
             fts_column = f"{fts_table_name}_tsv"
-            query = f"""
+            query = """
                 SELECT main.*, ts_rank(main.{fts_column}, to_tsquery('english', ?)) AS rank
                 FROM {main_table_name} main
                 WHERE main.deleted = FALSE
                   AND main.{fts_column} @@ to_tsquery('english', ?)
                 ORDER BY rank DESC, main.last_modified DESC
                 LIMIT ?
-            """
+            """.format_map(locals())  # nosec B608
             try:
                 cursor = self.execute_query(query, (tsquery, tsquery, limit))
                 return [dict(row) for row in cursor.fetchall()]
@@ -10922,14 +10925,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise
 
         # Use explicit table-name for MATCH and bm25() for SQLite FTS5 compatibility
-        query = f"""
+        query = """
             SELECT main.*
             FROM {fts_table_name}, {main_table_name} main
             WHERE {fts_table_name}.rowid = main.id
               AND {fts_table_name} MATCH ? AND main.deleted = 0
             ORDER BY bm25({fts_table_name})
             LIMIT ?
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self.execute_query(query, (search_term, limit))
             return [dict(row) for row in cursor.fetchall()]
@@ -11026,7 +11029,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         deleted_note_value = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
         deleted_keyword_value = "FALSE" if self.backend_type == BackendType.POSTGRESQL else "0"
 
-        query = f"""
+        query = """
             SELECT nk.keyword_id AS keyword_id, COUNT(DISTINCT nk.note_id) AS note_count
             FROM note_keywords nk
             JOIN {notes_table} n ON n.id = nk.note_id
@@ -11035,7 +11038,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               AND k.deleted = {deleted_keyword_value}
               {keyword_filter}
             GROUP BY nk.keyword_id
-        """
+        """.format_map(locals())  # nosec B608
 
         cursor = self.execute_query(query, tuple(params) if params else None)
         out: dict[int, int] = {}
@@ -11050,7 +11053,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def count_keywords(self) -> int:
         """Return count of active (non-deleted) keywords."""
         keyword_table = self._map_table_for_backend("keywords")
-        query = f"SELECT COUNT(*) AS cnt FROM {keyword_table} WHERE deleted = 0"
+        query = f"SELECT COUNT(*) AS cnt FROM {keyword_table} WHERE deleted = 0"  # nosec B608
         try:
             cursor = self.execute_query(query)
             row = cursor.fetchone()
@@ -11113,7 +11116,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
 
                 duplicate = conn.execute(
-                    f"SELECT id FROM {keyword_table} WHERE deleted = 0 AND keyword = ? AND id <> ? LIMIT 1",
+                    f"SELECT id FROM {keyword_table} WHERE deleted = 0 AND keyword = ? AND id <> ? LIMIT 1",  # nosec B608
                     (normalized_text, keyword_id),
                 ).fetchone()
                 if duplicate:
@@ -11125,7 +11128,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 cursor = conn.execute(
                     (
-                        f"UPDATE {keyword_table} "
+                        f"UPDATE {keyword_table} "  # nosec B608
                         f"SET keyword = ?, last_modified = ?, version = ?, client_id = ? "
                         f"WHERE id = ? AND version = ? AND deleted = 0"
                     ),
@@ -11146,7 +11149,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
 
                 refreshed = conn.execute(
-                    f"SELECT * FROM {keyword_table} WHERE id = ? AND deleted = 0",
+                    f"SELECT * FROM {keyword_table} WHERE id = ? AND deleted = 0",  # nosec B608
                     (keyword_id,),
                 ).fetchone()
                 if not refreshed:
@@ -11186,7 +11189,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Move link-table references from source keyword to target keyword."""
         if self.backend_type == BackendType.POSTGRESQL:
             insert_sql = (
-                f"INSERT INTO {link_table} ({entity_column}, keyword_id, created_at) "
+                f"INSERT INTO {link_table} ({entity_column}, keyword_id, created_at) "  # nosec B608
                 f"SELECT src.{entity_column}, ?, ? "
                 f"FROM {link_table} src "
                 f"WHERE src.keyword_id = ? "
@@ -11194,7 +11197,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         else:
             insert_sql = (
-                f"INSERT OR IGNORE INTO {link_table} ({entity_column}, keyword_id, created_at) "
+                f"INSERT OR IGNORE INTO {link_table} ({entity_column}, keyword_id, created_at) "  # nosec B608
                 f"SELECT src.{entity_column}, ?, ? "
                 f"FROM {link_table} src "
                 f"WHERE src.keyword_id = ?"
@@ -11209,7 +11212,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             inserted_count = 0
 
         conn.execute(
-            f"DELETE FROM {link_table} WHERE keyword_id = ?",
+            f"DELETE FROM {link_table} WHERE keyword_id = ?",  # nosec B608
             (source_keyword_id,),
         )
         return inserted_count
@@ -11304,7 +11307,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 soft_delete_cursor = conn.execute(
                     (
-                        f"UPDATE {keyword_table} "
+                        f"UPDATE {keyword_table} "  # nosec B608
                         f"SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
                         f"WHERE id = ? AND version = ? AND deleted = 0"
                     ),
@@ -11373,14 +11376,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if tsquery:
                     source_table = self._map_table_for_backend("keywords")
                     fts_column = "keywords_fts_tsv"
-                    query = f"""
+                    query = """
                         SELECT k.*, ts_rank(k.{fts_column}, to_tsquery('english', ?)) AS rank
                         FROM {source_table} k
                         WHERE k.deleted = FALSE
                           AND k.{fts_column} @@ to_tsquery('english', ?)
                         ORDER BY rank DESC, k.last_modified DESC
                         LIMIT ?
-                    """
+                    """.format_map(locals())  # nosec B608
                     try:
                         cursor = self.execute_query(query, (tsquery, tsquery, limit))
                         return [dict(row) for row in cursor.fetchall()]
@@ -11393,14 +11396,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             # Non-simple tokens (e.g., "C++") skip FTS and fall back to ILIKE.
             source_table = self._map_table_for_backend("keywords")
             escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            query = f"""
+            query = """
                 SELECT k.*
                 FROM {source_table} k
                 WHERE k.deleted = FALSE
                   AND k.keyword ILIKE ? ESCAPE '\\'
                 ORDER BY k.last_modified DESC
                 LIMIT ?
-            """
+            """.format_map(locals())  # nosec B608
             cursor = self.execute_query(query, (f"%{escaped}%", limit))
             return [dict(row) for row in cursor.fetchall()]
 
@@ -11419,14 +11422,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         keyword_table = self._map_table_for_backend("keywords")
         escaped = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        query = f"""
+        query = """
             SELECT k.*
             FROM {keyword_table} k
             WHERE k.deleted = 0
               AND k.keyword LIKE ? ESCAPE '\\'
             ORDER BY k.last_modified DESC
             LIMIT ?
-        """
+        """.format_map(locals())  # nosec B608
         cursor = self.execute_query(query, (f"%{escaped}%", limit))
         return [dict(row) for row in cursor.fetchall()]
 
@@ -11640,7 +11643,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
 
         query = (
-            f"SELECT * FROM notes{where_clause} "
+            f"SELECT * FROM notes{where_clause} "  # nosec B608
             "ORDER BY last_modified DESC "
             "LIMIT ? OFFSET ?"
         )
@@ -11666,7 +11669,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             where_clause = " WHERE deleted = ?"
             params.append(False if self.backend_type == BackendType.POSTGRESQL else 0)
 
-        query = f"SELECT COUNT(*) AS cnt FROM notes{where_clause}"
+        query = f"SELECT COUNT(*) AS cnt FROM notes{where_clause}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params) if params else None)
             row = cursor.fetchone()
@@ -11716,7 +11719,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         where_values = [note_id, expected_version]
         final_params_for_execute = tuple(all_set_values + where_values)
 
-        query = f"UPDATE notes SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"
+        query = f"UPDATE notes SET {', '.join(fields_to_update_sql)} WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
 
         try:
             with self.transaction() as conn:
@@ -12037,7 +12040,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if not tsquery:
                     logger.debug("Notes search term normalized to empty tsquery for input '{}'", search_term)
                     return []
-                query = f"""
+                query = """
                     SELECT DISTINCT n.*, ts_rank(n.notes_fts_tsv, to_tsquery('english', ?)) AS rank
                     FROM notes n
                     JOIN note_keywords nk ON n.id = nk.note_id
@@ -12048,10 +12051,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                       AND ({like_clause})
                     ORDER BY rank DESC, n.last_modified DESC
                     LIMIT ? OFFSET ?
-                """
+                """.format_map(locals())  # nosec B608
                 params = (tsquery, tsquery, *like_params, limit, offset)
             else:
-                query = f"""
+                query = """
                     SELECT DISTINCT n.*
                     FROM notes n
                     JOIN note_keywords nk ON n.id = nk.note_id
@@ -12061,7 +12064,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                       AND ({like_clause})
                     ORDER BY n.last_modified DESC
                     LIMIT ? OFFSET ?
-                """
+                """.format_map(locals())  # nosec B608
                 params = (*like_params, limit, offset)
             cursor = self.execute_query(query, params)
             return [dict(row) for row in cursor.fetchall()]
@@ -12069,7 +12072,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if search_term and str(search_term).strip():
             safe_literal = str(search_term).replace('"', '""')
             safe_search_term = f'"{safe_literal}"'
-            query = f"""
+            query = """
                     SELECT DISTINCT n.*
                     FROM notes_fts
                     JOIN notes AS n ON notes_fts.rowid = n.rowid
@@ -12081,10 +12084,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                       AND ({like_clause})
                     ORDER BY bm25(notes_fts), n.last_modified DESC
                     LIMIT ? OFFSET ?
-                    """
+                    """.format_map(locals())  # nosec B608
             params = (safe_search_term, *like_params, limit, offset)
         else:
-            query = f"""
+            query = """
                     SELECT DISTINCT n.*
                     FROM notes n
                     JOIN note_keywords nk ON n.id = nk.note_id
@@ -12094,7 +12097,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                       AND ({like_clause})
                     ORDER BY n.last_modified DESC
                     LIMIT ? OFFSET ?
-                    """
+                    """.format_map(locals())  # nosec B608
             params = (*like_params, limit, offset)
 
         cursor = self.execute_query(query, params)
@@ -12153,7 +12156,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if operation == "link":
                     if self.backend_type == BackendType.POSTGRESQL:
                         query = (
-                            f"INSERT INTO {link_table} ({col1_name}, {col2_name}, created_at) "
+                            f"INSERT INTO {link_table} ({col1_name}, {col2_name}, created_at) "  # nosec B608
                             f"VALUES (?, ?, ?) ON CONFLICT ({col1_name}, {col2_name}) DO NOTHING"
                         )
                     else:
@@ -12168,7 +12171,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         log_sync_entry = True
                         sync_payload_dict = {col1_name: col1_val, col2_name: col2_val, 'created_at': now_iso}
                 elif operation == "unlink":
-                    query = f"DELETE FROM {link_table} WHERE {col1_name} = ? AND {col2_name} = ?"
+                    query = f"DELETE FROM {link_table} WHERE {col1_name} = ? AND {col2_name} = ?"  # nosec B608
                     params = (col1_val, col2_val)
                     cursor = conn.execute(query, params)
                     rows_affected = cursor.rowcount
@@ -12194,7 +12197,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
 
                     sync_log_query = (
-                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "
+                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "  # nosec B608
                         f"VALUES (?, ?, ?, ?, ?, ?, ?)"
                     )
                     sync_log_params = (
@@ -12244,14 +12247,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_keywords_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
-        query = f"""
+        query = """
                 SELECT k.* \
                 FROM {keyword_table} k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id = ? \
                   AND k.deleted = 0 \
                 {order_clause}
-                """
+                """.format_map(locals())  # nosec B608
         cursor = self.execute_query(query, (conversation_id,))
         return [dict(row) for row in cursor.fetchall()]
 
@@ -12262,14 +12265,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         keyword_table = self._map_table_for_backend("keywords")
         placeholders = ",".join(["?"] * len(conversation_ids))
         order_expr = self._case_insensitive_order_expression("k.keyword")
-        query = f"""
+        query = """
                 SELECT ck.conversation_id as conversation_id, k.* \
                 FROM {keyword_table} k \
                          JOIN conversation_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.conversation_id IN ({placeholders}) \
                   AND k.deleted = 0 \
                 ORDER BY ck.conversation_id, {order_expr}
-                """
+                """.format_map(locals())  # nosec B608
         cursor = self.execute_query(query, tuple(conversation_ids))
         rows = cursor.fetchall()
         columns = [col[0] for col in cursor.description] if cursor.description else []
@@ -12307,20 +12310,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_keywords_for_collection(self, collection_id: int) -> list[dict[str, Any]]:
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
-        query = f"""
+        query = """
                 SELECT k.* \
                 FROM {keyword_table} k \
                          JOIN collection_keywords ck ON k.id = ck.keyword_id
                 WHERE ck.collection_id = ? \
                   AND k.deleted = 0 \
                 {order_clause}
-                """
+                """.format_map(locals())  # nosec B608
         cursor = self.execute_query(query, (collection_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def get_collections_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         order_clause = self._case_insensitive_order_clause("kc.name")
-        query = f"""
+        query = """
                 SELECT kc.* \
                 FROM keyword_collections kc \
                          JOIN collection_keywords ck ON kc.id = ck.collection_id
@@ -12328,7 +12331,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   AND kc.deleted = 0
                 {order_clause} LIMIT ? \
                 OFFSET ? \
-                """
+                """.format_map(locals())  # nosec B608
         cursor = self.execute_query(query, (keyword_id, limit, offset))
         return [dict(row) for row in cursor.fetchall()]
 
@@ -12342,14 +12345,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_keywords_for_note(self, note_id: str) -> list[dict[str, Any]]: # note_id is str
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("k.keyword")
-        query = f"""
+        query = """
                 SELECT k.* \
                 FROM {keyword_table} k \
                          JOIN note_keywords nk ON k.id = nk.keyword_id
                 WHERE nk.note_id = ? \
                   AND k.deleted = 0 \
                 {order_clause}
-                """
+                """.format_map(locals())  # nosec B608
         cursor = self.execute_query(query, (note_id,))
         return [dict(row) for row in cursor.fetchall()]
 
@@ -12365,14 +12368,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for start in range(0, len(note_ids), max_vars):
             batch = note_ids[start:start + max_vars]
             placeholders = ",".join(["?"] * len(batch))
-            query = f"""
+            query = """
                     SELECT nk.note_id AS note_id, k.* \
                     FROM {keyword_table} k \
                              JOIN note_keywords nk ON k.id = nk.keyword_id
                     WHERE nk.note_id IN ({placeholders}) \
                       AND k.deleted = 0 \
                     {order_clause}
-                    """
+                    """.format_map(locals())  # nosec B608
             cursor = self.execute_query(query, tuple(batch))
             rows = cursor.fetchall()
             for row in rows:
@@ -12465,7 +12468,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
         cond = "" if include_deleted else "WHERE deleted = 0"
-        query = f"SELECT id, name, description, created_at, last_modified, deleted, client_id, version FROM decks {cond} ORDER BY name LIMIT ? OFFSET ?"
+        query = f"SELECT id, name, description, created_at, last_modified, deleted, client_id, version FROM decks {cond} ORDER BY name LIMIT ? OFFSET ?"  # nosec B608
         try:
             cursor = self.execute_query(query, (limit, offset))
             return [dict(row) for row in cursor.fetchall()]
@@ -12727,7 +12730,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         order_sql = "ORDER BY f.due_at, f.created_at DESC" if order_by == 'due_at' else "ORDER BY f.created_at DESC"
 
         where_sql = " AND ".join(where_clauses)
-        query = f"""
+        query = """
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
@@ -12738,7 +12741,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             WHERE {where_sql} {fts_filter}
             {order_sql}
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         params.extend([limit, offset])
         try:
             cursor = self.execute_query(query, tuple(params))
@@ -12797,12 +12800,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         # DISTINCT avoids double-counting when tag join introduces duplicates
-        query = f"""
+        query = """
             SELECT COUNT(DISTINCT f.id) AS cnt
               FROM flashcards f
               {join_tag}
              WHERE {where_sql} {fts_filter}
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
@@ -12816,7 +12819,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return []
         placeholders = ",".join(["?"] * len(uuids))
         deleted_clause = "f.deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "f.deleted = 0"
-        query = f"""
+        query = """
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
@@ -12824,7 +12827,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
              WHERE f.uuid IN ({placeholders}) AND {deleted_clause}
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(uuids))
             return [dict(row) for row in cursor.fetchall()]
@@ -12974,7 +12977,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             # Daily review metrics
             daily_row = self.execute_query(
-                f"""
+                """
                 SELECT
                     COUNT(*) AS reviewed_today,
                     SUM(CASE WHEN rating < 3 THEN 1 ELSE 0 END) AS lapses_today,
@@ -12982,7 +12985,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 FROM flashcard_reviews fr
                 JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
                 WHERE fr.reviewed_at >= ? AND fr.reviewed_at < ?{deck_filter_clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 (today_start_iso, tomorrow_start_iso, *deck_filter_params),
             ).fetchone()
 
@@ -13001,14 +13004,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
             # UTC day streak: count consecutive days ending at today with >=1 review
             day_rows = self.execute_query(
-                f"""
+                """
                 SELECT DISTINCT substr(fr.reviewed_at, 1, 10) AS review_day
                 FROM flashcard_reviews fr
                 JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
                 WHERE 1 = 1{deck_filter_clause}
                 ORDER BY review_day DESC
                 LIMIT 400
-                """,
+                """.format_map(locals()),  # nosec B608
                 deck_filter_params,
             ).fetchall()
             reviewed_days = {
@@ -13026,7 +13029,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deck_scope_clause = " AND d.id = ?" if normalized_deck_id is not None else ""
             deck_scope_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
             deck_rows = self.execute_query(
-                f"""
+                """
                 SELECT
                     d.id AS deck_id,
                     d.name AS deck_name,
@@ -13042,7 +13045,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 WHERE d.deleted = 0{deck_scope_clause}
                 GROUP BY d.id, d.name
                 ORDER BY d.name ASC
-                """,
+                """.format_map(locals()),  # nosec B608
                 (now_iso, *deck_scope_params),
             ).fetchall()
 
@@ -13197,7 +13200,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if norm_tags is not None:
                     self._sync_flashcard_keyword_links(conn, card_id, norm_tags)
                 params_final = params + [card_id]
-                query = f"UPDATE flashcards SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
+                query = f"UPDATE flashcards SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"  # nosec B608
                 rc = conn.execute(query, tuple(params_final)).rowcount
                 return rc > 0
         except sqlite3.Error as e:
@@ -13266,14 +13269,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Return keywords linked to a flashcard."""
         keyword_table = self._map_table_for_backend("keywords")
         order_clause = self._case_insensitive_order_clause("kw.keyword")
-        query = f"""
+        query = """
             SELECT kw.*
               FROM flashcards f
               JOIN flashcard_keywords fk ON fk.card_id = f.id
               JOIN {keyword_table} kw ON kw.id = fk.keyword_id
              WHERE f.uuid = ? AND f.deleted = 0 AND kw.deleted = 0
              {order_clause}
-        """
+        """.format_map(locals())  # nosec B608
         try:
             cur = self.execute_query(query, (card_uuid,))
             return [dict(r) for r in cur.fetchall()]
@@ -13492,7 +13495,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def _recount_quiz_questions(self, conn: Any, quiz_id: int) -> int:
         deleted_clause = "deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0"
         row = conn.execute(
-            f"SELECT COUNT(*) AS count FROM quiz_questions WHERE quiz_id = ? AND {deleted_clause}",
+            f"SELECT COUNT(*) AS count FROM quiz_questions WHERE quiz_id = ? AND {deleted_clause}",  # nosec B608
             (quiz_id,),
         ).fetchone()
         total = int(row["count"]) if row else 0
@@ -13555,7 +13558,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "  # nosec B608
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
         )
@@ -13593,11 +13596,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "
+            "SELECT id, name, description, workspace_tag, media_id, total_questions, time_limit_seconds, passing_score, "  # nosec B608
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
         )
-        count_query = f"SELECT COUNT(*) AS count FROM quizzes WHERE {where_sql}"
+        count_query = f"SELECT COUNT(*) AS count FROM quizzes WHERE {where_sql}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params + [limit, offset]))
             items = [dict(row) for row in cursor.fetchall()]
@@ -13643,7 +13646,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if expected_version is not None and current_version != expected_version:
                     raise ConflictError("Version mismatch updating quiz", entity="quizzes", identifier=quiz_id)  # noqa: TRY003
                 params_final = params + [quiz_id]
-                query = f"UPDATE quizzes SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
+                query = f"UPDATE quizzes SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"  # nosec B608
                 rc = conn.execute(query, tuple(params_final)).rowcount
                 return rc > 0
         except sqlite3.Error as e:
@@ -13754,7 +13757,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get question by ID."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, hint, "
+            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, hint, "  # nosec B608
             "hint_penalty_points, source_citations_json, points, "
             "order_index, tags_json, deleted, client_id, version, created_at, last_modified "
             "FROM quiz_questions WHERE id = ? " + deleted_clause
@@ -13801,13 +13804,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             query_params.extend([int(limit), int(offset)])
 
         query = (
-            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, hint, "
+            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, hint, "  # nosec B608
             "hint_penalty_points, source_citations_json, points, "
             "order_index, tags_json, deleted, client_id, version, created_at, last_modified "
             f"FROM quiz_questions WHERE {where_sql} {fts_filter} "
             f"{order_clause} {limit_clause}"
         )
-        count_query = f"SELECT COUNT(*) AS count FROM quiz_questions WHERE {where_sql} {fts_filter}"
+        count_query = f"SELECT COUNT(*) AS count FROM quiz_questions WHERE {where_sql} {fts_filter}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(query_params))
             items: list[dict[str, Any]] = []
@@ -13910,7 +13913,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if expected_version is not None and current_version != expected_version:
                     raise ConflictError("Version mismatch updating question", entity="quiz_questions", identifier=question_id)  # noqa: TRY003
                 params_final = params + [question_id]
-                query = f"UPDATE quiz_questions SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
+                query = f"UPDATE quiz_questions SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"  # nosec B608
                 rc = conn.execute(query, tuple(params_final)).rowcount
                 return rc > 0
         except sqlite3.Error as e:
@@ -14127,10 +14130,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.append(quiz_id)
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, quiz_id, started_at, completed_at, score, total_possible, time_spent_seconds "
+            "SELECT id, quiz_id, started_at, completed_at, score, total_possible, time_spent_seconds "  # nosec B608
             f"FROM quiz_attempts WHERE {where_sql} ORDER BY started_at DESC LIMIT ? OFFSET ?"
         )
-        count_query = f"SELECT COUNT(*) AS count FROM quiz_attempts WHERE {where_sql}"
+        count_query = f"SELECT COUNT(*) AS count FROM quiz_attempts WHERE {where_sql}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params + [limit, offset]))
             items = [dict(row) for row in cursor.fetchall()]
@@ -14467,7 +14470,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             CharactersRAGDBError: For database errors.
         """
         deleted_clause = "" if include_deleted else "AND deleted = 0"
-        query = f"SELECT * FROM writing_sessions WHERE id = ? {deleted_clause}"
+        query = f"SELECT * FROM writing_sessions WHERE id = ? {deleted_clause}"  # nosec B608
         try:
             cursor = self.execute_query(query, (session_id,))
             row = cursor.fetchone()
@@ -15112,7 +15115,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise InputError("No valid fields provided for wordcloud update.")  # noqa: TRY003
         fields_sql.extend(["last_modified = ?", "client_id = ?"])
         params.extend([now, self.client_id, str(wordcloud_id)])
-        query = f"UPDATE writing_wordclouds SET {', '.join(fields_sql)} WHERE id = ?"
+        query = f"UPDATE writing_wordclouds SET {', '.join(fields_sql)} WHERE id = ?"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params), commit=True)
             if getattr(cursor, "rowcount", 0) == 0:
@@ -15169,7 +15172,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
 
         query = (
-            f"SELECT change_id, operation, timestamp, client_id, version, payload "
+            f"SELECT change_id, operation, timestamp, client_id, version, payload "  # nosec B608
             f"FROM sync_log "
             f"WHERE entity = ? AND {entity_col} = ? "
             f"ORDER BY change_id DESC LIMIT ?"

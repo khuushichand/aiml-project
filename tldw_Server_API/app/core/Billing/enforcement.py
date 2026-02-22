@@ -617,8 +617,13 @@ class BillingEnforcer:
                             else:
                                 # SQLite
                                 placeholders = ",".join("?" * len(chunk))
+                                user_ids_clause = f"({placeholders})"
+                                usage_sum_sql_template = (
+                                    "SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id IN {user_ids_clause}"
+                                )
+                                usage_sum_sql = usage_sum_sql_template.format_map(locals())  # nosec B608
                                 cur = await conn.execute(
-                                    f"SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id IN ({placeholders})",
+                                    usage_sum_sql,
                                     tuple(chunk),
                                 )
                                 row = await cur.fetchone()

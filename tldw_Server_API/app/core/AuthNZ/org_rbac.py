@@ -111,13 +111,15 @@ async def _fetch_org_memberships(
         clause = f" AND org_id IN ({placeholders})"
         params.extend(list(org_params))
 
-    pool = await get_db_pool()
-    rows = await pool.fetchall(
-        f"""
+    org_memberships_sql_template = """
         SELECT org_id, role
         FROM org_members
         WHERE user_id = ? AND status = 'active'{clause}
-        """,
+        """
+    org_memberships_sql = org_memberships_sql_template.format_map(locals())  # nosec B608
+    pool = await get_db_pool()
+    rows = await pool.fetchall(
+        org_memberships_sql,
         params,
     )
     results: list[dict] = []
@@ -149,14 +151,16 @@ async def _fetch_team_memberships(
         clause = f" AND tm.team_id IN ({placeholders})"
         params.extend(list(team_params))
 
-    pool = await get_db_pool()
-    rows = await pool.fetchall(
-        f"""
+    team_memberships_sql_template = """
         SELECT tm.team_id, tm.role, t.org_id
         FROM team_members tm
         JOIN teams t ON tm.team_id = t.id
         WHERE tm.user_id = ? AND tm.status = 'active'{clause}
-        """,
+        """
+    team_memberships_sql = team_memberships_sql_template.format_map(locals())  # nosec B608
+    pool = await get_db_pool()
+    rows = await pool.fetchall(
+        team_memberships_sql,
         params,
     )
     results: list[dict] = []
@@ -195,14 +199,16 @@ async def _fetch_role_permissions(
         return []
 
     placeholders, params = build_sqlite_in_clause(role_list)
-    pool = await get_db_pool()
-    rows = await pool.fetchall(
-        f"""
+    role_permissions_sql_template = """
         SELECT DISTINCT p.name
         FROM {table} rp
         JOIN permissions p ON p.id = rp.permission_id
         WHERE rp.{role_column} IN ({placeholders})
-        """,
+        """
+    role_permissions_sql = role_permissions_sql_template.format_map(locals())  # nosec B608
+    pool = await get_db_pool()
+    rows = await pool.fetchall(
+        role_permissions_sql,
         params,
     )
     perms: list[str] = []

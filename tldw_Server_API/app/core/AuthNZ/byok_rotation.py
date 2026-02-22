@@ -57,22 +57,24 @@ async def _fetch_rows(
     is_postgres: bool,
 ) -> list[Any]:
     if is_postgres:
-        query = f"""
+        fetch_rows_sql_template = """
             SELECT id, encrypted_blob
             FROM {table}
             WHERE id > $1
             ORDER BY id
             LIMIT $2
         """
+        query = fetch_rows_sql_template.format_map(locals())  # nosec B608
         return await conn.fetch(query, last_id, batch_size)
 
-    query = f"""
+    fetch_rows_sql_template = """
         SELECT id, encrypted_blob
         FROM {table}
         WHERE id > ?
         ORDER BY id
         LIMIT ?
     """
+    query = fetch_rows_sql_template.format_map(locals())  # nosec B608
     cursor = await conn.execute(query, last_id, batch_size)
     return list(await cursor.fetchall())
 
@@ -89,11 +91,13 @@ async def _apply_updates(
         return
 
     if is_postgres:
-        query = f"UPDATE {table} SET encrypted_blob = $1 WHERE id = $2"
+        update_blob_sql_template = "UPDATE {table} SET encrypted_blob = $1 WHERE id = $2"
+        query = update_blob_sql_template.format_map(locals())  # nosec B608
         await conn.executemany(query, updates_list)
         return
 
-    query = f"UPDATE {table} SET encrypted_blob = ? WHERE id = ?"
+    update_blob_sql_template = "UPDATE {table} SET encrypted_blob = ? WHERE id = ?"
+    query = update_blob_sql_template.format_map(locals())  # nosec B608
     for params in updates_list:
         await conn.execute(query, *params)
 

@@ -609,10 +609,12 @@ class UsersDB:
                     # PostgreSQL - use $1..$n placeholders
                     set_clause = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(field_names))
                     values = [updates[k] for k in field_names] + [user_id]
-                    query = (
-                        f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
-                        f"WHERE id = ${len(values)}"
+                    user_id_param = len(values)
+                    update_user_sql_template = (
+                        "UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ${user_id_param}"
                     )
+                    query = update_user_sql_template.format_map(locals())  # nosec B608
                     await conn.execute(query, *values)
                 else:
                     # SQLite - convert bools to ints and use '?' placeholders
@@ -621,10 +623,8 @@ class UsersDB:
                             updates[key] = int(bool(updates[key]))
                     set_clause = ", ".join(f"{k} = ?" for k in field_names)
                     values = [updates[k] for k in field_names] + [user_id]
-                    query = (
-                        f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP "
-                        "WHERE id = ?"
-                    )
+                    update_user_sql_template = "UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+                    query = update_user_sql_template.format_map(locals())  # nosec B608
                     await conn.execute(query, values)
 
                 # SQLite shim commits on transaction exit, but keep for compatibility

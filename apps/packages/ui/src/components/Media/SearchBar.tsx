@@ -44,6 +44,7 @@ export function SearchBar({
         <input
           ref={inputRef}
           type="text"
+          data-testid="media-search-input"
           placeholder={placeholder}
           aria-label={placeholder}
           value={value}
@@ -54,6 +55,7 @@ export function SearchBar({
         {showClearSearch && (
           <button
             onClick={handleClearSearch}
+            data-testid="media-search-clear"
             className={`absolute top-1/2 -translate-y-1/2 text-text-subtle hover:text-text ${
               showClearAll ? 'right-10' : 'right-3'
             }`}
@@ -69,6 +71,7 @@ export function SearchBar({
           <Tooltip title={t('mediaPage.clearAllFilters', 'Clear search and filters')}>
             <button
               onClick={handleClearAll}
+              data-testid="media-search-clear-all"
               className="absolute right-3 top-1/2 -translate-y-1/2 text-warn hover:text-warn"
               aria-label={t('mediaPage.clearAllFilters', 'Clear search and filters')}
               title={t('mediaPage.clearAllFilters', 'Clear search and filters')}

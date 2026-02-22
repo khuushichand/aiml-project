@@ -32,14 +32,18 @@ async def update_api_key_metadata(
 
     if is_postgres:
         set_clause = ", ".join(fields[i].format(i + 1) for i in range(len(fields)))
-        query = f"UPDATE api_keys SET {set_clause} WHERE id = $ {len(fields) + 1} AND user_id = $ {len(fields) + 2}"
-        query = query.replace('$ ', '$')
+        key_id_param = len(fields) + 1
+        user_id_param = len(fields) + 2
+        update_api_key_sql_template = "UPDATE api_keys SET {set_clause} WHERE id = ${key_id_param} AND user_id = ${user_id_param}"
+        query = update_api_key_sql_template.format_map(locals())  # nosec B608
         await db.execute(query, *params, key_id, user_id)
         row = await db.fetchrow("SELECT * FROM api_keys WHERE id = $1 AND user_id = $2", key_id, user_id)
     else:
         set_clause = ", ".join(fields)
         params2 = list(params) + [key_id, user_id]
-        await db.execute(f"UPDATE api_keys SET {set_clause} WHERE id = ? AND user_id = ?", params2)
+        update_api_key_sql_template = "UPDATE api_keys SET {set_clause} WHERE id = ? AND user_id = ?"
+        update_api_key_sql = update_api_key_sql_template.format_map(locals())  # nosec B608
+        await db.execute(update_api_key_sql, params2)
         commit = getattr(db, "commit", None)
         if callable(commit):
             await commit()

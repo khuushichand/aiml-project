@@ -1,4 +1,5 @@
 export { QuickChatHelperButton } from "./QuickChatHelperButton"
 export { QuickChatHelperModal } from "./QuickChatHelperModal"
+export { QuickChatGuidesPanel } from "./QuickChatGuidesPanel"
 export { QuickChatMessage } from "./QuickChatMessage"
 export { QuickChatInput } from "./QuickChatInput"

@@ -215,7 +215,7 @@ export function ResultsList({
   }
 
   return (
-    <div>
+    <div data-testid="media-results-list">
       {/* Results Header */}
       <div
         className={`flex items-center justify-between border-b border-border px-4 py-2.5 ${

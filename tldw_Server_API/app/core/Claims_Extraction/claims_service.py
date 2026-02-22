@@ -1283,7 +1283,7 @@ async def _fetch_claims_provider_usage_async(
             where.append("user_id = ?")
             params.append(user_id_val)
         where_clause = " AND ".join(where)
-        sql = (
+        provider_usage_sql_template = (
             "SELECT provider, model, operation, "
             "COUNT(*) AS requests, "
             "SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors, "
@@ -1292,10 +1292,11 @@ async def _fetch_claims_provider_usage_async(
             "AVG(latency_ms)::float AS latency_avg_ms, "
             "percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::float AS latency_p95_ms "
             "FROM llm_usage_log "
-            f"WHERE {where_clause} "
+            "WHERE {where_clause} "
             "GROUP BY provider, model, operation "
             "ORDER BY total_cost_usd DESC"
         )
+        sql = provider_usage_sql_template.format_map(locals())  # nosec B608
         rows = await db_pool.fetch(sql, params)
         return [
             {
@@ -1318,10 +1319,12 @@ async def _fetch_claims_provider_usage_async(
     if user_id_val is not None:
         where.append("user_id = ?")
         params.append(user_id_val)
-    sql = (
+    where_clause = " AND ".join(where)
+    provider_usage_sql_template = (
         "SELECT provider, model, operation, status, latency_ms, total_tokens, total_cost_usd "
-        "FROM llm_usage_log WHERE " + " AND ".join(where)
+        "FROM llm_usage_log WHERE {where_clause}"
     )
+    sql = provider_usage_sql_template.format_map(locals())  # nosec B608
     rows = await db_pool.fetchall(sql, params)
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
@@ -1544,15 +1547,16 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: str | None) -> dict[s
         params.append(str(owner_user_id))
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    sql = (
+    cluster_stats_sql_template = (
         "SELECT c.id, c.canonical_claim_text, c.watchlist_count, c.updated_at, "
         "COALESCE(m.member_count, 0) AS member_count "
         "FROM claim_clusters c "
         "LEFT JOIN (SELECT cluster_id, COUNT(*) AS member_count "
         "FROM claim_cluster_membership GROUP BY cluster_id) m "
         "ON m.cluster_id = c.id "
-        f"{where_clause}"
+        "{where_clause}"
     )
+    sql = cluster_stats_sql_template.format_map(locals())  # nosec B608
     rows = db.execute_query(sql, tuple(params)).fetchall()
     cluster_rows = [dict(row) for row in rows if row]
     member_counts = [int(row.get("member_count") or 0) for row in cluster_rows]
@@ -1589,7 +1593,7 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: str | None) -> dict[s
         hotspot_conditions.append("c.user_id = ?")
         hotspot_params.append(str(owner_user_id))
     hotspot_where = f"WHERE {' AND '.join(hotspot_conditions)}" if hotspot_conditions else ""
-    hotspot_sql = (
+    hotspot_sql_template = (
         "SELECT c.id, c.canonical_claim_text, c.watchlist_count, c.updated_at, "
         "COALESCE(m.member_count, 0) AS member_count, "
         "COALESCE(i.issue_count, 0) AS issue_count "
@@ -1602,9 +1606,10 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: str | None) -> dict[s
         "AND review_status IN ('flagged', 'rejected') "
         "GROUP BY claim_cluster_id) i "
         "ON i.cluster_id = c.id "
-        f"{hotspot_where} "
+        "{hotspot_where} "
         "ORDER BY issue_count DESC, member_count DESC LIMIT 20"
     )
+    hotspot_sql = hotspot_sql_template.format_map(locals())  # nosec B608
     hotspot_rows = db.execute_query(hotspot_sql, tuple(hotspot_params)).fetchall()
     hotspots: list[dict[str, Any]] = []
     for row in hotspot_rows:

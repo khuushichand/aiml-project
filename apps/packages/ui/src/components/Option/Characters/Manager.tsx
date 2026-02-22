@@ -6606,7 +6606,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   )
 
   return (
-    <div className="characters-page">
+    <div className="characters-page" data-testid="characters-page">
       <a
         href="#characters-main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:border focus:border-border focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-text focus:shadow">
@@ -6631,7 +6631,8 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
             <Button
               type="primary"
               ref={newButtonRef}
-              onClick={openCreateModal}>
+              onClick={openCreateModal}
+              data-testid="characters-new-button">
               {t("settings:manageCharacters.addBtn", {
                 defaultValue: "New character"
               })}
@@ -6680,6 +6681,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 allowClear
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
+                data-testid="characters-search-input"
                 placeholder={t(
                   "settings:manageCharacters.search.placeholder",
                   {
@@ -6698,6 +6700,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
             <Segmented
               value={characterListScope}
+              data-testid="characters-scope-segmented"
               onChange={(value) =>
                 setCharacterListScope(value as CharacterListScope)
               }
@@ -6761,6 +6764,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
             <Segmented
               value={viewMode}
+              data-testid="characters-view-mode-segmented"
               onChange={(v) => setViewMode(v as "table" | "gallery")}
               disabled={characterListScope === "deleted"}
               options={[
@@ -7386,7 +7390,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
               </div>
             </div>
           )}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" data-testid="characters-table-view">
             <Table
               rowKey={(r: any) => r.id || r.slug || r.name}
               dataSource={data}
@@ -8120,7 +8124,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
 
       {/* Gallery View */}
       {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'gallery' && (
-        <div className="space-y-4">
+        <div className="space-y-4" data-testid="characters-gallery-view">
           <div
             className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 ${
               galleryDensity === "compact" ? "gap-3" : "gap-4"

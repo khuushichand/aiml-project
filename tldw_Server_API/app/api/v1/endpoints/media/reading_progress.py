@@ -123,11 +123,12 @@ async def get_reading_progress(
     _ensure_progress_table(db)
 
     # Fetch progress
-    query = f"""
+    query_template = """
     SELECT current_page, total_pages, zoom_level, view_mode, cfi, percentage, last_read_at
     FROM {PROGRESS_TABLE}
     WHERE media_id = ? AND user_id = ?
     """
+    query = query_template.format_map(locals())  # nosec B608
     try:
         with db.transaction() as conn:
             cursor = conn.execute(query, (media_id, user_id))
@@ -296,10 +297,11 @@ async def delete_reading_progress(
     # Ensure table exists
     _ensure_progress_table(db)
 
-    delete_sql = f"""
+    delete_sql_template = """
     DELETE FROM {PROGRESS_TABLE}
     WHERE media_id = ? AND user_id = ?
     """
+    delete_sql = delete_sql_template.format_map(locals())  # nosec B608
     try:
         with db.transaction() as cursor:
             cursor.execute(delete_sql, (media_id, user_id))

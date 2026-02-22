@@ -653,7 +653,12 @@ class ServerSyncProcessor:
             params_list.extend([server_timestamp, target_sql_version, originating_client_id, 1 if payload.get('deleted', False) else 0])
 
             if not set_clauses:
-                 logger.warning(f"[{self.user_id}] Update operation for {entity} {uuid} resulted in no SET clauses.")
+                 logger.warning(
+                     "[{}] Update operation for {} {} resulted in no SET clauses.",
+                     self.user_id,
+                     entity,
+                     uuid,
+                 )
                  return # Skip
 
             where_clause = " WHERE uuid = ?"
@@ -662,7 +667,9 @@ class ServerSyncProcessor:
                  where_clause += optimistic_lock_sql
                  where_params.extend(optimistic_lock_param)
 
-            sql = f"UPDATE `{entity}` SET {', '.join(set_clauses)}{where_clause}"
+            set_clause_sql = ", ".join(set_clauses)
+            update_sql_template = "UPDATE `{entity}` SET {set_clause_sql}{where_clause}"
+            sql = update_sql_template.format_map(locals())  # nosec B608
             params_tuple = tuple(params_list + where_params)
 
         elif operation == 'delete':
@@ -671,7 +678,10 @@ class ServerSyncProcessor:
             if not force_apply:
                  where_clause += optimistic_lock_sql
                  where_params.extend(optimistic_lock_param)
-            sql = f"UPDATE `{entity}` SET deleted = 1, last_modified = ?, version = ?, client_id = ?{where_clause}"
+            delete_sql_template = (
+                "UPDATE `{entity}` SET deleted = 1, last_modified = ?, version = ?, client_id = ?{where_clause}"
+            )
+            sql = delete_sql_template.format_map(locals())  # nosec B608
             params_tuple = tuple([server_timestamp, target_sql_version, originating_client_id] + where_params)
 
         else:

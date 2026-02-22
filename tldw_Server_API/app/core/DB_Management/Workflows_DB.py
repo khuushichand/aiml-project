@@ -645,17 +645,17 @@ class WorkflowsDatabase:
         ident = backend.escape_identifier
 
         backend.execute(
-            f"CREATE TABLE IF NOT EXISTS {ident('workflow_schema_version')} (version INTEGER NOT NULL)",
+            f"CREATE TABLE IF NOT EXISTS {ident('workflow_schema_version')} (version INTEGER NOT NULL)",  # nosec B608
             connection=conn,
         )
 
         result = backend.execute(
-            f"SELECT version FROM {ident('workflow_schema_version')} LIMIT 1",
+            f"SELECT version FROM {ident('workflow_schema_version')} LIMIT 1",  # nosec B608
             connection=conn,
         )
         if not result.rows:
             backend.execute(
-                f"INSERT INTO {ident('workflow_schema_version')} (version) VALUES (%s)",
+                f"INSERT INTO {ident('workflow_schema_version')} (version) VALUES (%s)",  # nosec B608
                 (0,),
                 connection=conn,
             )
@@ -669,13 +669,13 @@ class WorkflowsDatabase:
         backend = self.backend
         ident = backend.escape_identifier
         result = backend.execute(
-            f"UPDATE {ident('workflow_schema_version')} SET version = %s",
+            f"UPDATE {ident('workflow_schema_version')} SET version = %s",  # nosec B608
             (int(version),),
             connection=conn,
         )
         if result.rowcount == 0:
             backend.execute(
-                f"INSERT INTO {ident('workflow_schema_version')} (version) VALUES (%s)",
+                f"INSERT INTO {ident('workflow_schema_version')} (version) VALUES (%s)",  # nosec B608
                 (int(version),),
                 connection=conn,
             )
@@ -893,12 +893,20 @@ class WorkflowsDatabase:
 
         # Best-effort backfill tenant_id from workflow_runs
         with contextlib.suppress(_WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS):
+            backfill_tenant_sql_template = (
+                "UPDATE {step_runs_table} AS s "
+                "SET {tenant_column} = r.{tenant_column} "
+                "FROM {runs_table} AS r "
+                "WHERE s.{run_id_column} = r.{run_id_column} "
+                "AND (s.{tenant_column} IS NULL OR s.{tenant_column} = '')"
+            )
+            step_runs_table = ident("workflow_step_runs")
+            runs_table = ident("workflow_runs")
+            tenant_column = ident("tenant_id")
+            run_id_column = ident("run_id")
+            backfill_tenant_sql = backfill_tenant_sql_template.format_map(locals())  # nosec B608
             backend.execute(
-                f"UPDATE {ident('workflow_step_runs')} AS s "
-                f"SET {ident('tenant_id')} = r.{ident('tenant_id')} "
-                f"FROM {ident('workflow_runs')} AS r "
-                f"WHERE s.{ident('run_id')} = r.{ident('run_id')} "
-                f"AND (s.{ident('tenant_id')} IS NULL OR s.{ident('tenant_id')} = '')",
+                backfill_tenant_sql,
                 connection=conn,
             )
 

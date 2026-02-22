@@ -86,7 +86,7 @@ def _headers(api_key: Optional[str], bearer_token: Optional[str]) -> Dict[str, s
 
 def _fetch_text(url: str, *, headers: Dict[str, str], timeout_sec: float) -> str:
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
         raw = resp.read()
     return raw.decode("utf-8", errors="replace")
 
@@ -94,7 +94,7 @@ def _fetch_text(url: str, *, headers: Dict[str, str], timeout_sec: float) -> str
 def _fetch_json(url: str, *, headers: Dict[str, str], timeout_sec: float) -> Tuple[Optional[int], Optional[dict]]:
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
             raw = resp.read()
             code = getattr(resp, "status", None)
         try:

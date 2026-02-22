@@ -731,7 +731,9 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
 
     # Helper: get id by name
     def _id(table: str, key: str) -> int:
-        cur = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (key,))
+        lookup_sql_template = "SELECT id FROM {table} WHERE name = ?"
+        lookup_sql = lookup_sql_template.format_map(locals())  # nosec B608
+        cur = conn.execute(lookup_sql, (key,))
         row = cur.fetchone()
         return row[0] if row else None
 

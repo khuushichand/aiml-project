@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react"
-import { Select } from "antd"
+import { Select, Segmented } from "antd"
 import { useQuery } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { useQuickChatStore } from "@/store/quick-chat"
 import { useQuickChat } from "@/hooks/useQuickChat"
@@ -11,12 +11,16 @@ import { QuickChatInput } from "@/components/Common/QuickChatHelper/QuickChatInp
 import { AlertCircle } from "lucide-react"
 import { useChatModelsSelect } from "@/hooks/useChatModelsSelect"
 import type { QuickChatMessage } from "@/store/quick-chat"
+import { QuickChatGuidesPanel } from "@/components/Common/QuickChatHelper/QuickChatGuidesPanel"
 
 const QuickChatPopout: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
+  const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const hasRestoredRef = useRef(false)
+  const { assistantMode, setAssistantMode } = useQuickChatStore()
 
   const {
     messages,
@@ -75,6 +79,7 @@ const QuickChatPopout: React.FC = () => {
         const parsedState = parsed as {
           messages: unknown[]
           modelOverride?: unknown
+          assistantMode?: unknown
         }
         const isValidMsg = (m: unknown): m is QuickChatMessage => {
           if (!m || typeof m !== "object") return false
@@ -105,9 +110,15 @@ const QuickChatPopout: React.FC = () => {
           typeof parsedState.modelOverride === "string"
             ? parsedState.modelOverride
             : null
+        const nextAssistantMode =
+          parsedState.assistantMode === "docs_rag" ||
+          parsedState.assistantMode === "browse_guides"
+            ? parsedState.assistantMode
+            : "chat"
         useQuickChatStore.getState().restoreFromState({
           messages: nextMessages,
-          modelOverride: nextModelOverride
+          modelOverride: nextModelOverride,
+          assistantMode: nextAssistantMode
         })
       } else {
         console.warn("Invalid quick chat state structure in sessionStorage")
@@ -165,6 +176,30 @@ const QuickChatPopout: React.FC = () => {
       setModelOverride,
       t
     })
+  const docsModeActive = assistantMode === "docs_rag"
+  const browseModeActive = assistantMode === "browse_guides"
+  const handleModeChange = (value: string | number) => {
+    if (value === "chat" || value === "docs_rag" || value === "browse_guides") {
+      setAssistantMode(value)
+    }
+  }
+  const handleSendFromInput = (message: string) => {
+    void sendMessage(message, {
+      mode: docsModeActive ? "docs_rag" : "chat",
+      currentRoute: location.pathname
+    })
+  }
+  const openWorkflowRoute = (route: string) => {
+    const normalized = route.startsWith("/") ? route : `/${route}`
+    navigate(normalized)
+  }
+  const handleAskGuide = (question: string) => {
+    setAssistantMode("docs_rag")
+    void sendMessage(question, {
+      mode: "docs_rag",
+      currentRoute: location.pathname
+    })
+  }
 
   return (
     <div className="flex flex-col h-screen bg-bg">
@@ -205,53 +240,102 @@ const QuickChatPopout: React.FC = () => {
             </span>
           </div>
         )}
+        <div className="mt-2">
+          <Segmented
+            block
+            size="small"
+            value={assistantMode}
+            onChange={handleModeChange}
+            options={[
+              {
+                value: "chat",
+                label: t("option:quickChatHelper.mode.chat", "Chat")
+              },
+              {
+                value: "docs_rag",
+                label: t("option:quickChatHelper.mode.docs", "Docs Q&A")
+              },
+              {
+                value: "browse_guides",
+                label: t("option:quickChatHelper.mode.guides", "Browse Guides")
+              }
+            ]}
+          />
+        </div>
       </div>
 
-      {/* Messages area */}
-      <div
-        className="flex-1 overflow-y-auto px-4 py-3"
-        role="log"
-        aria-live="polite"
-        aria-label={t("common:chatMessages", "Chat messages")}>
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-text-muted text-center px-4">
-            <p className="text-sm">{emptyState}</p>
-            {!hasModel && (
-              <div className="mt-3 flex items-center gap-2 text-warn text-xs">
-                <AlertCircle className="h-4 w-4" />
-                <span>
-                  {t(
-                    "option:quickChatHelper.noModelWarning",
-                    "Select a model in the main chat or choose one here."
-                  )}
-                </span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            {messages.map((message, index) => (
-              <QuickChatMessageView
-                key={message.id}
-                message={message}
-                isStreaming={isStreaming}
-                isLast={index === messages.length - 1}
-              />
-            ))}
-            <div ref={messagesEndRef} />
-          </>
-        )}
-      </div>
+      {browseModeActive ? (
+        <div className="flex-1 overflow-hidden px-4 py-3">
+          <QuickChatGuidesPanel
+            onAskGuide={handleAskGuide}
+            onOpenRoute={openWorkflowRoute}
+            askDisabled={false}
+            currentRoute={location.pathname}
+          />
+        </div>
+      ) : (
+        <div
+          className="flex-1 overflow-y-auto px-4 py-3"
+          role="log"
+          aria-live="polite"
+          aria-label={t("common:chatMessages", "Chat messages")}>
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-text-muted text-center px-4">
+              <p className="text-sm">
+                {docsModeActive
+                  ? t(
+                      "option:quickChatHelper.docsEmptyState",
+                      "Ask what you want to achieve and I will search indexed docs to suggest tools and steps."
+                    )
+                  : emptyState}
+              </p>
+              {!hasModel && !docsModeActive && (
+                <div className="mt-3 flex items-center gap-2 text-warn text-xs">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>
+                    {t(
+                      "option:quickChatHelper.noModelWarning",
+                      "Select a model in the main chat or choose one here."
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {messages.map((message, index) => (
+                <QuickChatMessageView
+                  key={message.id}
+                  message={message}
+                  isStreaming={isStreaming}
+                  isLast={index === messages.length - 1}
+                />
+              ))}
+              <div ref={messagesEndRef} />
+            </>
+          )}
+        </div>
+      )}
 
       {/* Input area */}
-      <div className="px-4 py-3 border-t border-border bg-surface">
-        <QuickChatInput
-          onSend={sendMessage}
-          onCancel={cancelStream}
-          isStreaming={isStreaming}
-          disabled={!hasModel}
-        />
-      </div>
+      {!browseModeActive && (
+        <div className="px-4 py-3 border-t border-border bg-surface">
+          <QuickChatInput
+            onSend={handleSendFromInput}
+            onCancel={cancelStream}
+            isStreaming={isStreaming}
+            disabled={docsModeActive ? false : !hasModel}
+            placeholder={
+              docsModeActive
+                ? t(
+                    "option:quickChatHelper.docsInputPlaceholder",
+                    "Ask about a workflow or feature and I will search docs..."
+                  )
+                : undefined
+            }
+          />
+        </div>
+      )}
     </div>
   )
 }

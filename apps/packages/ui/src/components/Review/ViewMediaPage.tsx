@@ -3615,6 +3615,7 @@ const MediaPageContent: React.FC = () => {
                 />
                 <button
                   onClick={handleSearch}
+                  data-testid="media-search-submit"
                   className="w-full rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-primaryStrong"
                 >
                   {t('review:mediaPage.search', { defaultValue: 'Search' })}

@@ -240,13 +240,16 @@ class OrgProfileOverridesRepo:
                 return [self._row_to_dict(dict(r)) for r in rows]
 
             placeholders = ", ".join(["?"] * len(org_ids))
-            rows = await self.db_pool.fetchall(
-                f"""
+            org_ids_clause = f"({placeholders})"
+            list_org_overrides_sql_template = """
                 SELECT org_id, key, value_json, updated_at, updated_by
                 FROM org_config_overrides
-                WHERE org_id IN ({placeholders})
+                WHERE org_id IN {org_ids_clause}
                 ORDER BY org_id, key
-                """,
+                """
+            list_org_overrides_sql = list_org_overrides_sql_template.format_map(locals())  # nosec B608
+            rows = await self.db_pool.fetchall(
+                list_org_overrides_sql,
                 tuple(org_ids),
             )
             return [
@@ -350,8 +353,13 @@ class OrgProfileOverridesRepo:
                 return row.get("updated_at") if row else None
 
             placeholders = ", ".join(["?"] * len(org_ids))
+            org_ids_clause = f"({placeholders})"
+            latest_org_update_sql_template = (
+                "SELECT MAX(updated_at) AS updated_at FROM org_config_overrides WHERE org_id IN {org_ids_clause}"
+            )
+            latest_org_update_sql = latest_org_update_sql_template.format_map(locals())  # nosec B608
             row = await self.db_pool.fetchone(
-                f"SELECT MAX(updated_at) AS updated_at FROM org_config_overrides WHERE org_id IN ({placeholders})",
+                latest_org_update_sql,
                 tuple(org_ids),
             )
             if row is None:
@@ -426,13 +434,16 @@ class TeamProfileOverridesRepo:
                 return [self._row_to_dict(dict(r)) for r in rows]
 
             placeholders = ", ".join(["?"] * len(team_ids))
-            rows = await self.db_pool.fetchall(
-                f"""
+            team_ids_clause = f"({placeholders})"
+            list_team_overrides_sql_template = """
                 SELECT team_id, key, value_json, updated_at, updated_by
                 FROM team_config_overrides
-                WHERE team_id IN ({placeholders})
+                WHERE team_id IN {team_ids_clause}
                 ORDER BY team_id, key
-                """,
+                """
+            list_team_overrides_sql = list_team_overrides_sql_template.format_map(locals())  # nosec B608
+            rows = await self.db_pool.fetchall(
+                list_team_overrides_sql,
                 tuple(team_ids),
             )
             return [
@@ -536,8 +547,13 @@ class TeamProfileOverridesRepo:
                 return row.get("updated_at") if row else None
 
             placeholders = ", ".join(["?"] * len(team_ids))
+            team_ids_clause = f"({placeholders})"
+            latest_team_update_sql_template = (
+                "SELECT MAX(updated_at) AS updated_at FROM team_config_overrides WHERE team_id IN {team_ids_clause}"
+            )
+            latest_team_update_sql = latest_team_update_sql_template.format_map(locals())  # nosec B608
             row = await self.db_pool.fetchone(
-                f"SELECT MAX(updated_at) AS updated_at FROM team_config_overrides WHERE team_id IN ({placeholders})",
+                latest_team_update_sql,
                 tuple(team_ids),
             )
             if row is None:

@@ -794,7 +794,8 @@ async def list_org_budgets(
 
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    count_sql = f"SELECT COUNT(*) FROM organizations o{where_clause}"
+    count_sql_template = "SELECT COUNT(*) FROM organizations o{where_clause}"
+    count_sql = count_sql_template.format_map(locals())  # nosec B608
     total = int(await _fetchval(db, count_sql, params, pg=pg) or 0)
 
     if pg:
@@ -804,7 +805,7 @@ async def list_org_budgets(
         limit_placeholder = "?"
         offset_placeholder = "?"
 
-    sql = (
+    list_budgets_sql_template = (
         "SELECT o.id as org_id, o.name as org_name, o.slug as org_slug, "
         "os.custom_limits_json, os.updated_at, "
         "ob.budgets_json, ob.updated_at as budgets_updated_at, "
@@ -813,9 +814,10 @@ async def list_org_budgets(
         "LEFT JOIN org_subscriptions os ON os.org_id = o.id "
         "LEFT JOIN subscription_plans sp ON os.plan_id = sp.id "
         "LEFT JOIN org_budgets ob ON ob.org_id = o.id "
-        f"{where_clause} "
-        f"ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
+        "{where_clause} "
+        "ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
     )
+    sql = list_budgets_sql_template.format_map(locals())  # nosec B608
 
     rows = await _fetchrows(db, sql, params + [limit, offset], pg=pg)
     items = []

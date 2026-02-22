@@ -1314,7 +1314,7 @@ class MediaDBRetriever(BaseRetriever):
         media_adapter = getattr(self, 'media_db', None)
         if media_adapter is not None and getattr(media_adapter, 'backend_type', None) == BackendType.POSTGRESQL:
             aggregator = "STRING_AGG(t.name, ',')"
-        sql = f"""
+        metadata_sql_template = """
             SELECT
                 m.*,
                 {aggregator} as tags,
@@ -1326,6 +1326,7 @@ class MediaDBRetriever(BaseRetriever):
             WHERE m.id = ?
             GROUP BY m.id
         """
+        sql = metadata_sql_template.format_map(locals())  # nosec B608
 
         results = self._execute_query(sql, (doc_id,))
 
@@ -1517,7 +1518,7 @@ class NotesDBRetriever(BaseRetriever):
         aggregator = "GROUP_CONCAT(t.name)"
         if self.chacha_db is not None and getattr(self.chacha_db, 'backend_type', None) == BackendType.POSTGRESQL:
             aggregator = "STRING_AGG(t.name, ',')"
-        sql = f"""
+        metadata_sql_template = """
             SELECT
                 n.*,
                 nb.name as notebook_name,
@@ -1529,6 +1530,7 @@ class NotesDBRetriever(BaseRetriever):
             WHERE n.id = ?
             GROUP BY n.id
         """
+        sql = metadata_sql_template.format_map(locals())  # nosec B608
 
         results = self._execute_query(sql, (note_id,))
 

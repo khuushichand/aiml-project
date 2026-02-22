@@ -74,7 +74,7 @@ def _http_json(
     req = Request(url=url, data=body, headers=headers, method=method)
 
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:  # nosec B310
             raw = resp.read()
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")

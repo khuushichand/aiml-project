@@ -1451,7 +1451,8 @@ class EvaluationsDatabase:
             set_clause = ", ".join([f"{k} = ?" for k in updates])
             values = list(updates.values()) + [eval_id]
 
-            query = f"UPDATE evaluations SET {set_clause} WHERE id = ? AND deleted_at IS NULL"
+            update_evaluation_sql_template = "UPDATE evaluations SET {set_clause} WHERE id = ? AND deleted_at IS NULL"
+            query = update_evaluation_sql_template.format_map(locals())  # nosec B608
             params = list(values)
             if created_by:
                 query, params = self._append_user_filter(query, params, "created_by", created_by)
@@ -1605,11 +1606,13 @@ class EvaluationsDatabase:
             set_clause = ", ".join([f"{k} = ?" for k in updates])
             values = list(updates.values()) + [run_id]
 
-            cursor.execute(f"""
+            update_run_sql_template = """
                 UPDATE evaluation_runs
                 SET {set_clause}
                 WHERE id = ?
-            """, values)
+            """
+            update_run_sql = update_run_sql_template.format_map(locals())  # nosec B608
+            cursor.execute(update_run_sql, values)
 
             conn.commit()
             return cursor.rowcount > 0

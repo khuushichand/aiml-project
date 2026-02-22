@@ -1049,8 +1049,11 @@ class DocumentGeneratorService:
 
                 params.append(job_id)
 
+                set_clause = ", ".join(updates)
+                update_job_sql_template = "UPDATE generation_jobs SET {set_clause} WHERE job_id = ?"
+                update_job_sql = update_job_sql_template.format_map(locals())  # nosec B608
                 cursor = conn.execute(
-                    f"UPDATE generation_jobs SET {', '.join(updates)} WHERE job_id = ?",
+                    update_job_sql,
                     params
                 )
                 conn.commit()

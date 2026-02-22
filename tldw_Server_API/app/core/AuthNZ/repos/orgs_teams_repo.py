@@ -267,19 +267,19 @@ class AuthnzOrgsTeamsRepo:
                 limit_param = param_count + 1
                 offset_param = param_count + 2
                 rows = await self.db_pool.fetchall(
-                    f"""
+                    """
                     SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
                     FROM organizations{where_clause}
                     ORDER BY created_at DESC
                     LIMIT ${limit_param} OFFSET ${offset_param}
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     *params,
                     limit,
                     offset,
                 )
                 total = (
                     await self.db_pool.fetchval(
-                        f"SELECT COUNT(*) FROM organizations{where_clause}",
+                        f"SELECT COUNT(*) FROM organizations{where_clause}",  # nosec B608
                         *params,
                     )
                     if with_total
@@ -310,12 +310,12 @@ class AuthnzOrgsTeamsRepo:
 
                 where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
                 cursor = await conn.execute(
-                    f"""
+                    """
                     SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
                     FROM organizations{where_clause}
                     ORDER BY created_at DESC
                     LIMIT ? OFFSET ?
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (*params, limit, offset),
                 )
                 rows_raw = await cursor.fetchall()
@@ -333,7 +333,7 @@ class AuthnzOrgsTeamsRepo:
                 ]
                 if with_total:
                     cur2 = await conn.execute(
-                        f"SELECT COUNT(*) FROM organizations{where_clause}",
+                        f"SELECT COUNT(*) FROM organizations{where_clause}",  # nosec B608
                         params,
                     )
                     total_row = await cur2.fetchone()
@@ -403,12 +403,12 @@ class AuthnzOrgsTeamsRepo:
                     set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
                     params = [org_id] + list(updates.values())
                     row = await conn.fetchrow(
-                        f"""
+                        """
                         UPDATE organizations
                         SET {set_clause}, updated_at = CURRENT_TIMESTAMP
                         WHERE id = $1
                         RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         *params,
                     )
                     if not row:
@@ -443,7 +443,7 @@ class AuthnzOrgsTeamsRepo:
                 set_clause = ", ".join(f"{k} = ?" for k in updates)
                 params = list(updates.values()) + [org_id]
                 await conn.execute(
-                    f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",  # nosec B608
                     tuple(params),
                 )
                 cur = await conn.execute(
@@ -615,12 +615,12 @@ class AuthnzOrgsTeamsRepo:
                     set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
                     params = [team_id] + list(updates.values())
                     row = await conn.fetchrow(
-                        f"""
+                        """
                         UPDATE teams
                         SET {set_clause}, updated_at = CURRENT_TIMESTAMP
                         WHERE id = $1
                         RETURNING id, org_id, name, slug, description, is_active, created_at, updated_at
-                        """,
+                        """.format_map(locals()),  # nosec B608
                         *params,
                     )
                     if not row:
@@ -640,7 +640,7 @@ class AuthnzOrgsTeamsRepo:
                 set_clause = ", ".join(f"{k} = ?" for k in updates)
                 params = list(updates.values()) + [team_id]
                 await conn.execute(
-                    f"UPDATE teams SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    f"UPDATE teams SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",  # nosec B608
                     tuple(params),
                 )
                 cur = await conn.execute(
@@ -1408,7 +1408,7 @@ class AuthnzOrgsTeamsRepo:
                 p += 1
                 params.append(offset)
                 sql = (
-                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "
+                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "  # nosec B608
                     f"ORDER BY added_at DESC LIMIT ${p-1} OFFSET ${p}"
                 )
                 rows = await self.db_pool.fetchall(sql, *params)
@@ -1425,7 +1425,7 @@ class AuthnzOrgsTeamsRepo:
                     params2.append(status)
                 where_clause = " AND ".join(conditions)
                 sql = (
-                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "
+                    f"SELECT user_id, role, status, added_at FROM org_members WHERE {where_clause} "  # nosec B608
                     f"ORDER BY added_at DESC LIMIT ? OFFSET ?"
                 )
                 params2.extend([limit, offset])

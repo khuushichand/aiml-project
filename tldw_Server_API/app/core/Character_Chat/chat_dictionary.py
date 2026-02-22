@@ -1385,12 +1385,15 @@ class ChatDictionaryService:
             dictionary_id_int = None
 
         placeholders = ", ".join("?" for _ in normalized)
-        rows = conn.execute(
-            f"""
+        included_ids_clause = f"({placeholders})"
+        included_ids_sql_template = """
             SELECT id
             FROM chat_dictionaries
-            WHERE deleted = ? AND id IN ({placeholders})
-            """,
+            WHERE deleted = ? AND id IN {included_ids_clause}
+            """
+        included_ids_sql = included_ids_sql_template.format_map(locals())  # nosec B608
+        rows = conn.execute(
+            included_ids_sql,
             tuple([False, *normalized]),
         ).fetchall()
         found_ids: set[int] = set()
@@ -1503,8 +1506,10 @@ class ChatDictionaryService:
             where_clause += " AND deleted = ?"
             params.append(False)
 
+        dictionary_lookup_sql_template = "SELECT * FROM chat_dictionaries WHERE {where_clause} LIMIT 1"
+        dictionary_lookup_sql = dictionary_lookup_sql_template.format_map(locals())  # nosec B608
         dictionary_row = conn.execute(
-            f"SELECT * FROM chat_dictionaries WHERE {where_clause} LIMIT 1",
+            dictionary_lookup_sql,
             tuple(params),
         ).fetchone()
         if not dictionary_row:
@@ -1866,8 +1871,10 @@ class ChatDictionaryService:
                 where_clause = "id = ? AND deleted = ?"
                 if expected_version is not None:
                     where_clause += " AND version = ?"
+                update_dictionary_sql_template = "UPDATE chat_dictionaries SET {set_clause} WHERE {where_clause}"
+                update_dictionary_sql = update_dictionary_sql_template.format_map(locals())  # nosec B608
                 cursor = conn.execute(
-                    f"UPDATE chat_dictionaries SET {set_clause} WHERE {where_clause}",
+                    update_dictionary_sql,
                     tuple(params),
                 )
 
@@ -2527,7 +2534,9 @@ class ChatDictionaryService:
                     dictionary_id_for_entry = dictionary_id_row[0] if dictionary_id_row else None
 
                 set_clause = _build_safe_update_clause(updates, _ENTRY_UPDATE_FIELDS)
-                cursor = conn.execute(f"UPDATE dictionary_entries SET {set_clause} WHERE id = ?", tuple(params))
+                update_entry_sql_template = "UPDATE dictionary_entries SET {set_clause} WHERE id = ?"
+                update_entry_sql = update_entry_sql_template.format_map(locals())  # nosec B608
+                cursor = conn.execute(update_entry_sql, tuple(params))
 
                 if cursor.rowcount > 0:
                     if record_snapshot and dictionary_id_for_entry is not None:
@@ -2719,15 +2728,18 @@ class ChatDictionaryService:
                 self._last_used_at[dictionary_id] = now
 
         placeholders = ", ".join("?" for _ in normalized_ids)
-        try:
-            with self.db.get_connection() as conn:
-                conn.execute(
-                    f"""
+        dictionary_ids_clause = f"({placeholders})"
+        usage_update_sql_template = """
                     UPDATE chat_dictionaries
                     SET usage_count = COALESCE(usage_count, 0) + 1,
                         last_used_at = CURRENT_TIMESTAMP
-                    WHERE deleted = ? AND id IN ({placeholders})
-                    """,
+                    WHERE deleted = ? AND id IN {dictionary_ids_clause}
+                    """
+        usage_update_sql = usage_update_sql_template.format_map(locals())  # nosec B608
+        try:
+            with self.db.get_connection() as conn:
+                conn.execute(
+                    usage_update_sql,
                     tuple([False, *normalized_ids]),
                 )
                 conn.commit()
@@ -2826,16 +2838,19 @@ class ChatDictionaryService:
             return None
 
         placeholders = ", ".join("?" for _ in normalized_ids)
-        try:
-            with self.db.get_connection() as conn:
-                rows = conn.execute(
-                    f"""
+        dictionary_ids_clause = f"({placeholders})"
+        budget_lookup_sql_template = """
                     SELECT default_token_budget
                     FROM chat_dictionaries
                     WHERE deleted = ? AND is_active = ?
-                      AND id IN ({placeholders})
+                      AND id IN {dictionary_ids_clause}
                       AND default_token_budget IS NOT NULL
-                    """,
+                    """
+        budget_lookup_sql = budget_lookup_sql_template.format_map(locals())  # nosec B608
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    budget_lookup_sql,
                     tuple([False, True, *normalized_ids]),
                 ).fetchall()
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:

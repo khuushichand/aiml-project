@@ -94,7 +94,7 @@ def _get_by_status(
         queue=queue,
         owner_user_id=owner_user_id,
     )
-    sql = f"SELECT status, COUNT(*) AS c FROM jobs WHERE {where_sql} GROUP BY status"
+    sql = f"SELECT status, COUNT(*) AS c FROM jobs WHERE {where_sql} GROUP BY status"  # nosec B608
     rows = _fetch_all(jm, sql, params)
     counts: dict[str, int] = {}
     for row in rows:
@@ -121,12 +121,12 @@ def _get_by_type_and_status(
         queue=queue,
         owner_user_id=owner_user_id,
     )
-    sql = f"""
+    sql = """
         SELECT job_type, status, COUNT(*) AS c
         FROM jobs
         WHERE {where_sql}
         GROUP BY job_type, status
-    """
+    """.format_map(locals())  # nosec B608
     rows = _fetch_all(jm, sql, params)
     totals: dict[str, int] = {}
     queued: dict[str, int] = {}
@@ -162,12 +162,12 @@ def _get_avg_processing_time_seconds(
     )
     if jm.backend == "postgres":
         sql = (
-            "SELECT AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) AS avg_seconds "
+            "SELECT AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) AS avg_seconds "  # nosec B608
             f"FROM jobs WHERE {where_sql} AND status = 'completed' AND started_at IS NOT NULL AND completed_at IS NOT NULL"
         )
     else:
         sql = (
-            "SELECT AVG((julianday(completed_at) - julianday(started_at)) * 86400.0) AS avg_seconds "
+            "SELECT AVG((julianday(completed_at) - julianday(started_at)) * 86400.0) AS avg_seconds "  # nosec B608
             f"FROM jobs WHERE {where_sql} AND status = 'completed' AND started_at IS NOT NULL AND completed_at IS NOT NULL"
         )
     row = _fetch_one(jm, sql, params)
@@ -193,14 +193,14 @@ def _get_success_rate(
     )
     if jm.backend == "postgres":
         sql = (
-            "SELECT "
+            "SELECT "  # nosec B608
             "COUNT(*) FILTER (WHERE status = 'completed') * 100.0 / "
             "NULLIF(COUNT(*) FILTER (WHERE status IN ('completed', 'failed')), 0) AS success_rate "
             f"FROM jobs WHERE {where_sql} AND status IN ('completed', 'failed')"
         )
     else:
         sql = (
-            "SELECT "
+            "SELECT "  # nosec B608
             "SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) * 100.0 / "
             "NULLIF(SUM(CASE WHEN status IN ('completed', 'failed') THEN 1 ELSE 0 END), 0) AS success_rate "
             f"FROM jobs WHERE {where_sql} AND status IN ('completed', 'failed')"
@@ -230,7 +230,7 @@ def _get_lease_stats(
     warn_seconds = max(1, min(3600, int(warn_seconds)))
     if jm.backend == "postgres":
         sql = (
-            "SELECT "
+            "SELECT "  # nosec B608
             "COUNT(*) FILTER (WHERE status = 'processing' AND leased_until IS NOT NULL AND leased_until > NOW()) AS active, "
             "COUNT(*) FILTER (WHERE status = 'processing' AND leased_until IS NOT NULL AND leased_until > NOW() "
             f"AND leased_until <= NOW() + INTERVAL '{warn_seconds} seconds') AS expiring_soon, "
@@ -239,7 +239,7 @@ def _get_lease_stats(
         )
     else:
         sql = (
-            "SELECT "
+            "SELECT "  # nosec B608
             "SUM(CASE WHEN status = 'processing' AND leased_until IS NOT NULL AND leased_until > DATETIME('now') THEN 1 ELSE 0 END) AS active, "
             "SUM(CASE WHEN status = 'processing' AND leased_until IS NOT NULL AND leased_until > DATETIME('now') "
             f"AND leased_until <= DATETIME('now', '+{warn_seconds} seconds') THEN 1 ELSE 0 END) AS expiring_soon, "

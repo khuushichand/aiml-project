@@ -6,15 +6,29 @@ import { ChatSettings } from "../ChatSettings"
 
 const {
   useChatSettingsMock,
+  useStorageMock,
   useSettingMock,
   setChatBackgroundImageMock,
+  setQuickChatStrictDocsOnlyMock,
+  setQuickChatDocsNamespaceMock,
+  setQuickChatDocsMediaIdsMock,
+  setQuickChatWorkflowGuidesMock,
   notificationErrorMock,
+  notificationSuccessMock,
+  notificationInfoMock,
   toBase64Mock
 } = vi.hoisted(() => ({
   useChatSettingsMock: vi.fn(),
+  useStorageMock: vi.fn(),
   useSettingMock: vi.fn(),
   setChatBackgroundImageMock: vi.fn(),
+  setQuickChatStrictDocsOnlyMock: vi.fn(),
+  setQuickChatDocsNamespaceMock: vi.fn(),
+  setQuickChatDocsMediaIdsMock: vi.fn(),
+  setQuickChatWorkflowGuidesMock: vi.fn(),
   notificationErrorMock: vi.fn(),
+  notificationSuccessMock: vi.fn(),
+  notificationInfoMock: vi.fn(),
   toBase64Mock: vi.fn()
 }))
 
@@ -39,13 +53,19 @@ vi.mock("@/hooks/useChatSettings", () => ({
   useChatSettings: useChatSettingsMock
 }))
 
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: useStorageMock
+}))
+
 vi.mock("@/hooks/useSetting", () => ({
   useSetting: useSettingMock
 }))
 
 vi.mock("@/hooks/useAntdNotification", () => ({
   useAntdNotification: () => ({
-    error: notificationErrorMock
+    error: notificationErrorMock,
+    success: notificationSuccessMock,
+    info: notificationInfoMock
   })
 }))
 
@@ -137,6 +157,35 @@ const buildChatSettingsState = () => ({
 describe("ChatSettings background image controls", () => {
   beforeEach(() => {
     useChatSettingsMock.mockReturnValue(buildChatSettingsState())
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => {
+      if (key === "quickChatStrictDocsOnly") {
+        return [true, setQuickChatStrictDocsOnlyMock, { isLoading: false }] as const
+      }
+      if (key === "quickChatDocsIndexNamespace") {
+        return ["project_docs", setQuickChatDocsNamespaceMock, { isLoading: false }] as const
+      }
+      if (key === "quickChatDocsProjectMediaIds") {
+        return [[], setQuickChatDocsMediaIdsMock, { isLoading: false }] as const
+      }
+      if (key === "quickChatWorkflowGuidesV1") {
+        return [
+          [
+            {
+              id: "guide-1",
+              title: "Guide 1",
+              question: "Where do I start?",
+              answer: "Start in workspace playground.",
+              route: "/workspace-playground",
+              routeLabel: "Workspace Playground",
+              tags: ["workflow"]
+            }
+          ],
+          setQuickChatWorkflowGuidesMock,
+          { isLoading: false }
+        ] as const
+      }
+      return [defaultValue, vi.fn(), { isLoading: false }] as const
+    })
     useSettingMock.mockReturnValue([
       undefined,
       setChatBackgroundImageMock,
@@ -144,7 +193,13 @@ describe("ChatSettings background image controls", () => {
     ])
     setChatBackgroundImageMock.mockReset()
     setChatBackgroundImageMock.mockResolvedValue(undefined)
+    setQuickChatStrictDocsOnlyMock.mockReset()
+    setQuickChatDocsNamespaceMock.mockReset()
+    setQuickChatDocsMediaIdsMock.mockReset()
+    setQuickChatWorkflowGuidesMock.mockReset()
     notificationErrorMock.mockReset()
+    notificationSuccessMock.mockReset()
+    notificationInfoMock.mockReset()
     toBase64Mock.mockReset()
     toBase64Mock.mockResolvedValue("data:image/png;base64,abc123")
   })
@@ -217,5 +272,70 @@ describe("ChatSettings background image controls", () => {
     expect(screen.getAllByText("SillyTavern-compatible").length).toBeGreaterThan(0)
     expect(screen.getByText("Rich text element styles")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Reset rich text styles" })).toBeInTheDocument()
+  })
+
+  it("updates quick chat docs scope settings", () => {
+    render(<ChatSettings />)
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Restrict Quick Chat Docs Q&A to project documentation"
+      })
+    )
+    expect(setQuickChatStrictDocsOnlyMock).toHaveBeenCalledWith(false)
+
+    fireEvent.change(
+      screen.getByLabelText("Quick Chat project docs namespace"),
+      { target: { value: "official_docs" } }
+    )
+    expect(setQuickChatDocsNamespaceMock).toHaveBeenCalledWith("official_docs")
+
+    fireEvent.change(
+      screen.getByLabelText("Quick Chat project docs media IDs"),
+      { target: { value: "101, 205, 309" } }
+    )
+    expect(setQuickChatDocsMediaIdsMock).toHaveBeenCalledWith("101, 205, 309")
+  })
+
+  it("saves quick chat workflow card edits", () => {
+    render(<ChatSettings />)
+
+    const workflowEditor = screen.getByLabelText(
+      "Quick Chat workflow cards JSON"
+    )
+    fireEvent.change(workflowEditor, {
+      target: {
+        value: JSON.stringify(
+          [
+            {
+              id: "custom-setup-guide",
+              title: "Custom setup guide",
+              question: "How do I configure setup?",
+              answer: "Open Health & Diagnostics first.",
+              route: "/settings/health",
+              routeLabel: "Health & Diagnostics",
+              tags: ["setup", "diagnostics"]
+            }
+          ],
+          null,
+          2
+        )
+      }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Save workflow cards" }))
+
+    expect(setQuickChatWorkflowGuidesMock).toHaveBeenCalledWith([
+      {
+        id: "custom-setup-guide",
+        title: "Custom setup guide",
+        question: "How do I configure setup?",
+        answer: "Open Health & Diagnostics first.",
+        route: "/settings/health",
+        routeLabel: "Health & Diagnostics",
+        tags: ["setup", "diagnostics"]
+      }
+    ])
+    expect(notificationSuccessMock).toHaveBeenCalled()
   })
 })

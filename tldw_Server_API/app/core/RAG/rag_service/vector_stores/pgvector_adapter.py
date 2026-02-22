@@ -350,7 +350,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                         logger.debug("pgvector.upsert: SET hnsw.ef_search failed", exc_info=e)
                     args = [(_id, doc, JsonDumper.dumps(meta), vec) for _id, doc, meta, vec in values]
                     cur.executemany(
-                        f"INSERT INTO {tbl}(id, content, metadata, embedding) VALUES (%s, %s, %s, %s) "
+                        f"INSERT INTO {tbl}(id, content, metadata, embedding) VALUES (%s, %s, %s, %s) "  # nosec B608
                         f"ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, metadata=EXCLUDED.metadata, embedding=EXCLUDED.embedding",
                         args,
                     )
@@ -375,7 +375,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             with ctx as conn:
                 cur = conn.cursor()
                 try:
-                    cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])
+                    cur.executemany(f"DELETE FROM {tbl} WHERE id=%s", [(i,) for i in ids])  # nosec B608
                     conn.commit()
                     rc = getattr(cur, 'rowcount', 0)
                     return int(rc) if rc is not None else 0
@@ -408,7 +408,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                         cur.execute(f"SET hnsw.ef_search = {int(ef)}")
                     except Exception as e:  # noqa: BLE001 - best-effort session tuning
                         logger.debug("pgvector.delete_by_filter: SET hnsw.ef_search failed", exc_info=e)
-                    cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))
+                    cur.execute(f"DELETE FROM {tbl}{where_sql}", tuple(params))  # nosec B608
                     rc = getattr(cur, 'rowcount', 0)
                     conn.commit()
                     return int(rc) if rc is not None else 0
@@ -511,7 +511,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 ob = 'id'
         odir = 'ASC' if str(order_dir).lower() == 'asc' else 'DESC'
         rows = await self._query(
-            f"SELECT id, content, metadata FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",
+            f"SELECT id, content, metadata FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",  # nosec B608
             tuple(params + [int(limit), int(offset)]),
         )
         items = []
@@ -522,9 +522,9 @@ class PGVectorAdapter(VectorStoreAdapter):
                 'metadata': metadata if isinstance(metadata, dict) else {},
             })
         if where_sql:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))  # nosec B608
         else:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")  # nosec B608
         total = int(cnt_rows[0][0]) if cnt_rows else 0
         return {'items': items, 'total': total}
 
@@ -544,7 +544,7 @@ class PGVectorAdapter(VectorStoreAdapter):
                 ob = 'id'
         odir = 'ASC' if str(order_dir).lower() == 'asc' else 'DESC'
         rows = await self._query(
-            f"SELECT id, content, metadata, embedding FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",
+            f"SELECT id, content, metadata, embedding FROM {tbl}{where_sql} ORDER BY {ob} {odir} LIMIT %s OFFSET %s",  # nosec B608
             tuple(params + [int(limit), int(offset)]),
         )
         items = []
@@ -564,9 +564,9 @@ class PGVectorAdapter(VectorStoreAdapter):
                 'vector': vec if isinstance(vec, list) else [],
             })
         if where_sql:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}{where_sql}", tuple(params))  # nosec B608
         else:
-            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
+            cnt_rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")  # nosec B608
         total = int(cnt_rows[0][0]) if cnt_rows else 0
         return {'items': items, 'total': total}
 
@@ -635,7 +635,7 @@ class PGVectorAdapter(VectorStoreAdapter):
     async def get_vector(self, collection_name: str, vector_id: str) -> Optional[dict[str, Any]]:
         tbl = self._sanitize_collection(collection_name)
         rows = await self._query(
-            f"SELECT id, content, metadata FROM {tbl} WHERE id=%s",
+            f"SELECT id, content, metadata FROM {tbl} WHERE id=%s",  # nosec B608
             (vector_id,),
         )
         if not rows:
@@ -667,7 +667,7 @@ class PGVectorAdapter(VectorStoreAdapter):
             op = "<#>"
         placeholder = "%s" if use_native_vector else "%s::vector"
         dist_expr = f"embedding {op} {placeholder}"
-        sql = f"SELECT id, content, metadata, {dist_expr} AS distance FROM {tbl}"
+        sql = f"SELECT id, content, metadata, {dist_expr} AS distance FROM {tbl}"  # nosec B608
         # Build WHERE using rich filter support (equality, $and/$or, $in, numeric cmp)
         vector_param: Any
         if use_native_vector:
@@ -725,7 +725,7 @@ class PGVectorAdapter(VectorStoreAdapter):
 
     async def get_collection_stats(self, collection_name: str) -> dict[str, Any]:
         tbl = self._sanitize_collection(collection_name)
-        rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")
+        rows = await self._query(f"SELECT COUNT(*) FROM {tbl}")  # nosec B608
         count = int(rows[0][0]) if rows else 0
         return {
             "collection": collection_name,

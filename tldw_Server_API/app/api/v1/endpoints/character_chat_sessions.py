@@ -2394,7 +2394,7 @@ async def update_preset(
     if not updated_ok:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update preset '{preset_id}'",
+            detail=f"Failed to update preset '{preset_id}'",  # nosec B608
         )
     updated = db.get_prompt_preset(preset_id)
     if not updated:

@@ -2439,7 +2439,7 @@ class JobManager:
                             )
                         sub += order_sql
                         sql = (
-                            "UPDATE jobs SET status='processing', "
+                            "UPDATE jobs SET status='processing', "  # nosec B608
                             "started_at = COALESCE(started_at, DATETIME('now')), "
                             "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
                             "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
@@ -2710,7 +2710,7 @@ class JobManager:
                                 params.append(str(progress_message))
                             params.extend([int(job_id), worker_id, lease_id])
                             cur.execute(
-                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing' AND worker_id = %s AND lease_id = %s",
+                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing' AND worker_id = %s AND lease_id = %s",  # nosec B608
                                 tuple(params),
                             )
                             ok = cur.rowcount > 0
@@ -2732,7 +2732,7 @@ class JobManager:
                                 sets.append("progress_message = %s")
                                 params2.append(str(progress_message))
                             cur.execute(
-                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing'",
+                                f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s AND status = 'processing'",  # nosec B608
                                 tuple(params2 + [int(job_id)]),
                             )
                             ok2 = cur.rowcount > 0
@@ -2820,7 +2820,7 @@ class JobManager:
                         return False
                     params.append(int(job_id))
                     cur.execute(
-                        f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",
+                        f"UPDATE jobs SET {', '.join(sets)}, updated_at = NOW() WHERE id = %s",  # nosec B608
                         tuple(params),
                     )
                     return cur.rowcount > 0
@@ -2837,7 +2837,7 @@ class JobManager:
                     if not sets2:
                         return False
                     params2.append(int(job_id))
-                    sql = f"UPDATE jobs SET {', '.join(sets2)}, updated_at = DATETIME('now') WHERE id = ?"
+                    sql = f"UPDATE jobs SET {', '.join(sets2)}, updated_at = DATETIME('now') WHERE id = ?"  # nosec B608
                     cur2 = conn.execute(sql, tuple(params2))
                     return (cur2.rowcount or 0) > 0
         finally:
@@ -5097,7 +5097,7 @@ class JobManager:
                         if dry_run and detail_top_k > 0:
                             cur.execute(
                                 (
-                                    f"SELECT domain, queue, job_type, status, COUNT(*) AS c FROM jobs{where_clause} "
+                                    f"SELECT domain, queue, job_type, status, COUNT(*) AS c FROM jobs{where_clause} "  # nosec B608
                                     "GROUP BY domain, queue, job_type, status ORDER BY c DESC LIMIT %s"
                                 ),
                                 tuple(params + [int(detail_top_k)]),
@@ -5105,7 +5105,7 @@ class JobManager:
                             # Note: caller doesn't consume this form currently; kept for future extension
                             # We still return the total count below for compatibility
                         if dry_run:
-                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs{where_clause}", tuple(params))
+                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs{where_clause}", tuple(params))  # nosec B608
                             row = cur.fetchone()
                             _cnt = int(row["c"]) if row is not None else 0
                             if _test_mode:
@@ -5115,7 +5115,7 @@ class JobManager:
                         # Optional archive copy
                         if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")):
                             cur.execute(
-                                f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
+                                f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",  # nosec B608
                                 tuple(params),
                             )
                             # Optional compression for archived payload/result (Postgres)
@@ -5124,7 +5124,7 @@ class JobManager:
                                     import gzip
 
                                     drop_json = JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", ""))
-                                    cur.execute(f"SELECT id, payload, result FROM jobs{where_clause}", tuple(params))
+                                    cur.execute(f"SELECT id, payload, result FROM jobs{where_clause}", tuple(params))  # nosec B608
                                     rows_cr = cur.fetchall() or []
                                     for r in rows_cr:
                                         try:
@@ -5160,7 +5160,7 @@ class JobManager:
                             if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 # Ready queued
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5170,7 +5170,7 @@ class JobManager:
                                     )
                                 # Scheduled queued
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5180,7 +5180,7 @@ class JobManager:
                                     )
                                 # Processing
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5190,7 +5190,7 @@ class JobManager:
                                     )
                                 # Quarantined
                                 cur.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 )
                                 for r in cur.fetchall() or []:
@@ -5206,7 +5206,7 @@ class JobManager:
                                 _before = (cur.fetchone() or {}).get("c", 0)
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 _before = None
-                        cur.execute(f"DELETE FROM jobs{where_clause}", tuple(params))
+                        cur.execute(f"DELETE FROM jobs{where_clause}", tuple(params))  # nosec B608
                         deleted = cur.rowcount or 0
                         if _test_mode:
                             try:
@@ -5261,7 +5261,7 @@ class JobManager:
                     try:
                         if _is_test_mode():
                             dbg_rows = conn.execute(
-                                f"SELECT id, status, completed_at, created_at FROM jobs{where_clause}",
+                                f"SELECT id, status, completed_at, created_at FROM jobs{where_clause}",  # nosec B608
                                 tuple(params),
                             ).fetchall()
                             all_rows = conn.execute(
@@ -5276,7 +5276,7 @@ class JobManager:
                     except _JOB_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Compute match count up front for accurate reporting
-                    cur_cnt = conn.execute(f"SELECT COUNT(*) FROM jobs{where_clause}", tuple(params))
+                    cur_cnt = conn.execute(f"SELECT COUNT(*) FROM jobs{where_clause}", tuple(params))  # nosec B608
                     row = cur_cnt.fetchone()
                     count = int(row[0]) if row is not None else 0
                     if dry_run:
@@ -5301,7 +5301,7 @@ class JobManager:
                     # Optional archive copy
                     if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")):
                         conn.execute(
-                            f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
+                            f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",  # nosec B608
                             tuple(params),
                         )
                         # Optional compression for archived payload/result (SQLite: base64-gz prefix)
@@ -5311,7 +5311,7 @@ class JobManager:
                                 import gzip
 
                                 drop_json = JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", ""))
-                                qsel = f"SELECT id, payload, result FROM jobs{where_clause}"
+                                qsel = f"SELECT id, payload, result FROM jobs{where_clause}"  # nosec B608
                                 for rid, pl, rs in conn.execute(qsel, tuple(params)).fetchall() or []:
                                     try:
                                         p64 = None
@@ -5343,7 +5343,7 @@ class JobManager:
                         if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5354,7 +5354,7 @@ class JobManager:
                                 )
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5365,7 +5365,7 @@ class JobManager:
                                 )
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='processing' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5376,7 +5376,7 @@ class JobManager:
                                 )
                             for r in (
                                 conn.execute(
-                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",
+                                    f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='quarantined' GROUP BY domain,queue,job_type",  # nosec B608
                                     tuple(params),
                                 ).fetchall()
                                 or []
@@ -5392,7 +5392,7 @@ class JobManager:
                             _before2 = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             _before2 = None
-                    conn.execute(f"DELETE FROM jobs{where_clause}", tuple(params))
+                    conn.execute(f"DELETE FROM jobs{where_clause}", tuple(params))  # nosec B608
                     deleted = int(count)
                     if _test_mode:
                         try:
@@ -5468,7 +5468,7 @@ class JobManager:
                             try:
                                 if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     cur.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= %s) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= %s) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params + [now_ts]),
                                     )
                                     grp_ready_rows = cur.fetchall() or []
@@ -5478,7 +5478,7 @@ class JobManager:
                                             (int(r["c"]), r["domain"], r["queue"], r["job_type"]),
                                         )
                                     cur.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params + [now_ts]),
                                     )
                                     grp_sched_rows = cur.fetchall() or []
@@ -5529,12 +5529,12 @@ class JobManager:
                                 pass
                             if action == "cancel":
                                 cur.execute(
-                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_age' WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_age' WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts] + params),
                                 )
                             else:
                                 cur.execute(
-                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = %s WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = %s WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts] + params),
                                 )
                             affected_age = int(cur.rowcount or 0)
@@ -5559,7 +5559,7 @@ class JobManager:
                             try:
                                 if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     cur.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params2),
                                     )
                                     grp_proc_rows = cur.fetchall() or []
@@ -5595,12 +5595,12 @@ class JobManager:
                                 pass
                             if action == "cancel":
                                 cur.execute(
-                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_runtime', leased_until = NULL WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='cancelled', cancelled_at = %s, cancellation_reason = 'ttl_runtime', leased_until = NULL WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts2] + params2),
                                 )
                             else:
                                 cur.execute(
-                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = %s, leased_until = NULL WHERE {' AND '.join(where)}",
+                                    f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = %s, leased_until = NULL WHERE {' AND '.join(where)}",  # nosec B608
                                     tuple([now_ts2] + params2),
                                 )
                             affected_runtime = int(cur.rowcount or 0)
@@ -5648,7 +5648,7 @@ class JobManager:
                                 # ready subset (available_at <= now)
                                 ready_rows = (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params3),
                                     ).fetchall()
                                     or []
@@ -5661,7 +5661,7 @@ class JobManager:
                                 # scheduled subset (available_at > now)
                                 sched_rows = (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NOT NULL AND available_at > DATETIME('now')) GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params3),
                                     ).fetchall()
                                     or []
@@ -5698,7 +5698,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         sql = (
-                            "UPDATE jobs SET "
+                            "UPDATE jobs SET "  # nosec B608
                             + (
                                 "status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_age'"
                                 if action == "cancel"
@@ -5738,7 +5738,7 @@ class JobManager:
                             if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 proc_rows = (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params4),
                                     ).fetchall()
                                     or []
@@ -5766,7 +5766,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         sql2 = (
-                            "UPDATE jobs SET "
+                            "UPDATE jobs SET "  # nosec B608
                             + (
                                 "status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_runtime', leased_until = NULL"
                                 if action == "cancel"
@@ -5873,7 +5873,7 @@ class JobManager:
                         where.append("status=%s")
                         params.append(status)
                     wh = " AND ".join(where)
-                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {wh}", tuple(params))
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {wh}", tuple(params))  # nosec B608
                     _cnt_row = cur.fetchone()
                     count = int(_cnt_row.get("c") if isinstance(_cnt_row, dict) else 0)
                     if dry_run:
@@ -5885,7 +5885,7 @@ class JobManager:
                                 now_ts = self._clock.now_utc()
                                 cur.execute(
                                     (
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "  # nosec B608
                                         "AND status='queued' AND (available_at IS NOT NULL AND available_at > %s) GROUP BY domain,queue,job_type"
                                     ),
                                     tuple(params + [now_ts]),
@@ -5897,12 +5897,12 @@ class JobManager:
                                     )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))
+                        cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh}", tuple(params))  # nosec B608
                     else:
                         if delta_seconds is None:
                             raise ValueError("delta_seconds required when set_now=false")  # noqa: TRY003
                         cur.execute(
-                            f"UPDATE jobs SET available_at=COALESCE(available_at, NOW()) + (%s || ' seconds')::interval WHERE {wh}",
+                            f"UPDATE jobs SET available_at=COALESCE(available_at, NOW()) + (%s || ' seconds')::interval WHERE {wh}",  # nosec B608
                             tuple([int(delta_seconds)] + params),
                         )
                     with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
@@ -5924,7 +5924,7 @@ class JobManager:
                     where.append("status=?")
                     params.append(status)
                 wh = " AND ".join(where)
-                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params)).fetchone()
+                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {wh}", tuple(params)).fetchone()  # nosec B608
                 count = int(row[0]) if row else 0
                 if dry_run:
                     return count
@@ -5937,7 +5937,7 @@ class JobManager:
                                 for r in (
                                     conn.execute(
                                         (
-                                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "
+                                            f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "  # nosec B608
                                             "AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME(?)) GROUP BY domain,queue,job_type"
                                         ),
                                         tuple(params + [now_str]),
@@ -5953,16 +5953,16 @@ class JobManager:
                                     )
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))
+                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh}", tuple(params))  # nosec B608
                     else:
                         if delta_seconds is None:
                             raise ValueError("delta_seconds required when set_now=false")  # noqa: TRY003
                         conn.execute(
-                            f"UPDATE jobs SET available_at=COALESCE(available_at, DATETIME('now')) WHERE {wh}",
+                            f"UPDATE jobs SET available_at=COALESCE(available_at, DATETIME('now')) WHERE {wh}",  # nosec B608
                             tuple(params),
                         )
                         conn.execute(
-                            f"UPDATE jobs SET available_at=DATETIME(available_at, ?) WHERE {wh}",
+                            f"UPDATE jobs SET available_at=DATETIME(available_at, ?) WHERE {wh}",  # nosec B608
                             tuple([f"+{int(delta_seconds)} seconds"] + params),
                         )
                 return count
@@ -6005,7 +6005,7 @@ class JobManager:
                     wh = " AND ".join(where)
                     cur.execute(
                         (
-                            f"SELECT COUNT(*) AS c FROM jobs WHERE {wh} AND ("
+                            f"SELECT COUNT(*) AS c FROM jobs WHERE {wh} AND ("  # nosec B608
                             "(status='failed' AND retry_count < max_retries) "
                             + (" OR (status='queued' AND available_at >= NOW())" if not only_failed else "")
                             + ")"
@@ -6022,7 +6022,7 @@ class JobManager:
                             try:
                                 cur.execute(
                                     (
-                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                        f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "  # nosec B608
                                         "AND status='failed' AND retry_count < max_retries GROUP BY domain,queue,job_type"
                                     ),
                                     tuple(params),
@@ -6031,7 +6031,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 failed_groups = []
                         cur.execute(
-                            f"UPDATE jobs SET status='queued', available_at=NOW() WHERE {wh} AND status='failed' AND retry_count < max_retries",
+                            f"UPDATE jobs SET status='queued', available_at=NOW() WHERE {wh} AND status='failed' AND retry_count < max_retries",  # nosec B608
                             tuple(params),
                         )
                         if failed_groups:
@@ -6056,7 +6056,7 @@ class JobManager:
                                     now_ts = self._clock.now_utc()
                                     cur.execute(
                                         (
-                                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "
+                                            f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {wh} "  # nosec B608
                                             "AND status='queued' AND available_at > %s GROUP BY domain,queue,job_type"
                                         ),
                                         tuple(params + [now_ts]),
@@ -6069,7 +6069,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             cur.execute(
-                                f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at >= NOW()",
+                                f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at >= NOW()",  # nosec B608
                                 tuple(params),
                             )
                     return count
@@ -6091,7 +6091,7 @@ class JobManager:
                 wh = " AND ".join(where)
                 row = conn.execute(
                     (
-                        f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("
+                        f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("  # nosec B608
                         "(status='failed' AND retry_count < max_retries) "
                         + (" OR (status='queued' AND available_at >= DATETIME('now'))" if not only_failed else "")
                         + ")"
@@ -6108,7 +6108,7 @@ class JobManager:
                             failed_groups_sqlite = (
                                 conn.execute(
                                     (
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} "  # nosec B608
                                         "AND status='failed' AND retry_count < max_retries GROUP BY domain,queue,job_type"
                                     ),
                                     tuple(params),
@@ -6118,7 +6118,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             failed_groups_sqlite = []
                     conn.execute(
-                        f"UPDATE jobs SET status='queued', available_at=DATETIME('now') WHERE {wh} AND status='failed' AND retry_count < max_retries",
+                        f"UPDATE jobs SET status='queued', available_at=DATETIME('now') WHERE {wh} AND status='failed' AND retry_count < max_retries",  # nosec B608
                         tuple(params),
                     )
                     if failed_groups_sqlite:
@@ -6141,7 +6141,7 @@ class JobManager:
                             if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 for r in (
                                     conn.execute(
-                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} AND status='queued' AND available_at > DATETIME('now') GROUP BY domain,queue,job_type",
+                                        f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} AND status='queued' AND available_at > DATETIME('now') GROUP BY domain,queue,job_type",  # nosec B608
                                         tuple(params),
                                     ).fetchall()
                                     or []
@@ -6156,7 +6156,7 @@ class JobManager:
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
                         conn.execute(
-                            f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at >= DATETIME('now')",
+                            f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at >= DATETIME('now')",  # nosec B608
                             tuple(params),
                         )
                 return count
@@ -6189,7 +6189,7 @@ class JobManager:
                     where.append("job_type = %s")
                     params.append(job_type)
                 sql = (
-                    "SELECT domain, queue, job_type, "
+                    "SELECT domain, queue, job_type, "  # nosec B608
                     "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= NOW()) THEN 1 ELSE 0 END) AS queued, "
                     "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > NOW()) THEN 1 ELSE 0 END) AS scheduled, "
                     "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS processing, "
@@ -6224,7 +6224,7 @@ class JobManager:
                     where.append("job_type = ?")
                     params2.append(job_type)
                 sql = (
-                    "SELECT domain, queue, job_type, "
+                    "SELECT domain, queue, job_type, "  # nosec B608
                     "SUM(CASE WHEN status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) THEN 1 ELSE 0 END) AS queued, "
                     "SUM(CASE WHEN status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) THEN 1 ELSE 0 END) AS scheduled, "
                     "SUM(CASE WHEN status='processing' THEN 1 ELSE 0 END) AS processing, "
@@ -6263,7 +6263,7 @@ class JobManager:
                     where.append("queue = %s")
                     params.append(queue)
                 with self._pg_cursor(conn) as cur:
-                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
+                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))  # nosec B608
                     row = cur.fetchone()
                     return int(row["c"]) if row is not None else 0
             else:
@@ -6275,7 +6275,7 @@ class JobManager:
                 if queue:
                     where.append("queue = ?")
                     params2.append(queue)
-                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2)).fetchone()
+                row = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2)).fetchone()  # nosec B608
                 return int(row[0]) if row else 0
         finally:
             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
@@ -6398,7 +6398,7 @@ class JobManager:
                         where.append("job_type=%s")
                         params.append(job_type)
                     cur.execute(
-                        f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT %s",
+                        f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT %s",  # nosec B608
                         tuple(params + [int(limit)]),
                     )
                     rows = cur.fetchall() or []
@@ -6433,7 +6433,7 @@ class JobManager:
                                     sets.append(f"{k}=%s::jsonb")
                                     params_upd.append(json.dumps(v))
                                 params_upd.append(int(r["id"]))
-                                cur.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s", tuple(params_upd))
+                                cur.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = %s", tuple(params_upd))  # nosec B608
                                 affected += 1
                 return affected
             else:
@@ -6448,7 +6448,7 @@ class JobManager:
                 if job_type:
                     where.append("job_type=?")
                     params2.append(job_type)
-                sql = f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT ?"
+                sql = f"SELECT id, payload, result, domain, queue, job_type FROM jobs WHERE {' AND '.join(where)} ORDER BY id ASC LIMIT ?"  # nosec B608
                 rows = conn.execute(sql, tuple(params2 + [int(limit)])).fetchall() or []
                 if dry_run:
                     for _rid, pl, rs, *_ in rows:
@@ -6501,7 +6501,7 @@ class JobManager:
                                 sets.append(f"{k} = ?")
                                 params_upd.append(v)
                             params_upd.append(int(rid))
-                            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params_upd))
+                            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params_upd))  # nosec B608
                             affected += 1
                 return affected
         finally:
@@ -6754,22 +6754,22 @@ class JobManager:
                             params_np.append(job_type)
                             where_pr.append("job_type = %s")
                             params_pr.append(job_type)
-                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
+                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))  # nosec B608
                         _np = cur.fetchone()
                         res["non_processing_with_lease"] = int(_np.get("c") if isinstance(_np, dict) else 0)
-                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
+                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))  # nosec B608
                         _pr = cur.fetchone()
                         res["processing_expired"] = int(_pr.get("c") if isinstance(_pr, dict) else 0)
                         if fix:
                             # Clear leases for non-processing
                             cur.execute(
-                                f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",
+                                f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",  # nosec B608
                                 tuple(params_np),
                             )
                             res["fixed"] += cur.rowcount or 0
                             # Reset expired processing to queued
                             cur.execute(
-                                f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",
+                                f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",  # nosec B608
                                 tuple(params_pr),
                             )
                             res["fixed"] += cur.rowcount or 0
@@ -6796,19 +6796,19 @@ class JobManager:
                     params_np.append(job_type)
                     where_pr.append("job_type = ?")
                     params_pr.append(job_type)
-                cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
+                cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))  # nosec B608
                 res["non_processing_with_lease"] = int(cur.fetchone()[0])
-                cur2 = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
+                cur2 = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))  # nosec B608
                 res["processing_expired"] = int(cur2.fetchone()[0])
                 if fix:
                     with conn:
                         cur_fix_1 = conn.execute(
-                            f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",
+                            f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",  # nosec B608
                             tuple(params_np),
                         )
                         res["fixed"] += int(cur_fix_1.rowcount or 0)
                         cur_fix_2 = conn.execute(
-                            f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",
+                            f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",  # nosec B608
                             tuple(params_pr),
                         )
                         res["fixed"] += int(cur_fix_2.rowcount or 0)

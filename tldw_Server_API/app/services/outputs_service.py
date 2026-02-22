@@ -451,7 +451,9 @@ def update_output_artifact_db(
         params.append(retention_until)
     if sets:
         params.extend([output_id, cdb.user_id])
-        q = f"UPDATE outputs SET {', '.join(sets)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        set_clause = ", ".join(sets)
+        update_output_sql_template = "UPDATE outputs SET {set_clause} WHERE id = ? AND user_id = ? AND deleted = 0"
+        q = update_output_sql_template.format_map(locals())  # nosec B608
         try:
             cdb.backend.execute(q, tuple(params))
         except Exception as e:

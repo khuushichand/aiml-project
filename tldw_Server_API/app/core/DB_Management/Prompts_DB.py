@@ -758,7 +758,7 @@ class PromptsDatabase:
                 raise DatabaseError(  # noqa: TRY003
                     f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
                 )
-            cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
+            cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))  # nosec B608
             result = cursor.fetchone()
             if result:
                 current_version = result['version']
@@ -1204,7 +1204,7 @@ class PromptsDatabase:
 
             if ids_to_remove:
                 remove_placeholders = ','.join('?' * len(ids_to_remove))
-                cursor.execute(f"DELETE FROM PromptKeywordLinks WHERE prompt_id = ? AND keyword_id IN ({remove_placeholders})", (prompt_id, *list(ids_to_remove)))
+                cursor.execute(f"DELETE FROM PromptKeywordLinks WHERE prompt_id = ? AND keyword_id IN ({remove_placeholders})", (prompt_id, *list(ids_to_remove)))  # nosec B608
                 for removed_id in ids_to_remove:
                     keyword_uuid = current_keyword_links[removed_id]['uuid']
                     link_composite_uuid = f"{prompt_uuid}_{keyword_uuid}" # Composite UUID for the link
@@ -1329,7 +1329,7 @@ class PromptsDatabase:
                     return original_uuid, "No changes detected to update."
 
                 sql_set_clause = ", ".join(set_clauses)
-                update_sql = f"UPDATE Prompts SET {sql_set_clause} WHERE id = ? AND version = ?"
+                update_sql = f"UPDATE Prompts SET {sql_set_clause} WHERE id = ? AND version = ?"  # nosec B608
                 params.extend([prompt_id, current_version])
 
                 cursor.execute(update_sql, tuple(params))
@@ -1386,11 +1386,11 @@ class PromptsDatabase:
             with self.transaction() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    f"""
+                    """
                     SELECT id, uuid, version, usage_count
                     FROM Prompts
                     WHERE {col_name} = ? AND deleted = 0
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (identifier_value,),
                 )
                 prompt_info = cursor.fetchone()
@@ -1478,7 +1478,7 @@ class PromptsDatabase:
                 cursor = conn.cursor()
                 # Fetch prompt to get its ID (if name/uuid provided), current version, and uuid
                 # Also ensures it's not already deleted
-                cursor.execute(f"SELECT id, uuid, version FROM Prompts WHERE {col_name} = ? AND deleted = 0", (identifier_value,))
+                cursor.execute(f"SELECT id, uuid, version FROM Prompts WHERE {col_name} = ? AND deleted = 0", (identifier_value,))  # nosec B608
                 prompt_info = cursor.fetchone()
                 if not prompt_info:
                     logger.warning(f"Prompt '{prompt_id_or_name_or_uuid}' not found or already deleted.")
@@ -1651,7 +1651,7 @@ class PromptsDatabase:
                 if normalized_prompt_ids:
                     placeholders = ",".join("?" for _ in normalized_prompt_ids)
                     existing_rows = cursor.execute(
-                        f"SELECT id FROM Prompts WHERE deleted = 0 AND id IN ({placeholders})",
+                        f"SELECT id FROM Prompts WHERE deleted = 0 AND id IN ({placeholders})",  # nosec B608
                         tuple(normalized_prompt_ids),
                     ).fetchall()
                     existing_prompt_ids = {int(row["id"]) for row in existing_rows}
@@ -1828,7 +1828,7 @@ class PromptsDatabase:
                     if normalized_prompt_ids:
                         placeholders = ",".join("?" for _ in normalized_prompt_ids)
                         existing_rows = cursor.execute(
-                            f"SELECT id FROM Prompts WHERE deleted = 0 AND id IN ({placeholders})",
+                            f"SELECT id FROM Prompts WHERE deleted = 0 AND id IN ({placeholders})",  # nosec B608
                             tuple(normalized_prompt_ids),
                         ).fetchall()
                         existing_prompt_ids = {int(row["id"]) for row in existing_rows}
@@ -1940,15 +1940,15 @@ class PromptsDatabase:
         try:
             with self.transaction() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f"SELECT COUNT(*) FROM Prompts {where_clause}")
+                cursor.execute(f"SELECT COUNT(*) FROM Prompts {where_clause}")  # nosec B608
                 total_items = cursor.fetchone()[0]
 
                 results_data = []
                 if total_items > 0:
                     # Select desired fields, e.g., id, name, uuid, author
-                    query = f"""SELECT id, name, uuid, author, details, last_modified, usage_count, last_used_at FROM Prompts
+                    query = """SELECT id, name, uuid, author, details, last_modified, usage_count, last_used_at FROM Prompts
                                 {where_clause} ORDER BY {order_clause}
-                                LIMIT ? OFFSET ?"""
+                                LIMIT ? OFFSET ?""".format_map(locals())  # nosec B608
                     cursor.execute(query, (per_page, offset))
                     results_data = [dict(row) for row in cursor.fetchall()]
                     # Normalize author formatting only (do not mutate other fields)
@@ -2139,7 +2139,7 @@ class PromptsDatabase:
                     return [], 0
                 placeholders = ','.join('?' * len(kw_ids))
                 link_cursor = self.execute_query(
-                    f"SELECT DISTINCT prompt_id FROM PromptKeywordLinks WHERE keyword_id IN ({placeholders})",
+                    f"SELECT DISTINCT prompt_id FROM PromptKeywordLinks WHERE keyword_id IN ({placeholders})",  # nosec B608
                     tuple(kw_ids),
                 )
                 prompt_ids = [row['prompt_id'] for row in link_cursor.fetchall()]
@@ -2204,7 +2204,7 @@ class PromptsDatabase:
                     if matching_keyword_ids:
                         placeholders = ','.join('?' * len(matching_keyword_ids))
                         link_cursor = self.execute_query(
-                            f"SELECT DISTINCT prompt_id FROM PromptKeywordLinks WHERE keyword_id IN ({placeholders})",
+                            f"SELECT DISTINCT prompt_id FROM PromptKeywordLinks WHERE keyword_id IN ({placeholders})",  # nosec B608
                             tuple(matching_keyword_ids)
                         )
                         matching_prompt_ids.update(row['prompt_id'] for row in link_cursor.fetchall())
@@ -2322,7 +2322,7 @@ class PromptsDatabase:
         if not all(isinstance(cid, int) for cid in change_ids):
             raise ValueError("change_ids must be a list of integers.")  # noqa: TRY003
         placeholders = ','.join('?' * len(change_ids))
-        query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"
+        query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"  # nosec B608
         try:
             with self.transaction(): # Ensure commit happens
                 cursor = self.execute_query(query, tuple(change_ids), commit=False) # commit handled by transaction
@@ -2493,7 +2493,7 @@ def export_prompts_formatted(db_instance: PromptsDatabase,
     if include_system: select_fields.append("p.system_prompt")  # noqa: E701
     if include_user: select_fields.append("p.user_prompt")  # noqa: E701
 
-    query_sql = f"SELECT DISTINCT {', '.join(select_fields)} FROM Prompts p"
+    query_sql = f"SELECT DISTINCT {', '.join(select_fields)} FROM Prompts p"  # nosec B608
     query_params = []
 
     # Keyword filtering

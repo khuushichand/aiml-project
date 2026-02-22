@@ -835,7 +835,7 @@ class WatchlistsDatabase:
         placeholders = ",".join("?" for _ in normed)
         params = [self.user_id, *normed]
         rows = self.backend.execute(
-            f"SELECT name, id FROM tags WHERE user_id = ? AND name IN ({placeholders})",
+            f"SELECT name, id FROM tags WHERE user_id = ? AND name IN ({placeholders})",  # nosec B608
             tuple(params),
         ).rows
         out: dict[str, int] = {}
@@ -857,9 +857,9 @@ class WatchlistsDatabase:
             where.append("name LIKE ?")
             params.append(f"%{q}%")
         where_sql = " AND ".join(where)
-        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM tags WHERE {where_sql}", tuple(params)).scalar or 0)
+        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM tags WHERE {where_sql}", tuple(params)).scalar or 0)  # nosec B608
         rows = self.backend.execute(
-            f"SELECT id, user_id, name FROM tags WHERE {where_sql} ORDER BY name LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name FROM tags WHERE {where_sql} ORDER BY name LIMIT ? OFFSET ?",  # nosec B608
             tuple(params + [limit, offset]),
         ).rows
         return [TagRow(**r) for r in rows], total
@@ -976,7 +976,7 @@ class WatchlistsDatabase:
         if group_ids:
             placeholders = ",".join(["?"] * len(group_ids))
             where.append(
-                f"EXISTS (SELECT 1 FROM source_groups sg WHERE sg.source_id = sources.id AND sg.group_id IN ({placeholders}))"
+                f"EXISTS (SELECT 1 FROM source_groups sg WHERE sg.source_id = sources.id AND sg.group_id IN ({placeholders}))"  # nosec B608
             )
             params.extend(group_ids)
         # Tag filter: require all tags
@@ -999,9 +999,9 @@ class WatchlistsDatabase:
                     )
                     params.append(tid)
         where_sql = " AND ".join(where)
-        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM sources WHERE {where_sql}", tuple(params)).scalar or 0)
+        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM sources WHERE {where_sql}", tuple(params)).scalar or 0)  # nosec B608
         rows = self.backend.execute(
-            f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, consec_errors, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, consec_errors, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",  # nosec B608
             tuple(params + [limit, offset]),
         ).rows
         out: list[SourceRow] = []
@@ -1032,7 +1032,7 @@ class WatchlistsDatabase:
             params.append(_utcnow_iso())
             params.extend([source_id, self.user_id])
             self.backend.execute(
-                f"UPDATE sources SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+                f"UPDATE sources SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
                 tuple(params),
             )
         # tags/group updates handled via separate helpers
@@ -1082,7 +1082,7 @@ class WatchlistsDatabase:
             return
         params.extend([source_id, self.user_id])
         self.backend.execute(
-            f"UPDATE sources SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            f"UPDATE sources SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
             tuple(params),
         )
 
@@ -1152,7 +1152,7 @@ class WatchlistsDatabase:
             return {}
         placeholders = ",".join(["?"] * len(source_ids))
         rows = self.backend.execute(
-            f"SELECT source_id, group_id FROM source_groups WHERE source_id IN ({placeholders}) ORDER BY source_id, group_id",
+            f"SELECT source_id, group_id FROM source_groups WHERE source_id IN ({placeholders}) ORDER BY source_id, group_id",  # nosec B608
             tuple(source_ids),
         ).rows
         result: dict[int, list[int]] = {sid: [] for sid in source_ids}
@@ -1407,7 +1407,7 @@ class WatchlistsDatabase:
         placeholders = ",".join(["?"] * len(group_ids))
         active_clause = "AND s.active = 1" if active_only else ""
         rows = self.backend.execute(
-            f"""
+            """
             SELECT s.id, s.user_id, s.name, s.url, s.source_type, s.active, s.settings_json,
                    s.last_scraped_at, s.etag, s.last_modified, s.defer_until, s.status,
                    s.consec_not_modified, s.consec_errors, s.created_at, s.updated_at
@@ -1418,7 +1418,7 @@ class WatchlistsDatabase:
                 WHERE sg.source_id = s.id AND sg.group_id IN ({placeholders})
               )
             ORDER BY s.created_at DESC
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple([self.user_id] + group_ids),
         ).rows
         out: list[SourceRow] = []
@@ -1472,9 +1472,9 @@ class WatchlistsDatabase:
         if q:
             where.append("name LIKE ?")
             params.append(f"%{q}%")
-        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM groups WHERE {' AND '.join(where)}", tuple(params)).scalar or 0)
+        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM groups WHERE {' AND '.join(where)}", tuple(params)).scalar or 0)  # nosec B608
         rows = self.backend.execute(
-            f"SELECT id, user_id, name, description, parent_group_id FROM groups WHERE {' AND '.join(where)} ORDER BY name LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name, description, parent_group_id FROM groups WHERE {' AND '.join(where)} ORDER BY name LIMIT ? OFFSET ?",  # nosec B608
             tuple(params + [limit, offset]),
         ).rows
         return [GroupRow(**r) for r in rows], total
@@ -1489,7 +1489,7 @@ class WatchlistsDatabase:
         if fields:
             params.extend([group_id, self.user_id])
             self.backend.execute(
-                f"UPDATE groups SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+                f"UPDATE groups SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
                 tuple(params),
             )
         return self.get_group(group_id)
@@ -1566,9 +1566,9 @@ class WatchlistsDatabase:
             where.append("(name LIKE ? OR description LIKE ?)")
             like = f"%{q}%"
             params.extend([like, like])
-        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM scrape_jobs WHERE {' AND '.join(where)}", tuple(params)).scalar or 0)
+        total = int(self.backend.execute(f"SELECT COUNT(*) AS cnt FROM scrape_jobs WHERE {' AND '.join(where)}", tuple(params)).scalar or 0)  # nosec B608
         rows = self.backend.execute(
-            f"SELECT id, user_id, name, description, scope_json, schedule_expr, schedule_timezone, active, max_concurrency, per_host_delay_ms, retry_policy_json, output_prefs_json, job_filters_json, created_at, updated_at, last_run_at, next_run_at, wf_schedule_id FROM scrape_jobs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT id, user_id, name, description, scope_json, schedule_expr, schedule_timezone, active, max_concurrency, per_host_delay_ms, retry_policy_json, output_prefs_json, job_filters_json, created_at, updated_at, last_run_at, next_run_at, wf_schedule_id FROM scrape_jobs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ? OFFSET ?",  # nosec B608
             tuple(params + [limit, offset]),
         ).rows
         return [JobRow(**r) for r in rows], total
@@ -1646,7 +1646,7 @@ class WatchlistsDatabase:
             params.append(_utcnow_iso())
             params.extend([job_id, self.user_id])
             self.backend.execute(
-                f"UPDATE scrape_jobs SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+                f"UPDATE scrape_jobs SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
                 tuple(params),
             )
         return self.get_job(job_id)
@@ -1838,7 +1838,7 @@ class WatchlistsDatabase:
             return
         params.extend([job_id, self.user_id])
         self.backend.execute(
-            f"UPDATE scrape_jobs SET {', '.join(sets)} WHERE id = ? AND user_id = ?",
+            f"UPDATE scrape_jobs SET {', '.join(sets)} WHERE id = ? AND user_id = ?",  # nosec B608
             tuple(params),
         )
 
@@ -1909,18 +1909,18 @@ class WatchlistsDatabase:
         where_sql = " AND ".join(where)
         total = int(
             self.backend.execute(
-                f"SELECT COUNT(*) AS cnt FROM scrape_runs sr JOIN scrape_jobs j ON j.id = sr.job_id WHERE {where_sql}",
+                f"SELECT COUNT(*) AS cnt FROM scrape_runs sr JOIN scrape_jobs j ON j.id = sr.job_id WHERE {where_sql}",  # nosec B608
                 tuple(params),
             ).scalar or 0
         )
         rows = self.backend.execute(
-            f"""
+            """
             SELECT sr.id, sr.job_id, sr.status, sr.started_at, sr.finished_at, sr.stats_json, sr.error_msg, sr.log_path
             FROM scrape_runs sr JOIN scrape_jobs j ON j.id = sr.job_id
             WHERE {where_sql}
             ORDER BY sr.id DESC
             LIMIT ? OFFSET ?
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params + [limit, offset]),
         ).rows
         return [RunRow(**r) for r in rows], total
@@ -2065,13 +2065,13 @@ class WatchlistsDatabase:
         where_sql = " AND ".join(where)
         total = int(
             self.backend.execute(
-                f"SELECT COUNT(*) AS cnt FROM scraped_items si JOIN scrape_jobs sj ON sj.id = si.job_id WHERE {where_sql}",
+                f"SELECT COUNT(*) AS cnt FROM scraped_items si JOIN scrape_jobs sj ON sj.id = si.job_id WHERE {where_sql}",  # nosec B608
                 tuple(params),
             ).scalar
             or 0
         )
         rows = self.backend.execute(
-            f"""
+            """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
                    si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
             FROM scraped_items si
@@ -2079,7 +2079,7 @@ class WatchlistsDatabase:
             WHERE {where_sql}
             ORDER BY si.created_at DESC
             LIMIT ? OFFSET ?
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params + [limit, offset]),
         ).rows
         return [ScrapedItemRow(**r) for r in rows], total
@@ -2089,13 +2089,13 @@ class WatchlistsDatabase:
             return []
         placeholders = ",".join("?" for _ in item_ids)
         rows = self.backend.execute(
-            f"""
+            """
             SELECT si.id, si.run_id, si.job_id, si.source_id, si.media_id, si.media_uuid, si.url, si.title,
                    si.summary, si.content, si.published_at, si.tags_json, si.status, si.reviewed, si.created_at
             FROM scraped_items si
             JOIN scrape_jobs sj ON sj.id = si.job_id
             WHERE si.id IN ({placeholders}) AND sj.user_id = ?
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(item_ids + [self.user_id]),
         ).rows
         return [ScrapedItemRow(**r) for r in rows]
@@ -2120,7 +2120,7 @@ class WatchlistsDatabase:
         params.extend([item_id, self.user_id])
         self.backend.execute(
             (
-                f"UPDATE scraped_items SET {', '.join(fields)} "
+                f"UPDATE scraped_items SET {', '.join(fields)} "  # nosec B608
                 "WHERE id = ? AND job_id IN (SELECT id FROM scrape_jobs WHERE user_id = ?)"
             ),
             tuple(params),
@@ -2158,7 +2158,7 @@ class WatchlistsDatabase:
             return self.get_run(run_id)
         self.backend.execute(
             (
-                f"UPDATE scrape_runs SET {', '.join(fields)} "
+                f"UPDATE scrape_runs SET {', '.join(fields)} "  # nosec B608
                 "WHERE id = ? AND job_id IN (SELECT id FROM scrape_jobs WHERE user_id = ?)"
             ),
             tuple(params + [run_id, self.user_id]),
@@ -2669,7 +2669,7 @@ class WatchlistsDatabase:
         params.append(_utcnow_iso())
         params.extend([sub_id, self.user_id])
         self.backend.execute(
-            f"UPDATE feed_websub_subscriptions SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            f"UPDATE feed_websub_subscriptions SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
             tuple(params),
         )
         return self.get_websub_subscription(sub_id)

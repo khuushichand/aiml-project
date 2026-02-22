@@ -68,12 +68,20 @@ export interface TutorialDefinition {
  * Import tutorial definitions from individual files
  */
 import { playgroundTutorials } from "./definitions/playground"
+import { workspacePlaygroundTutorials } from "./definitions/workspace-playground"
+import { mediaTutorials } from "./definitions/media"
+import { knowledgeTutorials } from "./definitions/knowledge"
+import { charactersTutorials } from "./definitions/characters"
 
 /**
  * Central registry of all available tutorials
  */
 export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
-  ...playgroundTutorials
+  ...playgroundTutorials,
+  ...workspacePlaygroundTutorials,
+  ...mediaTutorials,
+  ...knowledgeTutorials,
+  ...charactersTutorials
   // Add more tutorial definitions here as they are created:
   // ...promptStudioTutorials,
   // ...mediaLibraryTutorials,
@@ -92,21 +100,83 @@ export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
  * - Partial wildcards: "/options/prompt/*" matches "/options/prompt/studio"
  */
 function matchRoute(pattern: string, pathname: string): boolean {
+  const normalizedPattern = normalizeTutorialRoute(pattern)
+  const normalizedPathname = normalizeTutorialRoute(pathname)
+
   // Exact match
-  if (pattern === pathname) {
+  if (normalizedPattern === normalizedPathname) {
     return true
   }
 
   // Wildcard matching
-  if (pattern.includes("*")) {
-    const regexPattern = pattern
+  if (normalizedPattern.includes("*")) {
+    const regexPattern = normalizedPattern
       .replace(/[.*+?^${}()|[\]\\]/g, "\\$&") // Escape special regex chars
       .replace(/\\\*/g, ".*") // Replace escaped * with .*
     const regex = new RegExp(`^${regexPattern}$`)
-    return regex.test(pathname)
+    return regex.test(normalizedPathname)
   }
 
   return false
+}
+
+const LEGACY_ROUTE_ALIASES: Record<string, string> = {
+  "/options/playground": "/chat",
+  "/options/chat": "/chat",
+  "/options/media": "/media",
+  "/options/knowledge": "/knowledge",
+  "/options/characters": "/characters",
+  "/options/workspace-playground": "/workspace-playground",
+  "/options/prompts": "/prompts",
+  "/options/notes": "/notes",
+  "/options/flashcards": "/flashcards",
+  "/options/world-books": "/world-books"
+}
+
+/**
+ * Normalize route-like inputs so tutorial matching works across:
+ * - Canonical in-app paths (e.g. /chat)
+ * - Legacy paths (e.g. /options/playground)
+ * - Hash/extension URLs (e.g. chrome-extension://.../options.html#/chat?tab=...)
+ */
+export function normalizeTutorialRoute(routeLike: string): string {
+  let route = routeLike.trim()
+  if (!route) {
+    return "/"
+  }
+
+  if (/^https?:\/\//i.test(route) || /^chrome-extension:\/\//i.test(route)) {
+    try {
+      const parsed = new URL(route)
+      route = parsed.hash ? parsed.hash.slice(1) : parsed.pathname
+    } catch {
+      // keep original route value
+    }
+  }
+
+  const optionsHashIndex = route.indexOf("options.html#")
+  if (optionsHashIndex >= 0) {
+    route = route.slice(optionsHashIndex + "options.html#".length)
+  }
+
+  if (route.startsWith("#")) {
+    route = route.slice(1)
+  }
+
+  route = route.split("?")[0] ?? route
+  route = route.split("#")[0] ?? route
+  route = route.trim()
+
+  if (!route.startsWith("/")) {
+    route = `/${route}`
+  }
+
+  route = route.replace(/\/{2,}/g, "/")
+  if (route.length > 1 && route.endsWith("/")) {
+    route = route.slice(0, -1)
+  }
+
+  return LEGACY_ROUTE_ALIASES[route] ?? route
 }
 
 /**

@@ -32,6 +32,9 @@
   "actions_replay": {
     "message": "Replay"
   },
+  "actions_locked": {
+    "message": "Locked"
+  },
   "actions_resetProgress": {
     "message": "Reset Progress"
   },
@@ -166,5 +169,155 @@
   },
   "playground_voice_settingsContent": {
     "message": "Configure voice chat settings including the voice model, auto-send timing, and trigger phrases."
+  },
+  "workspacePlayground_basics_label": {
+    "message": "Research Studio Basics"
+  },
+  "workspacePlayground_basics_description": {
+    "message": "Learn the three-pane workspace flow: sources, chat, and studio outputs"
+  },
+  "workspacePlayground_basics_headerTitle": {
+    "message": "Workspace Header"
+  },
+  "workspacePlayground_basics_headerContent": {
+    "message": "Use the header to rename, switch, import, and manage workspaces while tracking system status."
+  },
+  "workspacePlayground_basics_sourcesTitle": {
+    "message": "Sources Pane"
+  },
+  "workspacePlayground_basics_sourcesContent": {
+    "message": "Add and select sources here. Your selected source set controls what the chat and studio use."
+  },
+  "workspacePlayground_basics_chatTitle": {
+    "message": "Chat Workspace"
+  },
+  "workspacePlayground_basics_chatContent": {
+    "message": "Ask questions against your selected sources and review grounded answers before generating outputs."
+  },
+  "workspacePlayground_basics_studioTitle": {
+    "message": "Studio Outputs"
+  },
+  "workspacePlayground_basics_studioContent": {
+    "message": "Turn source context into summaries, reports, quizzes, flashcards, and other artifacts."
+  },
+  "workspacePlayground_basics_switcherTitle": {
+    "message": "Workspace Switcher"
+  },
+  "workspacePlayground_basics_switcherContent": {
+    "message": "Open the workspace switcher to jump between saved workspaces and continue different projects."
+  },
+  "media_basics_label": {
+    "message": "Media Basics"
+  },
+  "media_basics_description": {
+    "message": "Search, filter, inspect, and manage ingested media in the library"
+  },
+  "media_basics_searchTitle": {
+    "message": "Search Media"
+  },
+  "media_basics_searchContent": {
+    "message": "Start with a query here to find items by title or content."
+  },
+  "media_basics_filtersTitle": {
+    "message": "Filter and Scope"
+  },
+  "media_basics_filtersContent": {
+    "message": "Refine by media types, metadata, keywords, and collection filters before running searches."
+  },
+  "media_basics_submitTitle": {
+    "message": "Run Search"
+  },
+  "media_basics_submitContent": {
+    "message": "Submit your query after adjusting filters to refresh the result set."
+  },
+  "media_basics_resultsTitle": {
+    "message": "Results List"
+  },
+  "media_basics_resultsContent": {
+    "message": "Review matched items, select one, and navigate pages to inspect more content."
+  },
+  "media_basics_viewerTitle": {
+    "message": "Content Viewer"
+  },
+  "media_basics_viewerContent": {
+    "message": "Inspect selected content, metadata, and navigation details in the main viewer pane."
+  },
+  "media_basics_toolsTitle": {
+    "message": "Library Tools"
+  },
+  "media_basics_toolsContent": {
+    "message": "Open library tools for ingest job monitoring and storage/usage statistics."
+  },
+  "knowledge_basics_label": {
+    "message": "Knowledge Basics"
+  },
+  "knowledge_basics_description": {
+    "message": "Search your indexed sources and review grounded answers with citations"
+  },
+  "knowledge_basics_searchTitle": {
+    "message": "Ask a Question"
+  },
+  "knowledge_basics_searchContent": {
+    "message": "Enter a focused question about your docs, notes, or media to start retrieval."
+  },
+  "knowledge_basics_sourcesTitle": {
+    "message": "Choose Sources"
+  },
+  "knowledge_basics_sourcesContent": {
+    "message": "Select which source groups to query so answers stay scoped to what you care about."
+  },
+  "knowledge_basics_contextTitle": {
+    "message": "Search Context Bar"
+  },
+  "knowledge_basics_contextContent": {
+    "message": "Adjust retrieval preset and context options before running your search."
+  },
+  "knowledge_basics_historyTitle": {
+    "message": "History and Recovery"
+  },
+  "knowledge_basics_historyContent": {
+    "message": "Reuse prior threads and queries from history so you can continue investigations quickly."
+  },
+  "knowledge_basics_resultsTitle": {
+    "message": "Results Workspace"
+  },
+  "knowledge_basics_resultsContent": {
+    "message": "Review answer output, cited sources, and evidence once a search completes."
+  },
+  "characters_basics_label": {
+    "message": "Characters Basics"
+  },
+  "characters_basics_description": {
+    "message": "Create, filter, and manage reusable character assistants for chat workflows"
+  },
+  "characters_basics_newTitle": {
+    "message": "Create Character"
+  },
+  "characters_basics_newContent": {
+    "message": "Start here to create a new character with persona, prompt, greeting, and metadata."
+  },
+  "characters_basics_searchTitle": {
+    "message": "Search Characters"
+  },
+  "characters_basics_searchContent": {
+    "message": "Filter your character library by name, description, tags, or prompt content."
+  },
+  "characters_basics_scopeTitle": {
+    "message": "Active vs Deleted"
+  },
+  "characters_basics_scopeContent": {
+    "message": "Switch between active and deleted characters to recover or permanently remove entries."
+  },
+  "characters_basics_viewTitle": {
+    "message": "Table and Gallery Views"
+  },
+  "characters_basics_viewContent": {
+    "message": "Toggle between table and gallery layouts based on whether you need dense controls or visual browsing."
+  },
+  "characters_basics_libraryTitle": {
+    "message": "Character Library"
+  },
+  "characters_basics_libraryContent": {
+    "message": "Open character actions to chat, quick-chat, edit, duplicate, export, or review version history."
   }
 }

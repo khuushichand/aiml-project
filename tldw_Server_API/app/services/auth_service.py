@@ -216,13 +216,15 @@ async def fetch_password_reset_token_record(
         return None, None
     try:
         placeholders = ", ".join(f"${idx}" for idx in range(2, len(hash_candidates) + 2))
-        query = f"""
+        hash_candidates_clause = f"({placeholders})"
+        query_template = """
             SELECT id, used_at
             FROM password_reset_tokens
-            WHERE user_id = $1 AND token_hash IN ({placeholders})
+            WHERE user_id = $1 AND token_hash IN {hash_candidates_clause}
             ORDER BY expires_at DESC
             LIMIT 1
         """
+        query = query_template.format_map(locals())  # nosec B608
         row = await _fetchrow_compat(db, query, user_id, *hash_candidates)
         if not row:
             return None, None

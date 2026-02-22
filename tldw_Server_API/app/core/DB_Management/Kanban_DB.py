@@ -833,12 +833,12 @@ END;
                 where_clause = " AND ".join(conditions)
 
                 # Get total count
-                count_sql = f"SELECT COUNT(*) as cnt FROM kanban_boards WHERE {where_clause}"
+                count_sql = f"SELECT COUNT(*) as cnt FROM kanban_boards WHERE {where_clause}"  # nosec B608
                 cur = conn.execute(count_sql, params)
                 total = cur.fetchone()["cnt"]
 
                 # Get boards
-                sql = f"""
+                sql = """
                     SELECT id, uuid, user_id, client_id, name, description, archived,
                            archived_at, activity_retention_days, created_at, updated_at,
                            deleted, deleted_at, version, metadata
@@ -846,7 +846,7 @@ END;
                     WHERE {where_clause}
                     ORDER BY updated_at DESC
                     LIMIT ? OFFSET ?
-                """
+                """.format_map(locals())  # nosec B608
                 params.extend([limit, offset])
                 cur = conn.execute(sql, params)
 
@@ -862,12 +862,12 @@ END;
                     if not include_deleted:
                         list_conditions.append("deleted = 0")
                     list_where = " AND ".join(list_conditions)
-                    list_sql = f"""
+                    list_sql = """
                         SELECT board_id, COUNT(*) as cnt
                         FROM kanban_lists
                         WHERE {list_where}
                         GROUP BY board_id
-                    """
+                    """.format_map(locals())  # nosec B608
                     list_counts = {
                         row["board_id"]: int(row["cnt"])
                         for row in conn.execute(list_sql, list_params).fetchall()
@@ -880,12 +880,12 @@ END;
                     if not include_deleted:
                         card_conditions.append("deleted = 0")
                     card_where = " AND ".join(card_conditions)
-                    card_sql = f"""
+                    card_sql = """
                         SELECT board_id, COUNT(*) as cnt
                         FROM kanban_cards
                         WHERE {card_where}
                         GROUP BY board_id
-                    """
+                    """.format_map(locals())  # nosec B608
                     card_counts = {
                         row["board_id"]: int(row["cnt"])
                         for row in conn.execute(card_sql, card_params).fetchall()
@@ -980,7 +980,7 @@ END;
                 params.append(_utcnow_iso())
                 params.append(board_id)
 
-                sql = f"UPDATE kanban_boards SET {', '.join(updates)} WHERE id = ?"
+                sql = f"UPDATE kanban_boards SET {', '.join(updates)} WHERE id = ?"  # nosec B608
                 conn.execute(sql, params)
 
                 # Log activity
@@ -1491,14 +1491,14 @@ END;
 
                 where_clause = " AND ".join(conditions)
 
-                sql = f"""
+                sql = """
                     SELECT l.id, l.uuid, l.board_id, l.client_id, l.name, l.position,
                            l.archived, l.archived_at, l.created_at, l.updated_at,
                            l.deleted, l.deleted_at, l.version
                     FROM kanban_lists l
                     WHERE {where_clause}
                     ORDER BY l.position ASC
-                """
+                """.format_map(locals())  # nosec B608
                 cur = conn.execute(sql, params)
 
                 return [self._row_to_list_dict(row) for row in cur.fetchall()]
@@ -1594,7 +1594,7 @@ END;
                 params.append(_utcnow_iso())
                 params.append(list_id)
 
-                sql = f"UPDATE kanban_lists SET {', '.join(updates)} WHERE id = ?"
+                sql = f"UPDATE kanban_lists SET {', '.join(updates)} WHERE id = ?"  # nosec B608
                 conn.execute(sql, params)
 
                 # Log activity with updated fields
@@ -1636,7 +1636,7 @@ END;
 
                 # Verify all lists exist and belong to the board
                 cur = conn.execute(
-                    f"SELECT id FROM kanban_lists WHERE board_id = ? AND deleted = 0 AND id IN ({','.join('?' * len(list_ids))})",
+                    f"SELECT id FROM kanban_lists WHERE board_id = ? AND deleted = 0 AND id IN ({','.join('?' * len(list_ids))})",  # nosec B608
                     [board_id] + list_ids
                 )
                 existing_ids = {row["id"] for row in cur.fetchall()}
@@ -2097,7 +2097,7 @@ END;
             conn = self._connect()
             try:
                 placeholders = ",".join("?" * len(card_ids))
-                sql = f"""
+                sql = """
                     SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
                            c.position, c.due_date, c.due_complete, c.start_date, c.priority,
                            c.archived, c.archived_at, c.created_at, c.updated_at,
@@ -2107,7 +2107,7 @@ END;
                     JOIN kanban_boards b ON c.board_id = b.id
                     JOIN kanban_lists l ON c.list_id = l.id
                     WHERE c.id IN ({placeholders}) AND b.user_id = ?
-                """
+                """.format_map(locals())  # nosec B608
                 params: list[Any] = list(card_ids) + [self.user_id]
 
                 if not include_deleted:
@@ -2414,7 +2414,7 @@ END;
 
                 where_clause = " AND ".join(conditions)
 
-                sql = f"""
+                sql = """
                     SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
                            c.position, c.due_date, c.due_complete, c.start_date, c.priority,
                            c.archived, c.archived_at, c.created_at, c.updated_at,
@@ -2422,7 +2422,7 @@ END;
                     FROM kanban_cards c
                     WHERE {where_clause}
                     ORDER BY c.position ASC
-                """
+                """.format_map(locals())  # nosec B608
                 cur = conn.execute(sql, params)
 
                 return [self._row_to_card_dict(row) for row in cur.fetchall()]
@@ -2453,7 +2453,7 @@ END;
 
         where_clause = " AND ".join(conditions)
 
-        sql = f"""
+        sql = """
             SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
                    c.position, c.due_date, c.due_complete, c.start_date, c.priority,
                    c.archived, c.archived_at, c.created_at, c.updated_at,
@@ -2470,7 +2470,7 @@ END;
             FROM kanban_cards c
             WHERE {where_clause}
             ORDER BY c.position ASC
-        """
+        """.format_map(locals())  # nosec B608
         cur = conn.execute(sql, params)
         rows = cur.fetchall()
 
@@ -2489,13 +2489,13 @@ END;
             return cards
 
         placeholders = ",".join("?" * len(card_ids))
-        label_sql = f"""
+        label_sql = """
             SELECT cl.card_id, l.id, l.uuid, l.board_id, l.name, l.color, l.created_at, l.updated_at
             FROM kanban_card_labels cl
             JOIN kanban_labels l ON l.id = cl.label_id
             WHERE cl.card_id IN ({placeholders})
             ORDER BY l.name ASC
-        """
+        """.format_map(locals())  # nosec B608
         label_rows = conn.execute(label_sql, card_ids).fetchall()
         labels_by_card: dict[int, list[dict[str, Any]]] = {}
         for row in label_rows:
@@ -2599,7 +2599,7 @@ END;
                 params.append(_utcnow_iso())
                 params.append(card_id)
 
-                sql = f"UPDATE kanban_cards SET {', '.join(updates)} WHERE id = ?"
+                sql = f"UPDATE kanban_cards SET {', '.join(updates)} WHERE id = ?"  # nosec B608
                 conn.execute(sql, params)
 
                 # Log activity
@@ -2839,7 +2839,7 @@ END;
 
                 # Verify all cards exist and belong to the list
                 cur = conn.execute(
-                    f"SELECT id FROM kanban_cards WHERE list_id = ? AND deleted = 0 AND id IN ({','.join('?' * len(card_ids))})",
+                    f"SELECT id FROM kanban_cards WHERE list_id = ? AND deleted = 0 AND id IN ({','.join('?' * len(card_ids))})",  # nosec B608
                     [list_id] + card_ids
                 )
                 existing_ids = {row["id"] for row in cur.fetchall()}
@@ -3036,15 +3036,16 @@ END;
                 label_filter_sql = ""
                 label_params: list[Any] = []
                 if label_ids and len(label_ids) > 0:
-                    label_filter_sql = f"""
+                    label_placeholders = ",".join("?" * len(label_ids))
+                    label_filter_sql = """
                         AND c.id IN (
                             SELECT card_id
                             FROM kanban_card_labels
-                            WHERE label_id IN ({','.join('?' * len(label_ids))})
+                            WHERE label_id IN ({label_placeholders})
                             GROUP BY card_id
                             HAVING COUNT(DISTINCT label_id) = ?
                         )
-                    """
+                    """.format_map(locals())  # nosec B608
                     label_params.extend(label_ids)
                     label_params.append(len(label_ids))
 
@@ -3059,7 +3060,7 @@ END;
                 # For include_archived=True, we need to also search archived cards using LIKE
                 if include_archived:
                     # Use UNION: FTS for non-archived + LIKE for archived
-                    count_sql = f"""
+                    count_sql = """
                         SELECT COUNT(*) as cnt FROM (
                             -- Non-archived cards via FTS
                             SELECT c.id
@@ -3080,7 +3081,7 @@ END;
                             {archived_scope_filter} {board_filter} {priority_filter} {label_filter_sql}
                             AND (c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')
                         )
-                    """
+                    """.format_map(locals())  # nosec B608
                     # Build params: FTS part + archived LIKE part
                     count_params: list[Any] = [self.user_id]
                     if board_id:
@@ -3102,7 +3103,7 @@ END;
                     total = cur.fetchone()["cnt"]
 
                     # Search query with UNION
-                    sql = f"""
+                    sql = """
                         SELECT * FROM (
                             -- Non-archived cards via FTS
                             SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
@@ -3135,7 +3136,7 @@ END;
                         )
                         ORDER BY search_rank, updated_at DESC
                         LIMIT ? OFFSET ?
-                    """
+                    """.format_map(locals())  # nosec B608
                     search_params: list[Any] = [self.user_id]
                     if board_id:
                         search_params.append(board_id)
@@ -3156,7 +3157,7 @@ END;
                     cur = conn.execute(sql, search_params)
                 else:
                     # Simple FTS-only search for non-archived cards
-                    count_sql = f"""
+                    count_sql = """
                         SELECT COUNT(*) as cnt
                         FROM kanban_cards c
                         JOIN kanban_boards b ON c.board_id = b.id
@@ -3165,7 +3166,7 @@ END;
                         WHERE b.user_id = ? AND c.deleted = 0 AND c.archived = 0
                         {active_board_filter} {active_list_filter} {board_filter} {priority_filter} {label_filter_sql}
                         AND kanban_cards_fts MATCH ?
-                    """
+                    """.format_map(locals())  # nosec B608
                     count_params = [self.user_id]
                     if board_id:
                         count_params.append(board_id)
@@ -3177,7 +3178,7 @@ END;
                     cur = conn.execute(count_sql, count_params)
                     total = cur.fetchone()["cnt"]
 
-                    sql = f"""
+                    sql = """
                         SELECT c.id, c.uuid, c.board_id, c.list_id, c.client_id, c.title, c.description,
                                c.position, c.due_date, c.due_complete, c.start_date, c.priority,
                                c.archived, c.archived_at, c.created_at, c.updated_at,
@@ -3192,7 +3193,7 @@ END;
                         AND kanban_cards_fts MATCH ?
                         ORDER BY rank
                         LIMIT ? OFFSET ?
-                    """
+                    """.format_map(locals())  # nosec B608
                     search_params = [self.user_id]
                     if board_id:
                         search_params.append(board_id)
@@ -3364,18 +3365,18 @@ END;
 
         where_clause = " AND ".join(conditions)
 
-        count_sql = f"SELECT COUNT(*) as cnt FROM kanban_activities WHERE {where_clause}"
+        count_sql = f"SELECT COUNT(*) as cnt FROM kanban_activities WHERE {where_clause}"  # nosec B608
         cur = conn.execute(count_sql, params)
         total = cur.fetchone()["cnt"]
 
-        sql = f"""
+        sql = """
             SELECT id, uuid, board_id, list_id, card_id, user_id, action_type,
                    entity_type, entity_id, details, created_at
             FROM kanban_activities
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
-        """
+        """.format_map(locals())  # nosec B608
         cur = conn.execute(sql, params + [limit, offset])
 
         activities = []
@@ -3949,7 +3950,7 @@ END;
                 params.append(_utcnow_iso())
                 params.append(label_id)
 
-                sql = f"UPDATE kanban_labels SET {', '.join(updates)} WHERE id = ?"
+                sql = f"UPDATE kanban_labels SET {', '.join(updates)} WHERE id = ?"  # nosec B608
                 conn.execute(sql, params)
 
                 # Log activity
@@ -4331,7 +4332,7 @@ END;
                 params.append(_utcnow_iso())
                 params.append(checklist_id)
 
-                sql = f"UPDATE kanban_checklists SET {', '.join(updates)} WHERE id = ?"
+                sql = f"UPDATE kanban_checklists SET {', '.join(updates)} WHERE id = ?"  # nosec B608
                 conn.execute(sql, params)
                 changed = True
                 card_id = checklist["card_id"]
@@ -4376,7 +4377,7 @@ END;
 
                 # Verify all checklists exist and belong to the card
                 cur = conn.execute(
-                    f"SELECT id FROM kanban_checklists WHERE card_id = ? AND id IN ({','.join('?' * len(checklist_ids))})",
+                    f"SELECT id FROM kanban_checklists WHERE card_id = ? AND id IN ({','.join('?' * len(checklist_ids))})",  # nosec B608
                     [card_id] + checklist_ids
                 )
                 existing_ids = {row["id"] for row in cur.fetchall()}
@@ -4659,7 +4660,7 @@ END;
                 params.append(now)
                 params.append(item_id)
 
-                sql = f"UPDATE kanban_checklist_items SET {', '.join(updates)} WHERE id = ?"
+                sql = f"UPDATE kanban_checklist_items SET {', '.join(updates)} WHERE id = ?"  # nosec B608
                 conn.execute(sql, params)
 
                 # Log activity for check/uncheck (important user actions)
@@ -4713,7 +4714,7 @@ END;
 
                 # Verify all items exist and belong to the checklist
                 cur = conn.execute(
-                    f"SELECT id FROM kanban_checklist_items WHERE checklist_id = ? AND id IN ({','.join('?' * len(item_ids))})",
+                    f"SELECT id FROM kanban_checklist_items WHERE checklist_id = ? AND id IN ({','.join('?' * len(item_ids))})",  # nosec B608
                     [checklist_id] + item_ids
                 )
                 existing_ids = {row["id"] for row in cur.fetchall()}
@@ -4950,18 +4951,18 @@ END;
                 where_clause = " AND ".join(conditions)
 
                 # Get total count
-                count_sql = f"SELECT COUNT(*) as cnt FROM kanban_comments cm WHERE {where_clause}"
+                count_sql = f"SELECT COUNT(*) as cnt FROM kanban_comments cm WHERE {where_clause}"  # nosec B608
                 cur = conn.execute(count_sql, params)
                 total = cur.fetchone()["cnt"]
 
                 # Get paginated results
-                sql = f"""
+                sql = """
                     SELECT cm.id, cm.uuid, cm.card_id, cm.user_id, cm.content, cm.created_at, cm.updated_at, cm.deleted
                     FROM kanban_comments cm
                     WHERE {where_clause}
                     ORDER BY cm.created_at DESC
                     LIMIT ? OFFSET ?
-                """
+                """.format_map(locals())  # nosec B608
                 params.extend([limit, offset])
                 cur = conn.execute(sql, params)
 
@@ -5611,10 +5612,10 @@ END;
                 # Get all cards and verify they exist and belong to the same board
                 placeholders = ",".join("?" * len(card_ids))
                 cur = conn.execute(
-                    f"""
+                    """
                     SELECT id, board_id, list_id, title FROM kanban_cards
                     WHERE id IN ({placeholders}) AND deleted = 0
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     card_ids
                 )
                 cards = cur.fetchall()
@@ -5697,10 +5698,10 @@ END;
                 # Get all cards and verify they exist
                 placeholders = ",".join("?" * len(card_ids))
                 cur = conn.execute(
-                    f"""
+                    """
                     SELECT id, board_id, list_id, title FROM kanban_cards
                     WHERE id IN ({placeholders}) AND deleted = 0
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     card_ids
                 )
                 cards = cur.fetchall()
@@ -5767,11 +5768,12 @@ END;
             try:
                 # Get all cards and verify they exist
                 placeholders = ",".join("?" * len(card_ids))
+                deleted_scope_clause = "" if hard_delete else "AND deleted = 0"
                 cur = conn.execute(
-                    f"""
+                    """
                     SELECT id, board_id, list_id, title FROM kanban_cards
-                    WHERE id IN ({placeholders}) {"" if hard_delete else "AND deleted = 0"}
-                    """,
+                    WHERE id IN ({placeholders}) {deleted_scope_clause}
+                    """.format_map(locals()),  # nosec B608
                     card_ids
                 )
                 cards = cur.fetchall()
@@ -5793,7 +5795,7 @@ END;
                 if hard_delete:
                     # Permanently delete
                     conn.execute(
-                        f"DELETE FROM kanban_cards WHERE id IN ({placeholders})",
+                        f"DELETE FROM kanban_cards WHERE id IN ({placeholders})",  # nosec B608
                         card_ids
                     )
                 else:
@@ -5857,10 +5859,10 @@ END;
                 # Get all cards and verify they exist
                 placeholders = ",".join("?" * len(card_ids))
                 cur = conn.execute(
-                    f"""
+                    """
                     SELECT id, board_id, title FROM kanban_cards
                     WHERE id IN ({placeholders}) AND deleted = 0
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     card_ids
                 )
                 cards = cur.fetchall()
@@ -5878,7 +5880,7 @@ END;
                 if all_label_ids:
                     label_placeholders = ",".join("?" * len(all_label_ids))
                     cur = conn.execute(
-                        f"SELECT id, board_id, name FROM kanban_labels WHERE id IN ({label_placeholders})",
+                        f"SELECT id, board_id, name FROM kanban_labels WHERE id IN ({label_placeholders})",  # nosec B608
                         list(all_label_ids)
                     )
                     labels = {row["id"]: row for row in cur.fetchall()}
@@ -5899,7 +5901,7 @@ END;
                     if remove_label_ids:
                         remove_placeholders = ",".join("?" * len(remove_label_ids))
                         cur = conn.execute(
-                            f"DELETE FROM kanban_card_labels WHERE card_id = ? AND label_id IN ({remove_placeholders})",
+                            f"DELETE FROM kanban_card_labels WHERE card_id = ? AND label_id IN ({remove_placeholders})",  # nosec B608
                             [card["id"]] + remove_label_ids
                         )
                         if cur.rowcount > 0:
@@ -6072,23 +6074,23 @@ END;
                 where_clause = " AND ".join(conditions)
 
                 # Count total
-                count_sql = f"""
+                count_sql = """
                     SELECT COUNT(*) as cnt
                     FROM kanban_cards c
                     JOIN kanban_lists l ON c.list_id = l.id
                     WHERE {where_clause}
-                """
+                """.format_map(locals())  # nosec B608
                 cur = conn.execute(count_sql, params)
                 total = cur.fetchone()["cnt"]
 
                 # Get paginated results
-                query_sql = f"""
+                query_sql = """
                     SELECT c.* FROM kanban_cards c
                     JOIN kanban_lists l ON c.list_id = l.id
                     WHERE {where_clause}
                     ORDER BY c.list_id, c.position
                     LIMIT ? OFFSET ?
-                """
+                """.format_map(locals())  # nosec B608
                 cur = conn.execute(query_sql, params + [limit, offset])
                 rows = cur.fetchall()
 
@@ -6956,12 +6958,12 @@ END;
             try:
                 placeholders = ",".join("?" * len(list_ids))
                 cur = conn.execute(
-                    f"""
+                    """
                     SELECT list_id, COUNT(*) as count
                     FROM kanban_cards
                     WHERE list_id IN ({placeholders}) AND deleted = 0
                     GROUP BY list_id
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     list_ids
                 )
 

@@ -150,8 +150,11 @@ async def ensure_baseline_rbac_seed(
     try:
         role_names = [r[0] for r in _BASELINE_ROLES]
         placeholders = ",".join("?" for _ in role_names)
+        role_names_clause = f"({placeholders})"
+        role_lookup_sql_template = "SELECT id, name FROM roles WHERE name IN {role_names_clause}"
+        role_lookup_sql = role_lookup_sql_template.format_map(locals())  # nosec B608
         cur = await conn.execute(
-            f"SELECT id, name FROM roles WHERE name IN ({placeholders})",
+            role_lookup_sql,
             tuple(role_names),
         )
         role_rows = await cur.fetchall()
@@ -163,8 +166,11 @@ async def ensure_baseline_rbac_seed(
     try:
         perm_names = [p[0] for p in permissions]
         placeholders = ",".join("?" for _ in perm_names)
+        perm_names_clause = f"({placeholders})"
+        perm_lookup_sql_template = "SELECT id, name FROM permissions WHERE name IN {perm_names_clause}"
+        perm_lookup_sql = perm_lookup_sql_template.format_map(locals())  # nosec B608
         cur = await conn.execute(
-            f"SELECT id, name FROM permissions WHERE name IN ({placeholders})",
+            perm_lookup_sql,
             tuple(perm_names),
         )
         perm_rows = await cur.fetchall()

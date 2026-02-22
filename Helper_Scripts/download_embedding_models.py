@@ -70,7 +70,7 @@ def download_models(
             }
             if allow:
                 kwargs["allow_patterns"] = allow
-            snapshot_download(**kwargs)
+            snapshot_download(**kwargs)  # nosec B615
         except HfHubHTTPError as err:
             print(f"  ! Failed to download {model_id}: {err}", file=sys.stderr)
         else:

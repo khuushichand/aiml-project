@@ -1082,7 +1082,10 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   ]
 
   return (
-    <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+    <header
+      data-testid="workspace-header"
+      className="flex items-center justify-between border-b border-border bg-surface px-4 py-3"
+    >
       {messageContextHolder}
       <div className="flex items-center gap-3">
         <FlaskConical className="h-5 w-5 text-primary" />
@@ -1220,6 +1223,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         >
           <button
             type="button"
+            data-testid="workspace-workspaces-button"
             className="ml-2 flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text transition hover:bg-surface2"
           >
             <span>{t("playground:workspace.workspaces", "Workspaces")}</span>

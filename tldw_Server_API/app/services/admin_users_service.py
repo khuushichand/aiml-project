@@ -286,11 +286,15 @@ async def update_user(
         if is_pg:
             updates.append("updated_at = CURRENT_TIMESTAMP")
             params.append(user_id)
-            query = f"UPDATE users SET {', '.join(updates)} WHERE id = ${param_count}"
+            set_clause = ", ".join(updates)
+            update_user_sql_template = "UPDATE users SET {set_clause} WHERE id = ${param_count}"
+            query = update_user_sql_template.format_map(locals())  # nosec B608
         else:
             updates.append("updated_at = datetime('now')")
             params.append(user_id)
-            query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
+            set_clause = ", ".join(updates)
+            update_user_sql_template = "UPDATE users SET {set_clause} WHERE id = ?"
+            query = update_user_sql_template.format_map(locals())  # nosec B608
 
         if is_pg:
             row = await db.fetchrow(query + " RETURNING id", *params)

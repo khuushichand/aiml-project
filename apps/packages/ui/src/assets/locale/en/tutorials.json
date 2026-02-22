@@ -15,6 +15,7 @@
   "actions": {
     "start": "Start",
     "replay": "Replay",
+    "locked": "Locked",
     "resetProgress": "Reset Progress",
     "resetProgressConfirm": "This will clear all tutorial completion status. You'll see first-visit prompts again."
   },
@@ -71,6 +72,72 @@
       "ttsContent": "Click on any AI response to have it read aloud. Customize the voice and speed in Settings.",
       "settingsTitle": "Voice Settings",
       "settingsContent": "Configure voice chat settings including the voice model, auto-send timing, and trigger phrases."
+    }
+  },
+  "workspacePlayground": {
+    "basics": {
+      "label": "Research Studio Basics",
+      "description": "Learn the three-pane workspace flow: sources, chat, and studio outputs",
+      "headerTitle": "Workspace Header",
+      "headerContent": "Use the header to rename, switch, import, and manage workspaces while tracking system status.",
+      "sourcesTitle": "Sources Pane",
+      "sourcesContent": "Add and select sources here. Your selected source set controls what the chat and studio use.",
+      "chatTitle": "Chat Workspace",
+      "chatContent": "Ask questions against your selected sources and review grounded answers before generating outputs.",
+      "studioTitle": "Studio Outputs",
+      "studioContent": "Turn source context into summaries, reports, quizzes, flashcards, and other artifacts.",
+      "switcherTitle": "Workspace Switcher",
+      "switcherContent": "Open the workspace switcher to jump between saved workspaces and continue different projects."
+    }
+  },
+  "media": {
+    "basics": {
+      "label": "Media Basics",
+      "description": "Search, filter, inspect, and manage ingested media in the library",
+      "searchTitle": "Search Media",
+      "searchContent": "Start with a query here to find items by title or content.",
+      "filtersTitle": "Filter and Scope",
+      "filtersContent": "Refine by media types, metadata, keywords, and collection filters before running searches.",
+      "submitTitle": "Run Search",
+      "submitContent": "Submit your query after adjusting filters to refresh the result set.",
+      "resultsTitle": "Results List",
+      "resultsContent": "Review matched items, select one, and navigate pages to inspect more content.",
+      "viewerTitle": "Content Viewer",
+      "viewerContent": "Inspect selected content, metadata, and navigation details in the main viewer pane.",
+      "toolsTitle": "Library Tools",
+      "toolsContent": "Open library tools for ingest job monitoring and storage/usage statistics."
+    }
+  },
+  "knowledge": {
+    "basics": {
+      "label": "Knowledge Basics",
+      "description": "Search your indexed sources and review grounded answers with citations",
+      "searchTitle": "Ask a Question",
+      "searchContent": "Enter a focused question about your docs, notes, or media to start retrieval.",
+      "sourcesTitle": "Choose Sources",
+      "sourcesContent": "Select which source groups to query so answers stay scoped to what you care about.",
+      "contextTitle": "Search Context Bar",
+      "contextContent": "Adjust retrieval preset and context options before running your search.",
+      "historyTitle": "History and Recovery",
+      "historyContent": "Reuse prior threads and queries from history so you can continue investigations quickly.",
+      "resultsTitle": "Results Workspace",
+      "resultsContent": "Review answer output, cited sources, and evidence once a search completes."
+    }
+  },
+  "characters": {
+    "basics": {
+      "label": "Characters Basics",
+      "description": "Create, filter, and manage reusable character assistants for chat workflows",
+      "newTitle": "Create Character",
+      "newContent": "Start here to create a new character with persona, prompt, greeting, and metadata.",
+      "searchTitle": "Search Characters",
+      "searchContent": "Filter your character library by name, description, tags, or prompt content.",
+      "scopeTitle": "Active vs Deleted",
+      "scopeContent": "Switch between active and deleted characters to recover or permanently remove entries.",
+      "viewTitle": "Table and Gallery Views",
+      "viewContent": "Toggle between table and gallery layouts based on whether you need dense controls or visual browsing.",
+      "libraryTitle": "Character Library",
+      "libraryContent": "Open character actions to chat, quick-chat, edit, duplicate, export, or review version history."
     }
   }
 }

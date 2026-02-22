@@ -394,8 +394,13 @@ class EvaluationManager:
 
             # Get evaluations
             placeholders = ",".join("?" * len(evaluation_ids))
+            evaluation_ids_clause = f"({placeholders})"
+            fetch_evaluations_sql_template = (
+                "SELECT * FROM internal_evaluations WHERE evaluation_id IN {evaluation_ids_clause}"
+            )
+            fetch_evaluations_sql = fetch_evaluations_sql_template.format_map(locals())  # nosec B608
             cursor = conn.execute(
-                f"SELECT * FROM internal_evaluations WHERE evaluation_id IN ({placeholders})",
+                fetch_evaluations_sql,
                 evaluation_ids
             )
 
@@ -409,12 +414,14 @@ class EvaluationManager:
                 raise ValueError("Some evaluation IDs not found")
 
             # Get metrics for comparison
-            metric_cursor = conn.execute(
-                f"""
+            fetch_metrics_sql_template = """
                 SELECT evaluation_id, metric_name, score
                 FROM evaluation_metrics
-                WHERE evaluation_id IN ({placeholders})
-                """,
+                WHERE evaluation_id IN {evaluation_ids_clause}
+                """
+            fetch_metrics_sql = fetch_metrics_sql_template.format_map(locals())  # nosec B608
+            metric_cursor = conn.execute(
+                fetch_metrics_sql,
                 evaluation_ids
             )
 
@@ -658,10 +665,16 @@ class EvaluationManager:
                 return []
 
             placeholders = ",".join(["?"] * len(sliced_ids))
+            sliced_ids_clause = f"({placeholders})"
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
+                list_evaluations_sql_template = (
+                    "SELECT * FROM internal_evaluations WHERE evaluation_id IN {sliced_ids_clause} "
+                    "ORDER BY created_at DESC"
+                )
+                list_evaluations_sql = list_evaluations_sql_template.format_map(locals())  # nosec B608
                 rows = conn.execute(
-                    f"SELECT * FROM internal_evaluations WHERE evaluation_id IN ({placeholders}) ORDER BY created_at DESC",
+                    list_evaluations_sql,
                     sliced_ids
                 ).fetchall()
                 results = [dict(r) for r in rows]

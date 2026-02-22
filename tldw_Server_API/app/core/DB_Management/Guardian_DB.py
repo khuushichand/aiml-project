@@ -875,11 +875,12 @@ class GuardianDB:
         set_clauses.append("updated_at = ?")
         params.append(now)
         params.append(policy_id)
+        set_clause_sql = ", ".join(set_clauses)
         with self._lock:
             conn = self._connect()
             try:
                 result = conn.execute(
-                    f"UPDATE supervised_policies SET {', '.join(set_clauses)} WHERE id = ?",
+                    f"UPDATE supervised_policies SET {set_clause_sql} WHERE id = ?",  # nosec B608
                     params,
                 )
                 return (result.rowcount or 0) > 0
@@ -1361,11 +1362,12 @@ class GuardianDB:
         set_clauses.append("updated_at = ?")
         params.append(now)
         params.append(rule_id)
+        set_clause_sql = ", ".join(set_clauses)
         with self._lock:
             conn = self._connect()
             try:
                 result = conn.execute(
-                    f"UPDATE self_monitoring_rules SET {', '.join(set_clauses)} WHERE id = ?",
+                    f"UPDATE self_monitoring_rules SET {set_clause_sql} WHERE id = ?",  # nosec B608
                     params,
                 )
                 return (result.rowcount or 0) > 0
@@ -1549,8 +1551,9 @@ class GuardianDB:
             conn = self._connect()
             try:
                 placeholders = ",".join("?" * len(alert_ids))
+                alert_ids_clause = f"({placeholders})"
                 result = conn.execute(
-                    f"UPDATE self_monitoring_alerts SET is_read = 1 WHERE user_id = ? AND id IN ({placeholders})",
+                    f"UPDATE self_monitoring_alerts SET is_read = 1 WHERE user_id = ? AND id IN {alert_ids_clause}",  # nosec B608
                     [str(user_id), *alert_ids],
                 )
                 return result.rowcount or 0
@@ -1792,7 +1795,7 @@ class GuardianDB:
             conn = self._connect()
             try:
                 query = (
-                    f"SELECT strftime('{fmt}', created_at) AS bucket, COUNT(*) AS cnt "
+                    f"SELECT strftime('{fmt}', created_at) AS bucket, COUNT(*) AS cnt "  # nosec B608
                     f"FROM self_monitoring_alerts WHERE user_id = ?"
                 )
                 params: list[Any] = [str(user_id)]
@@ -1863,18 +1866,19 @@ class GuardianDB:
                 rel_ids = [r["id"] for r in rows]
                 if rel_ids:
                     placeholders = ",".join("?" * len(rel_ids))
+                    rel_ids_clause = f"({placeholders})"
                     result = conn.execute(
-                        f"DELETE FROM supervision_audit_log WHERE relationship_id IN ({placeholders})",
+                        f"DELETE FROM supervision_audit_log WHERE relationship_id IN {rel_ids_clause}",  # nosec B608
                         rel_ids,
                     )
                     counts["audit_entries"] = result.rowcount or 0
                     result = conn.execute(
-                        f"DELETE FROM supervised_policies WHERE relationship_id IN ({placeholders})",
+                        f"DELETE FROM supervised_policies WHERE relationship_id IN {rel_ids_clause}",  # nosec B608
                         rel_ids,
                     )
                     counts["policies"] = result.rowcount or 0
                     result = conn.execute(
-                        f"DELETE FROM guardian_relationships WHERE id IN ({placeholders})",
+                        f"DELETE FROM guardian_relationships WHERE id IN {rel_ids_clause}",  # nosec B608
                         rel_ids,
                     )
                     counts["relationships"] = result.rowcount or 0

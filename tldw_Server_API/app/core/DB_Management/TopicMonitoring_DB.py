@@ -334,13 +334,15 @@ class TopicMonitoringDB:
             conn = self._connect()
             try:
                 where = " WHERE enabled = 1" if enabled_only else ""
-                rows = conn.execute(
-                    f"""  # nosec B608
+                watchlists_sql_template = """
                     SELECT id, name, description, enabled, scope_type, scope_id, managed_by, created_at, updated_at
                     FROM monitoring_watchlists
                     {where}
                     ORDER BY name COLLATE NOCASE
                     """
+                watchlists_sql = watchlists_sql_template.format_map(locals())  # nosec B608
+                rows = conn.execute(
+                    watchlists_sql
                 ).fetchall()
                 watchlists: list[dict[str, Any]] = []
                 for row in rows:
@@ -351,13 +353,16 @@ class TopicMonitoringDB:
                 if not ids:
                     return watchlists
                 placeholders = ",".join("?" for _ in ids)
-                rule_rows = conn.execute(
-                    f"""  # nosec B608
+                watchlist_ids_clause = f"({placeholders})"
+                rules_sql_template = """
                     SELECT rule_id, watchlist_id, pattern, category, severity, note, tags, created_at, updated_at
                     FROM monitoring_watchlist_rules
-                    WHERE watchlist_id IN ({placeholders})
+                    WHERE watchlist_id IN {watchlist_ids_clause}
                     ORDER BY rule_id
-                    """,
+                    """
+                rules_sql = rules_sql_template.format_map(locals())  # nosec B608
+                rule_rows = conn.execute(
+                    rules_sql,
                     ids,
                 ).fetchall()
                 rules_by_watchlist: dict[str, list[dict[str, Any]]] = {}
@@ -654,7 +659,7 @@ class TopicMonitoringDB:
         if unread_only:
             clauses.append("is_read = 0")
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"""
+        alerts_sql_template = """
             SELECT id, created_at, user_id, scope_type, scope_id, source,
                    watchlist_id, rule_id, rule_category, rule_severity, pattern,
                    source_id, chunk_id, chunk_seq, text_snippet, metadata, is_read, read_at
@@ -663,6 +668,7 @@ class TopicMonitoringDB:
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
         """
+        sql = alerts_sql_template.format_map(locals())  # nosec B608
         params.extend([int(limit), int(offset)])
         with self._lock:
             conn = self._connect()

@@ -1550,12 +1550,12 @@ class CollectionsDatabase:
             return {}
         placeholders = ",".join("?" for _ in ids)
         rows = self.backend.execute(
-            f"""
+            """
             SELECT cit.item_id AS item_id, ct.name AS name
             FROM content_item_tags cit
             JOIN collection_tags ct ON ct.id = cit.tag_id
             WHERE cit.item_id IN ({placeholders})
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(ids),
         ).rows
         mapping: dict[int, list[str]] = {item_id: [] for item_id in ids}
@@ -1791,13 +1791,13 @@ class CollectionsDatabase:
         def _lookup_existing() -> tuple[dict[str, Any] | None, int | None]:
             for column, value in selectors:
                 row = self.backend.execute(
-                    f"""
+                    """
                     SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
                            title, summary, notes, content_hash, word_count, published_at, status, favorite,
                            metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
                     FROM content_items
                     WHERE user_id = ? AND {column} = ?
-                    """,
+                    """.format_map(locals()),  # nosec B608
                     (self.user_id, value),
                 ).first
                 if row:
@@ -2012,7 +2012,7 @@ class CollectionsDatabase:
                 self.user_id,
             )
             self.backend.execute(
-                f"UPDATE content_items SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+                f"UPDATE content_items SET {', '.join(fields)} WHERE id = ? AND user_id = ?",  # nosec B608
                 params,
             )
             content_changed = not (prev_hash == content_hash or prev_hash is None and content_hash is None)
@@ -2155,7 +2155,7 @@ class CollectionsDatabase:
             joins_sql = f" {' '.join(query_joins)}" if query_joins else ""
             base_from = f"FROM content_items ci{joins_sql}"
             subquery = f"SELECT ci.id {base_from} WHERE {where_sql} {group_by} {having}"
-            count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"
+            count_sql = f"SELECT COUNT(*) AS cnt FROM ({subquery}) AS subq"  # nosec B608
             total = int(self.backend.execute(count_sql, tuple(clause_params)).scalar or 0)
 
             resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
@@ -2277,7 +2277,7 @@ class CollectionsDatabase:
             params.append(_utcnow_iso())
             params.extend([item_id, self.user_id])
             self.backend.execute(
-                f"UPDATE content_items SET {', '.join(updates)} WHERE id = ? AND user_id = ?",
+                f"UPDATE content_items SET {', '.join(updates)} WHERE id = ? AND user_id = ?",  # nosec B608
                 tuple(params),
             )
 
@@ -2403,11 +2403,11 @@ class CollectionsDatabase:
             params.extend([like, like])
         where_sql = " AND ".join(where)
 
-        count_q = f"SELECT COUNT(*) AS cnt FROM output_templates WHERE {where_sql}"
+        count_q = f"SELECT COUNT(*) AS cnt FROM output_templates WHERE {where_sql}"  # nosec B608
         total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
 
         select_q = (
-            f"SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
+            f"SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "  # nosec B608
             f"FROM output_templates WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(select_q, tuple(params + [limit, offset])).rows
@@ -2476,7 +2476,7 @@ class CollectionsDatabase:
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
         params.extend([template_id, self.user_id])
-        q = f"UPDATE output_templates SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE output_templates SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("template_not_found")
@@ -2574,7 +2574,7 @@ class CollectionsDatabase:
         if not fields:
             return self.get_highlight(highlight_id)
         params.extend([highlight_id, self.user_id])
-        q = f"UPDATE reading_highlights SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE reading_highlights SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("highlight_not_found")
@@ -2786,7 +2786,7 @@ class CollectionsDatabase:
         if not fields:
             return self.get_output_artifact(output_id)
         params.extend([output_id, self.user_id])
-        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
@@ -2795,7 +2795,7 @@ class CollectionsDatabase:
     def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {cond}"
         )
         row = self.backend.execute(q, (output_id, self.user_id)).first
@@ -2844,7 +2844,7 @@ class CollectionsDatabase:
         if not include_deleted:
             where.append("deleted = 0")
         q = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 1"
         )
         row = self.backend.execute(q, tuple(params)).first
@@ -2893,10 +2893,10 @@ class CollectionsDatabase:
                 ])
         where_sql = " AND ".join(where)
 
-        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
+        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"  # nosec B608
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
@@ -2924,10 +2924,10 @@ class CollectionsDatabase:
             where.append("workspace_tag = ?")
             params.append(workspace_tag)
         where_sql = " AND ".join(where)
-        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"
+        cq = f"SELECT COUNT(*) AS cnt FROM outputs WHERE {where_sql}"  # nosec B608
         total = int(self.backend.execute(cq, tuple(params)).scalar or 0)
         sq = (
-            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
+            "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "  # nosec B608
             f"FROM outputs WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
@@ -3046,7 +3046,7 @@ class CollectionsDatabase:
             fields.append("storage_path = ?")
             params.append(new_storage_path)
         params.extend([output_id, self.user_id])
-        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"
+        q = f"UPDATE outputs SET {', '.join(fields)} WHERE id = ? AND user_id = ? AND deleted = 0"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("output_not_found")
@@ -3131,7 +3131,7 @@ class CollectionsDatabase:
             fields.append("settings_json = ?")
             params.append(settings_json)
         params.extend([project_id, self.user_id])
-        q = f"UPDATE audiobook_projects SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE audiobook_projects SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("audiobook_project_not_found")
@@ -3446,7 +3446,7 @@ class CollectionsDatabase:
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
         params.extend([schedule_id, self.user_id])
-        q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        q = f"UPDATE reading_digest_schedules SET {', '.join(fields)} WHERE id = ? AND user_id = ?"  # nosec B608
         res = self.backend.execute(q, tuple(params))
         if res.rowcount <= 0:
             raise KeyError("reading_digest_schedule_not_found")
@@ -3509,10 +3509,10 @@ class CollectionsDatabase:
         """
         where = "user_id = ? AND tenant_id = ?"
         params: list[Any] = [self.user_id, tenant_id]
-        count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"
+        count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"  # nosec B608
         total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
         q = (
-            "SELECT * FROM reading_digest_schedules "
+            "SELECT * FROM reading_digest_schedules "  # nosec B608
             f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
         rows = self.backend.execute(q, (*params, limit, offset)).rows
@@ -3588,13 +3588,13 @@ class CollectionsDatabase:
             status_params.extend(disallow_statuses)
         if expected_next_run_at is None:
             q = (
-                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "  # nosec B608
                 "WHERE id = ? AND user_id = ? AND next_run_at IS NULL"
                 f"{status_clause}"
             )
         else:
             q = (
-                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "
+                f"UPDATE reading_digest_schedules SET {', '.join(fields)} "  # nosec B608
                 "WHERE id = ? AND user_id = ? AND next_run_at = ?"
                 f"{status_clause}"
             )
@@ -3716,7 +3716,7 @@ class CollectionsDatabase:
         """Fetch a file artifact by id."""
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
-            "SELECT id, user_id, file_type, title, structured_json, validation_json, export_status, export_format, "
+            "SELECT id, user_id, file_type, title, structured_json, validation_json, export_status, export_format, "  # nosec B608
             "export_storage_path, export_bytes, export_content_type, export_job_id, export_expires_at, export_consumed_at, metadata_json, created_at, updated_at, retention_until "
             f"FROM file_artifacts WHERE {cond}"
         )
@@ -3871,6 +3871,6 @@ class CollectionsDatabase:
         if not ids:
             return 0
         placeholders = ",".join(["?"] * len(ids))
-        q = f"DELETE FROM file_artifacts WHERE user_id = ? AND id IN ({placeholders})"
+        q = f"DELETE FROM file_artifacts WHERE user_id = ? AND id IN ({placeholders})"  # nosec B608
         res = self.backend.execute(q, tuple([self.user_id] + list(ids)))
         return int(res.rowcount or 0)

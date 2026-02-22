@@ -195,7 +195,7 @@ def completion(shell):
     from click_completion import get_completion_script
 
     try:
-        completion_script = get_completion_script(prog_name='tldw-evals', shell=shell)
+        completion_script = get_completion_script(prog_name='tldw-evals', shell=shell)  # nosec B604
         click.echo(completion_script)
     except Exception as e:
         print_error(f"Failed to generate completion script: {e}")

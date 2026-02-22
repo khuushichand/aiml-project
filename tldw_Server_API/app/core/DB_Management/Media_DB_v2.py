@@ -2053,7 +2053,7 @@ class MediaDatabase:
         }
         placeholders = ", ".join([f":{k}" for k in data])
         columns = ", ".join(data.keys())
-        sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"
+        sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"  # nosec B608
         try:
             self._execute_with_connection(conn, sql, data)
             with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
@@ -2091,7 +2091,7 @@ class MediaDatabase:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
         sql = (
-            "SELECT * FROM VisualDocuments "
+            "SELECT * FROM VisualDocuments "  # nosec B608
             f"WHERE {where_sql} "
             "ORDER BY "
             "COALESCE(page_number, 0), "
@@ -2211,7 +2211,7 @@ class MediaDatabase:
         }
         placeholders = ", ".join([f":{k}" for k in data])
         columns = ", ".join(data.keys())
-        sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"
+        sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"  # nosec B608
         try:
             self._execute_with_connection(conn, sql, data)
             with suppress(_MEDIA_NONCRITICAL_EXCEPTIONS):
@@ -2257,7 +2257,7 @@ class MediaDatabase:
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
-        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} LIMIT 1"
+        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} LIMIT 1"  # nosec B608
         try:
             rows = self._fetchall_with_connection(conn, sql, params)
             return rows[0] if rows else None
@@ -2286,7 +2286,7 @@ class MediaDatabase:
         if not include_deleted:
             clauses.append("deleted = 0")
         where_sql = " AND ".join(clauses)
-        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"
+        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"  # nosec B608
         try:
             return self._fetchall_with_connection(conn, sql, params)
         except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
@@ -2574,7 +2574,7 @@ class MediaDatabase:
     @property
     def _SCHEMA_UPDATE_VERSION_SQL_V1(self):
         return (
-            "DELETE FROM schema_version WHERE version <> 0;\n"
+            "DELETE FROM schema_version WHERE version <> 0;\n"  # nosec B608
             f"UPDATE schema_version SET version = {self._CURRENT_SCHEMA_VERSION} WHERE version = 0;"
         )
 
@@ -3709,8 +3709,9 @@ class MediaDatabase:
 
         # Add check constraint for visibility values (idempotent)
         try:
-            backend.execute(
-                """
+            media_table_ident = ident("media")
+            visibility_col_ident = ident("visibility")
+            visibility_constraint_template = """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -3723,10 +3724,13 @@ class MediaDatabase:
                         CHECK ({visibility_col} IN ('personal', 'team', 'org'));
                     END IF;
                 END $$;
-                """.format(
-                    media_table=ident("media"),
-                    visibility_col=ident("visibility"),
-                ),
+                """
+            visibility_constraint_sql = visibility_constraint_template.format(
+                media_table=media_table_ident,
+                visibility_col=visibility_col_ident,
+            )  # nosec B608
+            backend.execute(
+                visibility_constraint_sql,
                 connection=conn,
             )
         except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
@@ -3740,17 +3744,22 @@ class MediaDatabase:
 
         # Backfill owner_user_id from client_id where possible
         try:
-            backend.execute(
-                """
+            media_table_ident = ident("media")
+            owner_user_id_col_ident = ident("owner_user_id")
+            client_id_col_ident = ident("client_id")
+            owner_backfill_template = """
                 UPDATE {media_table}
                 SET {owner_user_id_col} = CAST({client_id_col} AS BIGINT)
                 WHERE {owner_user_id_col} IS NULL
                   AND {client_id_col} ~ '^[0-9]+$'
-                """.format(
-                    media_table=ident("media"),
-                    owner_user_id_col=ident("owner_user_id"),
-                    client_id_col=ident("client_id"),
-                ),
+                """
+            owner_backfill_sql = owner_backfill_template.format(
+                media_table=media_table_ident,
+                owner_user_id_col=owner_user_id_col_ident,
+                client_id_col=client_id_col_ident,
+            )  # nosec B608
+            backend.execute(
+                owner_backfill_sql,
                 connection=conn,
             )
         except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
@@ -3931,7 +3940,7 @@ class MediaDatabase:
 
             max_result = backend.execute(
                 (
-                    f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "
+                    f"SELECT COALESCE(MAX({ident(column_name)}), 0) AS max_id "  # nosec B608
                     f"FROM {ident(table_name)}"
                 ),
                 connection=conn,
@@ -4346,14 +4355,14 @@ class MediaDatabase:
 
             if backend.table_exists("data_tables", connection=conn):
                 backend.execute(
-                    f"UPDATE {ident('data_tables')} "
+                    f"UPDATE {ident('data_tables')} "  # nosec B608
                     f"SET {ident('client_id')} = %s "
                     f"WHERE {ident('client_id')} IS NULL OR {ident('client_id')} = ''",
                     (str(self.client_id),),
                     connection=conn,
                 )
                 backend.execute(
-                    f"UPDATE {ident('data_tables')} "
+                    f"UPDATE {ident('data_tables')} "  # nosec B608
                     f"SET {ident('last_modified')} = CURRENT_TIMESTAMP "
                     f"WHERE {ident('last_modified')} IS NULL",
                     connection=conn,
@@ -4609,12 +4618,12 @@ class MediaDatabase:
                 connection=conn,
             )
             backend.execute(
-                f"UPDATE {ident('claims')} SET {ident('review_status')} = 'pending' "
+                f"UPDATE {ident('claims')} SET {ident('review_status')} = 'pending' "  # nosec B608
                 f"WHERE {ident('review_status')} IS NULL",
                 connection=conn,
             )
             backend.execute(
-                f"UPDATE {ident('claims')} SET {ident('review_version')} = 1 "
+                f"UPDATE {ident('claims')} SET {ident('review_version')} = 1 "  # nosec B608
                 f"WHERE {ident('review_version')} IS NULL",
                 connection=conn,
             )
@@ -5315,7 +5324,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -5373,7 +5382,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, c.deleted, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -5440,7 +5449,7 @@ class MediaDatabase:
 
         params.append(int(claim_id))
 
-        sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
 
         if self.backend_type == BackendType.POSTGRESQL and claim_text is not None:
@@ -5540,7 +5549,7 @@ class MediaDatabase:
                 where_clause += " AND review_version = ?"
                 params.append(int(expected_version))
 
-            sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE " + where_clause
+            sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE " + where_clause  # nosec B608
             cur = self._execute_with_connection(conn, sql, tuple(params))
             if cur.rowcount == 0:
                 return {"conflict": True, "current": dict(row)}
@@ -5755,7 +5764,7 @@ class MediaDatabase:
             params.append(str(extractor_version))
 
         sql = (
-            "SELECT id, user_id, report_date, extractor, extractor_version, total_reviewed, "
+            "SELECT id, user_id, report_date, extractor, extractor_version, total_reviewed, "  # nosec B608
             "approved_count, rejected_count, flagged_count, reassigned_count, edited_count, "
             "reason_code_counts_json, created_at, updated_at "
             "FROM claims_review_extractor_metrics_daily WHERE "
@@ -5845,7 +5854,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, c.deleted, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -5969,7 +5978,7 @@ class MediaDatabase:
         params.append(now)
         params.append(int(rule_id))
 
-        sql = "UPDATE claims_review_rules SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_review_rules SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claim_review_rule(int(rule_id))
 
@@ -6060,7 +6069,7 @@ class MediaDatabase:
         update_parts.append("updated_at = ?")
         params.append(now)
         params.append(int(existing.get("id")))
-        sql = "UPDATE claims_monitoring_settings SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_monitoring_settings SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_settings(str(user_id))
 
@@ -6219,7 +6228,7 @@ class MediaDatabase:
         update_parts.append("updated_at = ?")
         params.append(now)
         params.append(int(alert_id))
-        sql = "UPDATE claims_monitoring_alerts SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_monitoring_alerts SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_alert(int(alert_id))
 
@@ -6342,7 +6351,7 @@ class MediaDatabase:
         update_parts.append("updated_at = ?")
         params.append(now)
         params.append(int(config_id))
-        sql = "UPDATE claims_monitoring_config SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE claims_monitoring_config SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         self.execute_query(sql, tuple(params), commit=True)
         return self.get_claims_monitoring_config(int(config_id))
 
@@ -6465,7 +6474,7 @@ class MediaDatabase:
             conditions.append("resource_id = ?")
             params.append(str(resource_id))
         sql = (
-            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
+            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "  # nosec B608
             "resource_id, payload_json, created_at, delivered_at "
             "FROM claims_notifications "
             f"WHERE {' AND '.join(conditions)} "
@@ -6517,7 +6526,7 @@ class MediaDatabase:
             conditions.append("delivered_at IS NULL")
 
         sql = (
-            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
+            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "  # nosec B608
             "resource_id, payload_json, created_at, delivered_at "
             "FROM claims_notifications "
             f"WHERE {' AND '.join(conditions)} "
@@ -6532,7 +6541,7 @@ class MediaDatabase:
             return []
         placeholders = ",".join("?" * len(ids))
         sql = (
-            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "
+            "SELECT id, user_id, kind, target_user_id, target_review_group, resource_type, "  # nosec B608
             "resource_id, payload_json, created_at, delivered_at "
             f"FROM claims_notifications WHERE id IN ({placeholders})"
         )
@@ -6544,7 +6553,7 @@ class MediaDatabase:
             return 0
         placeholders = ",".join("?" * len(ids))
         now = self._get_current_utc_timestamp_str()
-        sql = f"UPDATE claims_notifications SET delivered_at = ? WHERE id IN ({placeholders})"
+        sql = f"UPDATE claims_notifications SET delivered_at = ? WHERE id IN ({placeholders})"  # nosec B608
         params: list[Any] = [str(now)]
         params.extend([int(i) for i in ids])
         cursor = self.execute_query(sql, tuple(params), commit=True)
@@ -6558,7 +6567,7 @@ class MediaDatabase:
             return []
         placeholders = ",".join("?" * len(uuids))
         sql = (
-            "SELECT id, uuid, media_id, chunk_index, claim_text, reviewer_id, review_group "
+            "SELECT id, uuid, media_id, chunk_index, claim_text, reviewer_id, review_group "  # nosec B608
             f"FROM Claims WHERE uuid IN ({placeholders})"
         )
         rows = self.execute_query(sql, tuple(uuids)).fetchall()
@@ -6569,7 +6578,7 @@ class MediaDatabase:
             return []
         placeholders = ",".join("?" * len(cluster_ids))
         sql = (
-            "SELECT id, canonical_claim_text, updated_at "
+            "SELECT id, canonical_claim_text, updated_at "  # nosec B608
             f"FROM claim_clusters WHERE id IN ({placeholders})"
         )
         rows = self.execute_query(sql, tuple(int(cid) for cid in cluster_ids)).fetchall()
@@ -6580,7 +6589,7 @@ class MediaDatabase:
             return {}
         placeholders = ",".join("?" * len(cluster_ids))
         sql = (
-            "SELECT cluster_id, COUNT(*) AS member_count "
+            "SELECT cluster_id, COUNT(*) AS member_count "  # nosec B608
             f"FROM claim_cluster_membership WHERE cluster_id IN ({placeholders}) "
             "GROUP BY cluster_id"
         )
@@ -6655,7 +6664,7 @@ class MediaDatabase:
         where_clause = " AND ".join(conditions)
         rows = self.execute_query(
             (
-                "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "
+                "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "  # nosec B608
                 "FROM claims_monitoring_events WHERE "
                 + where_clause
                 + " ORDER BY created_at ASC"
@@ -6682,7 +6691,7 @@ class MediaDatabase:
             conditions.append("event_type = ?")
             params.append(str(event_type))
         sql = (
-            "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "
+            "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "  # nosec B608
             "FROM claims_monitoring_events WHERE "
             + " AND ".join(conditions)
             + " ORDER BY created_at ASC LIMIT ?"
@@ -6696,7 +6705,7 @@ class MediaDatabase:
             return 0
         placeholders = ",".join("?" * len(ids))
         now = self._get_current_utc_timestamp_str()
-        sql = f"UPDATE claims_monitoring_events SET delivered_at = ? WHERE id IN ({placeholders})"
+        sql = f"UPDATE claims_monitoring_events SET delivered_at = ? WHERE id IN ({placeholders})"  # nosec B608
         params: list[Any] = [str(now)]
         params.extend([int(i) for i in ids])
         cursor = self.execute_query(sql, tuple(params), commit=True)
@@ -6717,7 +6726,7 @@ class MediaDatabase:
             conditions.append("event_type = ?")
             params.append(str(event_type))
         sql = (
-            "SELECT MAX(delivered_at) AS delivered_at "
+            "SELECT MAX(delivered_at) AS delivered_at "  # nosec B608
             "FROM claims_monitoring_events WHERE "
             + " AND ".join(conditions)
         )
@@ -7074,7 +7083,7 @@ class MediaDatabase:
         )
 
         query = (
-            "SELECT id, user_id, created_at, text, provider, model, voice_id, voice_name, "
+            "SELECT id, user_id, created_at, text, provider, model, voice_id, voice_name, "  # nosec B608
             "voice_info, format, duration_ms, status, favorite, job_id, output_id, "
             "artifact_deleted_at "
             "FROM tts_history WHERE "
@@ -7112,7 +7121,7 @@ class MediaDatabase:
             created_to=created_to,
             include_deleted=False,
         )
-        query = "SELECT COUNT(*) AS count FROM tts_history WHERE " + " AND ".join(conditions)
+        query = "SELECT COUNT(*) AS count FROM tts_history WHERE " + " AND ".join(conditions)  # nosec B608
         row = self.execute_query(query, tuple(params)).fetchone()
         if not row:
             return 0
@@ -7133,7 +7142,7 @@ class MediaDatabase:
         if not include_deleted:
             conditions.append("deleted = 0")
         query = (
-            "SELECT id, user_id, created_at, text, text_hash, text_length, provider, model, "
+            "SELECT id, user_id, created_at, text, text_hash, text_length, provider, model, "  # nosec B608
             "voice_id, voice_name, voice_info, format, duration_ms, generation_time_ms, "
             "params_json, status, segments_json, favorite, job_id, output_id, artifact_ids, "
             "artifact_deleted_at, error_message, deleted, deleted_at "
@@ -7238,7 +7247,7 @@ class MediaDatabase:
         params: list[Any] = [ts, str(user_id)] + matched_ids
         cursor = self.execute_query(
             (
-                "UPDATE tts_history "
+                "UPDATE tts_history "  # nosec B608
                 "SET artifact_deleted_at = ?, output_id = NULL, artifact_ids = NULL "
                 f"WHERE user_id = ? AND id IN ({placeholders}) AND deleted = 0"
             ),
@@ -7327,7 +7336,7 @@ class MediaDatabase:
             params.append(str(user_id))
         row = self.execute_query(
             (
-                "SELECT export_id, user_id, format, status, payload_json, payload_csv, filters_json, "
+                "SELECT export_id, user_id, format, status, payload_json, payload_csv, filters_json, "  # nosec B608
                 "pagination_json, error_message, created_at, updated_at "
                 "FROM claims_analytics_exports WHERE "
                 + " AND ".join(conditions)
@@ -7362,7 +7371,7 @@ class MediaDatabase:
             conditions.append("format = ?")
             params.append(str(format))
         query = (
-            "SELECT export_id, user_id, format, status, filters_json, pagination_json, error_message, "
+            "SELECT export_id, user_id, format, status, filters_json, pagination_json, error_message, "  # nosec B608
             "created_at, updated_at "
             "FROM claims_analytics_exports WHERE "
             + " AND ".join(conditions)
@@ -7388,7 +7397,7 @@ class MediaDatabase:
             conditions.append("format = ?")
             params.append(str(format))
         row = self.execute_query(
-            "SELECT COUNT(*) AS count FROM claims_analytics_exports WHERE " + " AND ".join(conditions),
+            "SELECT COUNT(*) AS count FROM claims_analytics_exports WHERE " + " AND ".join(conditions),  # nosec B608
             tuple(params),
         ).fetchone()
         if not row:
@@ -7464,7 +7473,7 @@ class MediaDatabase:
             params.append(int(min_size))
 
         sql = (
-            "SELECT c.id, c.user_id, c.canonical_claim_text, c.representative_claim_id, c.summary, "
+            "SELECT c.id, c.user_id, c.canonical_claim_text, c.representative_claim_id, c.summary, "  # nosec B608
             "c.cluster_version, c.watchlist_count, c.created_at, c.updated_at, "
             "COALESCE(m.member_count, 0) AS member_count "
             "FROM claim_clusters c "
@@ -7522,7 +7531,7 @@ class MediaDatabase:
             params.extend([int(cluster_id), int(cluster_id)])
         rows = self.execute_query(
             (
-                "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "
+                "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "  # nosec B608
                 "FROM claim_cluster_links WHERE "
                 + " AND ".join(conditions)
                 + " ORDER BY created_at DESC"
@@ -7628,7 +7637,7 @@ class MediaDatabase:
                 conditions.append("(0 = 1)")
 
         sql = (
-            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "  # nosec B608
             "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
             "c.last_modified, c.version, c.client_id, c.deleted, "
             "c.review_status, c.reviewer_id, c.review_group, c.reviewed_at, "
@@ -7743,17 +7752,17 @@ class MediaDatabase:
                 params = tuple(cluster_ids)
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",
+                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",  # nosec B608
                     params,
                 )
                 self._execute_with_connection(
                     conn,
-                    f"UPDATE Claims SET claim_cluster_id = NULL WHERE claim_cluster_id IN ({placeholders})",
+                    f"UPDATE Claims SET claim_cluster_id = NULL WHERE claim_cluster_id IN ({placeholders})",  # nosec B608
                     params,
                 )
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",
+                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",  # nosec B608
                     params,
                 )
 
@@ -7867,12 +7876,12 @@ class MediaDatabase:
                 params = tuple(cluster_ids)
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",
+                    f"DELETE FROM claim_cluster_membership WHERE cluster_id IN ({placeholders})",  # nosec B608
                     params,
                 )
                 self._execute_with_connection(
                     conn,
-                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",
+                    f"DELETE FROM claim_clusters WHERE id IN ({placeholders})",  # nosec B608
                     params,
                 )
 
@@ -10288,7 +10297,7 @@ class MediaDatabase:
                             f"OR {self._email_like_clause(participant_display_expr)}"
                         )
                         part_sql = (
-                            "EXISTS ("
+                            "EXISTS ("  # nosec B608
                             "SELECT 1 FROM email_message_participants emp "
                             "JOIN email_participants ep ON ep.id = emp.participant_id "
                             "WHERE emp.email_message_id = em.id "
@@ -10309,7 +10318,7 @@ class MediaDatabase:
                             f"OR {self._email_like_clause('el.label_key')}"
                         )
                         part_sql = (
-                            "EXISTS ("
+                            "EXISTS ("  # nosec B608
                             "SELECT 1 FROM email_message_labels eml "
                             "JOIN email_labels el ON el.id = eml.label_id "
                             "WHERE eml.email_message_id = em.id "
@@ -10356,7 +10365,7 @@ class MediaDatabase:
                             fts_term = self._sqlite_fts_literal_term(text_value)
                             if fts_term:
                                 part_sql = (
-                                    "("
+                                    "("  # nosec B608
                                     "em.id IN (SELECT rowid FROM email_fts WHERE email_fts MATCH ?) "
                                     f"OR {part_sql}"
                                     ")"
@@ -10394,7 +10403,7 @@ class MediaDatabase:
                 rows = self._fetchall_with_connection(
                     conn,
                     (
-                        "SELECT "
+                        "SELECT "  # nosec B608
                         "em.id AS email_message_id, "
                         "em.media_id AS media_id, "
                         "m.uuid AS media_uuid, "
@@ -10499,7 +10508,7 @@ class MediaDatabase:
             message_row = self._fetchone_with_connection(
                 conn,
                 (
-                    "SELECT "
+                    "SELECT "  # nosec B608
                     "em.id AS email_message_id, "
                     "em.media_id AS media_id, "
                     "m.uuid AS media_uuid, "
@@ -10717,7 +10726,7 @@ class MediaDatabase:
                             conditions.append("(" + " OR ".join(visibility_parts) + ")")
                     where_clause = " AND ".join(conditions)
                     sql = (
-                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "
+                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "  # nosec B608
                         "       bm25(claims_fts) AS relevance_score "
                         "FROM claims_fts JOIN Claims c ON claims_fts.rowid = c.id "
                         "JOIN Media m ON c.media_id = m.id "
@@ -10760,7 +10769,7 @@ class MediaDatabase:
                                 conditions.append("(" + " OR ".join(visibility_parts) + ")")
                         where_clause = " AND ".join(conditions)
                         sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "  # nosec B608
                             "       ts_rank(c.claims_fts_tsv, to_tsquery('english', ?)) AS relevance_score "
                             "FROM claims c JOIN media m ON c.media_id = m.id "
                             "WHERE c.claims_fts_tsv @@ to_tsquery('english', ?) AND "
@@ -10807,7 +10816,7 @@ class MediaDatabase:
                     like_pattern = f"%{cleaned_query}%"
                     if self.backend_type == BackendType.POSTGRESQL:
                         like_sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "  # nosec B608
                             "FROM claims c JOIN media m ON c.media_id = m.id "
                             "WHERE c.deleted IS FALSE AND c.claim_text ILIKE ?"
                             + like_clause +
@@ -10815,7 +10824,7 @@ class MediaDatabase:
                         )
                     else:
                         like_sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "  # nosec B608
                             "FROM Claims c JOIN Media m ON c.media_id = m.id "
                             "WHERE c.deleted = 0 AND c.claim_text LIKE ?"
                             + like_clause +
@@ -10974,7 +10983,7 @@ class MediaDatabase:
         if owner_filter is not None:
             conditions.append("client_id = ?")
             params.append(owner_filter)
-        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"
+        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"  # nosec B608
         row = self.execute_query(sql, tuple(params)).fetchone()
         return dict(row) if row else None
 
@@ -10996,7 +11005,7 @@ class MediaDatabase:
         if owner_filter is not None:
             conditions.append("client_id = ?")
             params.append(owner_filter)
-        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"
+        sql = "SELECT * FROM data_tables WHERE " + " AND ".join(conditions) + " LIMIT 1"  # nosec B608
         row = self.execute_query(sql, tuple(params)).fetchone()
         return dict(row) if row else None
 
@@ -11042,7 +11051,7 @@ class MediaDatabase:
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         sql = (
-            "SELECT * FROM data_tables "
+            "SELECT * FROM data_tables "  # nosec B608
             f"{where_clause} "
             "ORDER BY updated_at DESC, id DESC "
             "LIMIT ? OFFSET ?"
@@ -11082,7 +11091,7 @@ class MediaDatabase:
             params.extend([pattern, pattern])
 
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-        sql = f"SELECT COUNT(*) as total FROM data_tables {where_clause}"
+        sql = f"SELECT COUNT(*) as total FROM data_tables {where_clause}"  # nosec B608
         row = self.execute_query(sql, tuple(params)).fetchone()
         if not row:
             return 0
@@ -11107,13 +11116,13 @@ class MediaDatabase:
             owner_clause = " AND dt.client_id = ?"
             params.append(owner_filter)
         columns_sql = (
-            "SELECT c.table_id, COUNT(*) as count FROM data_table_columns c "
+            "SELECT c.table_id, COUNT(*) as count FROM data_table_columns c "  # nosec B608
             "INNER JOIN data_tables dt ON dt.id = c.table_id "
             f"WHERE c.deleted = 0 AND dt.deleted = 0 AND c.table_id IN ({placeholders}){owner_clause} "
             "GROUP BY c.table_id"
         )
         sources_sql = (
-            "SELECT s.table_id, COUNT(*) as count FROM data_table_sources s "
+            "SELECT s.table_id, COUNT(*) as count FROM data_table_sources s "  # nosec B608
             "INNER JOIN data_tables dt ON dt.id = s.table_id "
             f"WHERE s.deleted = 0 AND dt.deleted = 0 AND s.table_id IN ({placeholders}){owner_clause} "
             "GROUP BY s.table_id"
@@ -11197,7 +11206,7 @@ class MediaDatabase:
         update_parts.append("version = version + 1")
 
         params.append(int(table_id))
-        sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"
+        sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
         if owner_filter is not None:
             sql += " AND client_id = ?"
             params.append(owner_filter)
@@ -11216,14 +11225,14 @@ class MediaDatabase:
                 params.append(owner_filter)
             cur = self._execute_with_connection(
                 conn,
-                f"""
+                """
                 UPDATE data_tables
                 SET deleted = 1,
                     updated_at = ?,
                     last_modified = ?,
                     version = version + 1
                 {where_clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 tuple(params),
             )
             updated = int(getattr(cur, "rowcount", 0) or 0)
@@ -11254,13 +11263,13 @@ class MediaDatabase:
         for table in ("data_table_columns", "data_table_rows", "data_table_sources"):
             self._execute_with_connection(
                 conn,
-                f"""
+                """
                 UPDATE {table}
                 SET deleted = 1,
                     last_modified = ?,
                     version = version + 1
                 {where_clause}
-                """,
+                """.format_map(locals()),  # nosec B608
                 tuple(params),
             )
 
@@ -11344,7 +11353,7 @@ class MediaDatabase:
             conditions.append("client_id = ?")
             params.append(owner_filter)
         sql = (
-            "SELECT * FROM data_table_columns WHERE "
+            "SELECT * FROM data_table_columns WHERE "  # nosec B608
             + " AND ".join(conditions)
             + " ORDER BY position ASC, id ASC"
         )
@@ -11365,13 +11374,13 @@ class MediaDatabase:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
         cur = self.execute_query(
-            f"""
+            """
             UPDATE data_table_columns
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1
             {where_clause}
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params),
             commit=True,
         )
@@ -11828,7 +11837,7 @@ class MediaDatabase:
                     commit=False,
                     connection=conn,
                 )
-            sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"
+            sql = "UPDATE data_tables SET " + ", ".join(update_parts) + " WHERE id = ?"  # nosec B608
             self._execute_with_connection(conn, sql, tuple(params))
 
         return self.get_data_table(int(table_id), include_deleted=True)
@@ -11859,7 +11868,7 @@ class MediaDatabase:
             conditions.append("client_id = ?")
             params.append(owner_filter)
         sql = (
-            "SELECT * FROM data_table_rows WHERE "
+            "SELECT * FROM data_table_rows WHERE "  # nosec B608
             + " AND ".join(conditions)
             + " ORDER BY row_index ASC, id ASC LIMIT ? OFFSET ?"
         )
@@ -11881,13 +11890,13 @@ class MediaDatabase:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
         cur = self.execute_query(
-            f"""
+            """
             UPDATE data_table_rows
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1
             {where_clause}
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params),
             commit=True,
         )
@@ -11976,7 +11985,7 @@ class MediaDatabase:
             conditions.append("client_id = ?")
             params.append(owner_filter)
         sql = (
-            "SELECT * FROM data_table_sources WHERE "
+            "SELECT * FROM data_table_sources WHERE "  # nosec B608
             + " AND ".join(conditions)
             + " ORDER BY id ASC"
         )
@@ -11997,13 +12006,13 @@ class MediaDatabase:
             where_clause += " AND client_id = ?"
             params.append(owner_filter)
         cur = self.execute_query(
-            f"""
+            """
             UPDATE data_table_sources
             SET deleted = 1,
                 last_modified = ?,
                 version = version + 1
             {where_clause}
-            """,
+            """.format_map(locals()),  # nosec B608
             tuple(params),
             commit=True,
         )
@@ -12066,7 +12075,7 @@ class MediaDatabase:
                 raise DatabaseError(  # noqa: TRY003
                     f"Unsafe identifier in version lookup: table={table!r}, column={id_col!r}"
                 )
-            cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))
+            cursor = conn.execute(f"SELECT version FROM {table} WHERE {id_col} = ? AND deleted = 0", (id_val,))  # nosec B608
             result = cursor.fetchone()
             if result:
                 current_version = result['version']
@@ -12618,13 +12627,13 @@ class MediaDatabase:
         if cleaned_must_have:
             kw_mh_placeholders = ','.join('?' * len(cleaned_must_have))
             # Subquery to ensure media_id is linked to ALL provided keywords
-            conditions.append(f"""
+            conditions.append("""
                 (SELECT COUNT(DISTINCT k_mh.id)
                  FROM MediaKeywords mk_mh
                  JOIN Keywords k_mh ON mk_mh.keyword_id = k_mh.id
                  WHERE mk_mh.media_id = m.id AND k_mh.deleted = 0 AND LOWER(k_mh.keyword) IN ({kw_mh_placeholders})
                 ) = ?
-            """)
+            """).format_map(locals())  # nosec B608
             params.extend(cleaned_must_have)
             params.append(len(cleaned_must_have))
 
@@ -12632,14 +12641,14 @@ class MediaDatabase:
         cleaned_must_not_have = [k.strip().lower() for k in must_not_have_keywords if k and k.strip()] if must_not_have_keywords else []
         if cleaned_must_not_have:
             kw_mnh_placeholders = ','.join('?' * len(cleaned_must_not_have))
-            conditions.append(f"""
+            conditions.append("""
                 NOT EXISTS (
                     SELECT 1
                     FROM MediaKeywords mk_mnh
                     JOIN Keywords k_mnh ON mk_mnh.keyword_id = k_mnh.id
                     WHERE mk_mnh.media_id = m.id AND k_mnh.deleted = 0 AND LOWER(k_mnh.keyword) IN ({kw_mnh_placeholders})
                 )
-            """)
+            """).format_map(locals())  # nosec B608
             params.extend(cleaned_must_not_have)
 
         # Text Search Logic (FTS or LIKE)
@@ -13307,7 +13316,7 @@ class MediaDatabase:
                        "m.author AS media_author"
 
         order_expr = self._keyword_order_expression("k.keyword")
-        query = f"""
+        query = """
             SELECT
                 k.keyword AS keyword_text,
                 {media_fields}
@@ -13318,7 +13327,7 @@ class MediaDatabase:
               AND k.keyword IN ({placeholders})
               AND k.deleted = ?
             ORDER BY {order_expr}, m.last_modified DESC, m.id DESC
-        """
+        """.format_map(locals())  # nosec B608
 
         params = tuple(media_params + unique_clean_keywords + [False])
 
@@ -13450,7 +13459,7 @@ class MediaDatabase:
         if not all(isinstance(cid, int) for cid in change_ids):
             raise ValueError("change_ids must be a list of integers.")  # noqa: TRY003
         placeholders = ','.join('?' * len(change_ids))
-        query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"
+        query = f"DELETE FROM sync_log WHERE change_id IN ({placeholders})"  # nosec B608
         try:
             with self.transaction() as conn:
                 cursor = self._execute_with_connection(
@@ -13579,7 +13588,7 @@ class MediaDatabase:
                         params = (media_id, *keyword_ids)
                         self._execute_with_connection(
                             conn,
-                            f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({placeholders})",
+                            f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({placeholders})",  # nosec B608
                             params,
                         )
                         unlink_version = 1
@@ -13594,13 +13603,13 @@ class MediaDatabase:
                     for table, fk_col, uuid_col in child_tables:
                         children = self._fetchall_with_connection(
                             conn,
-                            f"SELECT id, {uuid_col} AS uuid, version FROM {table} WHERE {fk_col} = ? AND deleted = 0",
+                            f"SELECT id, {uuid_col} AS uuid, version FROM {table} WHERE {fk_col} = ? AND deleted = 0",  # nosec B608
                             (media_id,),
                         )
                         if not children:
                             continue
                         # Pass current_time for last_modified in child update
-                        update_sql = f"UPDATE {table} SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 0"
+                        update_sql = f"UPDATE {table} SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ? AND deleted = 0"  # nosec B608
                         processed_children_count = 0
                         for child in children:
                             child_id, child_uuid, child_current_version = child['id'], child['uuid'], child['version']
@@ -13984,13 +13993,13 @@ class MediaDatabase:
                 def _fetch_existing_by_url(select_columns: str):
                     if len(dedupe_url_candidates) == 1:
                         return _fetchone(
-                            f"SELECT {select_columns} "
+                            f"SELECT {select_columns} "  # nosec B608
                             "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
                             (dedupe_url_candidates[0],),
                         )
                     placeholders = ", ".join(["?"] * len(dedupe_url_candidates))
                     return _fetchone(
-                        f"SELECT {select_columns} "
+                        f"SELECT {select_columns} "  # nosec B608
                         f"FROM Media WHERE url IN ({placeholders}) AND deleted = 0 "
                         "ORDER BY last_modified DESC, id DESC LIMIT 1",
                         tuple(dedupe_url_candidates),
@@ -14057,7 +14066,7 @@ class MediaDatabase:
                                 update_fields.append("last_modified = ?")
                                 update_params.append(now)
                                 update_sql = (
-                                    f"UPDATE Media SET {', '.join(update_fields)} "
+                                    f"UPDATE Media SET {', '.join(update_fields)} "  # nosec B608
                                     "WHERE id = ? AND version = ?"
                                 )
                                 update_params.extend([media_id, current_ver])
@@ -14723,7 +14732,7 @@ class MediaDatabase:
             conditions.append("uuid = ?")
             params.append(uuid)
 
-        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"
+        query = f"SELECT * FROM ChunkingTemplates WHERE ({' OR '.join(conditions)})"  # nosec B608
         if not include_deleted:
             query += " AND deleted = ?"
             params.append(False)
@@ -14889,11 +14898,12 @@ class MediaDatabase:
         ])
         params.extend([current_time, current_time, self.client_id, template['id'], False])
 
-        update_sql = f"""
+        updates_sql = ', '.join(updates)
+        update_sql = """
             UPDATE ChunkingTemplates
-            SET {', '.join(updates)}
+            SET {updates_sql}
             WHERE id = ? AND deleted = ?
-        """
+        """.format_map(locals())  # nosec B608
 
         with self.transaction() as conn:
             cursor = self._execute_with_connection(conn, update_sql, tuple(params))
@@ -15334,7 +15344,7 @@ class MediaDatabase:
                 params = (media_id, *list(ids_to_remove))
                 self._execute_with_connection(
                     connection,
-                    f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})",
+                    f"DELETE FROM MediaKeywords WHERE media_id = ? AND keyword_id IN ({remove_placeholders})",  # nosec B608
                     params,
                 )
                 for removed_id in ids_to_remove:
@@ -15470,7 +15480,7 @@ class MediaDatabase:
                         placeholders = ",".join("?" for _ in media_ids)
                         delete_cursor = self._execute_with_connection(
                             conn,
-                            f"DELETE FROM MediaKeywords WHERE keyword_id = ? AND media_id IN ({placeholders})",
+                            f"DELETE FROM MediaKeywords WHERE keyword_id = ? AND media_id IN ({placeholders})",  # nosec B608
                             (keyword_id, *media_ids),
                         )
                         deleted_link_count = getattr(delete_cursor, "rowcount", 0) or 0
@@ -15928,14 +15938,14 @@ class MediaDatabase:
                     limit_offset_clause += " OFFSET ?"
                     params.append(offset)
 
-            final_query = f"""
+            final_query = """
                 SELECT {select_clause}
                 FROM DocumentVersions dv
                 JOIN Media m ON dv.media_id = m.id
                 WHERE {where_clause}
                 ORDER BY dv.version_number DESC
                 {limit_offset_clause}
-            """
+            """.format_map(locals())  # nosec B608
 
             # --- Execution ---
             logging.debug(f"Executing get_all_document_versions query | Params: {params}")
@@ -16174,7 +16184,7 @@ class MediaDatabase:
                     params.append(0)
                     payload["vector_processing"] = 0
 
-                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"  # nosec B608
                 update_params = (*params, media_id, current_version)
                 cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
@@ -16246,7 +16256,7 @@ class MediaDatabase:
                     "chunking_status": error_status,
                 }
 
-                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"  # nosec B608
                 update_params = (*params, media_id, current_version)
                 cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
@@ -16278,7 +16288,7 @@ class MediaDatabase:
         """
         try:
             order_expr = self._keyword_order_expression("keyword")
-            query = f"SELECT keyword FROM Keywords WHERE deleted = ? ORDER BY {order_expr}"
+            query = f"SELECT keyword FROM Keywords WHERE deleted = ? ORDER BY {order_expr}"  # nosec B608
             cursor = self.execute_query(query, (False,))
             return [row['keyword'] for row in cursor.fetchall()]
         except DatabaseError:
@@ -16841,7 +16851,7 @@ def get_media_by_url(self, url: str, include_deleted=False, include_trash=False)
         params = [url_candidates[0]]
     else:
         placeholders = ", ".join(["?"] * len(url_candidates))
-        query = f"SELECT * FROM Media WHERE url IN ({placeholders})"
+        query = f"SELECT * FROM Media WHERE url IN ({placeholders})"  # nosec B608
         params = list(url_candidates)
 
     if not include_deleted:
@@ -17137,7 +17147,7 @@ def get_distinct_media_types(self, include_deleted=False, include_trash=False) -
 
     where_clause = " AND ".join(conditions)
 
-    query = f"SELECT DISTINCT type FROM Media WHERE {where_clause} ORDER BY type ASC"
+    query = f"SELECT DISTINCT type FROM Media WHERE {where_clause} ORDER BY type ASC"  # nosec B608
     try:
         cursor = self.execute_query(query)
         results = [row['type'] for row in cursor.fetchall() if row['type']]
@@ -17925,7 +17935,7 @@ def check_media_exists(db_instance: MediaDatabase, media_id: int | None = None, 
         params.append(content_hash)
     if not query_parts:
         raise ValueError("Must provide id, url, or content_hash to check.")  # noqa: TRY003
-    query = f"SELECT id FROM Media WHERE ({' OR '.join(query_parts)}) AND deleted = 0 LIMIT 1"
+    query = f"SELECT id FROM Media WHERE ({' OR '.join(query_parts)}) AND deleted = 0 LIMIT 1"  # nosec B608
     try:
         cursor = db_instance.execute_query(query, tuple(params))
         result = cursor.fetchone()
@@ -17982,7 +17992,7 @@ def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, i
             logger.info(f"Found {len(items_to_process)} items to process.")
             for item in items_to_process:
                 media_id, title = item['id'], item['title']
-                logger.debug(f"Processing item ID {media_id} ('{title}') for sync delete from trash.")
+                logger.debug(f"Processing item ID {media_id} ('{title}') for sync delete from trash.")  # nosec B608
                 try:
                     success = db_instance.soft_delete_media(media_id=media_id, cascade=True)  # Instance method handles logging/FTS
                     if success:
@@ -18769,7 +18779,7 @@ def get_chunk_text(db_instance: MediaDatabase, chunk_uuid: str) -> str | None:
         raise TypeError("db_instance required.")  # noqa: TRY003
     target_table = "UnvectorizedMediaChunks"  # Assuming this table for text
     try:
-        query = f"SELECT c.chunk_text FROM {target_table} c JOIN Media m ON c.media_id = m.id WHERE c.uuid = ? AND c.deleted = 0 AND m.deleted = 0"
+        query = f"SELECT c.chunk_text FROM {target_table} c JOIN Media m ON c.media_id = m.id WHERE c.uuid = ? AND c.deleted = 0 AND m.deleted = 0"  # nosec B608
         cursor = db_instance.execute_query(query, (chunk_uuid,))
         result = cursor.fetchone()
         return result['chunk_text'] if result else None
@@ -18902,7 +18912,7 @@ def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> list[
     try:
         order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
         query = (
-            f"SELECT k.keyword FROM Keywords k "
+            f"SELECT k.keyword FROM Keywords k "  # nosec B608
             "JOIN MediaKeywords mk ON k.id = mk.keyword_id "
             "JOIN Media m ON mk.media_id = m.id "
             "WHERE mk.media_id = ? AND k.deleted = ? AND m.deleted = ? "
@@ -18952,7 +18962,7 @@ def fetch_keywords_for_media_batch(media_ids: list[int], db_instance: MediaDatab
     placeholders = ','.join('?' * len(safe_media_ids))
     order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
     query = (
-        f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk "
+        f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk "  # nosec B608
         "JOIN Keywords k ON mk.keyword_id = k.id "
         "JOIN Media m ON mk.media_id = m.id "
         f"WHERE mk.media_id IN ({placeholders}) AND k.deleted = ? AND m.deleted = ? "

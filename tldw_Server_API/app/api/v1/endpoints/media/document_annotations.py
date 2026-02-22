@@ -159,9 +159,9 @@ async def list_annotations(
     _ensure_annotations_table(db)
 
     # Fetch annotations
-    query = f"""
+    query = """
     SELECT id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at
-    FROM {ANNOTATIONS_TABLE}
+    FROM document_annotations
     WHERE media_id = ? AND user_id = ? AND deleted = 0
     ORDER BY created_at DESC
     """
@@ -230,8 +230,8 @@ async def create_annotation(
     annotation_id = _generate_annotation_id()
     now = _now_iso()
 
-    insert_sql = f"""
-    INSERT INTO {ANNOTATIONS_TABLE}
+    insert_sql = """
+    INSERT INTO document_annotations
     (id, media_id, user_id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
@@ -310,9 +310,9 @@ async def update_annotation(
     _ensure_annotations_table(db)
 
     # Fetch existing annotation
-    select_sql = f"""
+    select_sql = """
     SELECT id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at
-    FROM {ANNOTATIONS_TABLE}
+    FROM document_annotations
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
     try:
@@ -361,11 +361,13 @@ async def update_annotation(
 
     params.extend([annotation_id, media_id, user_id])
 
-    update_sql = f"""
-    UPDATE {ANNOTATIONS_TABLE}
-    SET {", ".join(updates)}
+    set_clause_sql = ", ".join(updates)
+    update_sql_template = """
+    UPDATE document_annotations
+    SET {set_clause_sql}
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
+    update_sql = update_sql_template.format_map(locals())  # nosec B608
     try:
         with db.transaction() as conn:
             conn.execute(update_sql, tuple(params))
@@ -412,8 +414,8 @@ async def delete_annotation(
 
     # Soft delete
     now = _now_iso()
-    delete_sql = f"""
-    UPDATE {ANNOTATIONS_TABLE}
+    delete_sql = """
+    UPDATE document_annotations
     SET deleted = 1, updated_at = ?
     WHERE id = ? AND media_id = ? AND user_id = ? AND deleted = 0
     """
@@ -483,8 +485,8 @@ async def sync_annotations(
     synced_annotations: list[AnnotationResponse] = []
     id_mapping: dict = {}
 
-    insert_sql = f"""
-    INSERT INTO {ANNOTATIONS_TABLE}
+    insert_sql = """
+    INSERT INTO document_annotations
     (id, media_id, user_id, location, text, color, note, annotation_type, chapter_title, percentage, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """

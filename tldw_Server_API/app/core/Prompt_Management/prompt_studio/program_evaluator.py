@@ -474,6 +474,6 @@ class ProgramEvaluator:
                 return False
         try:
             env = {k: names.get(k) for k in names}
-            return bool(eval(compile(tree, "<constraint>", "eval"), {"__builtins__": {}}, env))
+            return bool(eval(compile(tree, "<constraint>", "eval"), {"__builtins__": {}}, env))  # nosec B307
         except Exception:
             return False

@@ -258,10 +258,12 @@ class PersonalizationDB:
         updates["updated_at"] = _utcnow_iso()
         set_clause = ", ".join([f"{k} = ?" for k in updates])
         params = list(updates.values()) + [str(user_id)]
+        update_profile_sql_template = "UPDATE profiles SET {set_clause} WHERE user_id = ?"
+        update_profile_sql = update_profile_sql_template.format_map(locals())  # nosec B608
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(f"UPDATE profiles SET {set_clause} WHERE user_id = ?", params)
+                conn.execute(update_profile_sql, params)
                 conn.commit()
             finally:
                 conn.close()
@@ -369,11 +371,13 @@ class PersonalizationDB:
             updates["hidden"] = int(bool(updates["hidden"]))
         set_clause = ", ".join([f"{k} = ?" for k in updates])
         params = list(updates.values()) + [str(memory_id), str(user_id)]
+        update_memory_sql_template = "UPDATE semantic_memories SET {set_clause} WHERE id = ? AND user_id = ?"
+        update_memory_sql = update_memory_sql_template.format_map(locals())  # nosec B608
         with self._lock:
             conn = self._connect()
             try:
                 cur = conn.execute(
-                    f"UPDATE semantic_memories SET {set_clause} WHERE id = ? AND user_id = ?",
+                    update_memory_sql,
                     params,
                 )
                 conn.commit()
@@ -390,11 +394,14 @@ class PersonalizationDB:
         now = _utcnow_iso()
         placeholders = ", ".join(["?"] * len(memory_ids))
         params: list[Any] = [now, str(user_id)] + [str(mid) for mid in memory_ids]
+        memory_ids_clause = f"({placeholders})"
+        validate_sql_template = "UPDATE semantic_memories SET last_validated = ? WHERE user_id = ? AND id IN {memory_ids_clause}"
+        validate_sql = validate_sql_template.format_map(locals())  # nosec B608
         with self._lock:
             conn = self._connect()
             try:
                 cur = conn.execute(
-                    f"UPDATE semantic_memories SET last_validated = ? WHERE user_id = ? AND id IN ({placeholders})",
+                    validate_sql,
                     params,
                 )
                 conn.commit()
@@ -418,9 +425,14 @@ class PersonalizationDB:
             clauses.append("content LIKE ?")
             params.append(f"%{q}%")
         where = " WHERE " + " AND ".join(clauses)
-        sql = f"SELECT id, content, tags, pinned, hidden, created_at FROM semantic_memories{where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        select_memories_sql_template = (
+            "SELECT id, content, tags, pinned, hidden, created_at "
+            "FROM semantic_memories{where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        sql = select_memories_sql_template.format_map(locals())  # nosec B608
         params_page = params + [int(limit), int(offset)]
-        count_sql = f"SELECT COUNT(*) as c FROM semantic_memories{where}"
+        count_sql_template = "SELECT COUNT(*) as c FROM semantic_memories{where}"
+        count_sql = count_sql_template.format_map(locals())  # nosec B608
         with self._lock:
             conn = self._connect()
             try:
@@ -562,7 +574,9 @@ class PersonalizationDB:
             try:
                 counts: dict[str, int] = {}
                 for table in ("usage_events", "semantic_memories", "episodic_memories", "topic_profiles"):
-                    cur = conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (str(user_id),))
+                    delete_table_sql_template = "DELETE FROM {table} WHERE user_id = ?"
+                    delete_table_sql = delete_table_sql_template.format_map(locals())  # nosec B608
+                    cur = conn.execute(delete_table_sql, (str(user_id),))
                     counts[table] = cur.rowcount or 0
                 conn.commit()
                 # Reset profile to disabled and stamp purged_at

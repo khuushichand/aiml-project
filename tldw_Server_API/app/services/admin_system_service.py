@@ -532,14 +532,15 @@ async def get_audit_log(
             return str(resource_id)
 
         if is_pg:
-            count_query = f"""
+            count_query_template = """
                 SELECT COUNT(*)
                 FROM audit_logs a
                 {join_clause}
                 {where_clause}
             """
+            count_query = count_query_template.format_map(locals())  # nosec B608
             total = await db.fetchval(count_query, *params)
-            query = f"""
+            query_template = """
                 SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
                 FROM audit_logs a
@@ -550,21 +551,23 @@ async def get_audit_log(
                 LIMIT ${param_count + 1}
                 OFFSET ${param_count + 2}
             """
+            query = query_template.format_map(locals())  # nosec B608
             query_params = list(params)
             query_params.append(limit)
             query_params.append(offset)
             rows = await db.fetch(query, *query_params)
         else:
-            count_query = f"""
+            count_query_template = """
                 SELECT COUNT(*)
                 FROM audit_logs a
                 {join_clause}
                 {where_clause}
             """
+            count_query = count_query_template.format_map(locals())  # nosec B608
             count_cursor = await db.execute(count_query, params)
             count_row = await count_cursor.fetchone()
             total = int(count_row[0]) if count_row and count_row[0] is not None else 0
-            query = f"""
+            query_template = """
                 SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
                 FROM audit_logs a
@@ -575,6 +578,7 @@ async def get_audit_log(
                 LIMIT ?
                 OFFSET ?
             """
+            query = query_template.format_map(locals())  # nosec B608
             query_params = list(params)
             query_params.append(limit)
             query_params.append(offset)

@@ -62,9 +62,9 @@ def main():
             # Batch copy
             where = f"WHERE {args.source_where}" if args.source_where else ""
             print('Starting batch copy...')
-            cur.execute(f"SELECT COUNT(1) FROM \"{args.table}\" {where}")
+            cur.execute(f"SELECT COUNT(1) FROM \"{args.table}\" {where}")  # nosec B608
             total = cur.fetchone()[0]
-            cur.execute(f"DECLARE cur_copy NO SCROLL CURSOR FOR SELECT id, content, metadata, embedding FROM \"{args.table}\" {where}")
+            cur.execute(f"DECLARE cur_copy NO SCROLL CURSOR FOR SELECT id, content, metadata, embedding FROM \"{args.table}\" {where}")  # nosec B608
             copied = 0
             while True:
                 cur.execute(f"FETCH FORWARD {args.batch} FROM cur_copy")
@@ -73,7 +73,7 @@ def main():
                     break
                 args_list = rows
                 cur.executemany(
-                    f"INSERT INTO \"{args.new_table}\" (id, content, metadata, embedding) VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING",
+                    f"INSERT INTO \"{args.new_table}\" (id, content, metadata, embedding) VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING",  # nosec B608
                     args_list
                 )
                 conn.commit()

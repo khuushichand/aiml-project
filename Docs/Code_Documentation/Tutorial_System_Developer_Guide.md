@@ -9,6 +9,7 @@ The Tutorial System provides contextual, page-specific guided tours using React 
 - **Per-page tutorials**: Each page can have multiple tutorials covering different aspects
 - **First-visit prompts**: Automatic notification for new users on pages with tutorials
 - **Help modal**: Unified modal (triggered by `?` key) showing available tutorials and keyboard shortcuts
+- **Quick Chat integration**: `Browse Guides` includes `Tutorials for this page` above curated workflow cards
 - **Completion tracking**: Persistent storage of tutorial completion status
 - **i18n support**: All tutorial content supports internationalization
 
@@ -20,6 +21,7 @@ flowchart TB
         PageHelpModal["PageHelpModal<br/>(? key trigger)"]
         TutorialRunner["TutorialRunner<br/>(Joyride wrapper)"]
         TutorialPrompt["TutorialPrompt<br/>(First-visit notification)"]
+        QuickChatGuidesPanel["QuickChatGuidesPanel<br/>(Browse Guides: per-page tutorials)"]
     end
 
     subgraph Registry["tutorials/"]
@@ -40,7 +42,9 @@ flowchart TB
     end
 
     PageHelpModal -->|"getTutorialsForRoute()"| TutorialRegistry
+    QuickChatGuidesPanel -->|"getTutorialsForRoute()"| TutorialRegistry
     PageHelpModal -->|"startTutorial()"| TutorialStore
+    QuickChatGuidesPanel -->|"startTutorial()"| TutorialStore
     TutorialRunner -->|"getTutorialById()"| TutorialRegistry
     TutorialRunner -->|"read active state"| TutorialStore
     TutorialPrompt -->|"getPrimaryTutorialForRoute()"| TutorialRegistry
@@ -61,9 +65,11 @@ flowchart TB
 | `src/tutorials/index.ts` | Public exports for the tutorials module |
 | `src/store/tutorials.ts` | Zustand store for state management |
 | `src/components/Common/PageHelpModal.tsx` | Help modal UI (tutorials + shortcuts) |
+| `src/components/Common/QuickChatHelper/QuickChatGuidesPanel.tsx` | Browse Guides UI with per-page Tutorials section |
 | `src/components/Common/TutorialRunner.tsx` | React Joyride wrapper |
 | `src/components/Common/TutorialPrompt.tsx` | First-visit notification toast |
 | `src/assets/locale/en/tutorials.json` | i18n strings for tutorials |
+| `src/public/_locales/en/tutorials.json` | Extension locale mirror for tutorial strings |
 
 ## Core Components
 
@@ -73,7 +79,7 @@ The registry is the single source of truth for all tutorial definitions. It prov
 
 - **Type definitions**: `TutorialStep` and `TutorialDefinition` interfaces
 - **Central registry**: `TUTORIAL_REGISTRY` array of all tutorials
-- **Helper functions**: Route matching and tutorial lookup
+- **Helper functions**: Route matching, route normalization, and tutorial lookup
 
 ```typescript
 // Types
@@ -150,6 +156,24 @@ Shows a toast notification on first visit to pages with tutorials:
 - Persists "seen" state to avoid repeated prompts
 - Uses Ant Design notification API
 
+### 6. QuickChatGuidesPanel (`components/Common/QuickChatHelper/QuickChatGuidesPanel.tsx`)
+
+Quick Chat `Browse Guides` now surfaces tutorials on the current route:
+
+- `Tutorials for this page` is always rendered above workflow cards
+- entries show step count, completion state, and locked status (prerequisites unmet)
+- start/replay actions call tutorial store (`startTutorial`) and launch Joyride
+
+## Current P0 Tutorial Coverage
+
+| Route | Basics Tutorial ID |
+|------|---------|
+| `/chat` | `playground-basics` |
+| `/workspace-playground` | `workspace-playground-basics` |
+| `/media` | `media-basics` |
+| `/knowledge` | `knowledge-basics` |
+| `/characters` | `characters-basics` |
+
 ## Adding a New Tutorial
 
 Follow this checklist to add a tutorial for a new page:
@@ -165,7 +189,7 @@ import type { TutorialDefinition } from "../registry"
 
 const myFeatureBasics: TutorialDefinition = {
   id: "my-feature-basics",
-  routePattern: "/options/my-feature",
+  routePattern: "/my-feature",
   labelKey: "tutorials:myFeature.basics.label",
   labelFallback: "Getting Started",
   descriptionKey: "tutorials:myFeature.basics.description",
@@ -207,13 +231,22 @@ import { myFeatureTutorials } from "./definitions/my-feature"
 
 export const TUTORIAL_REGISTRY: TutorialDefinition[] = [
   ...playgroundTutorials,
+  ...workspacePlaygroundTutorials,
+  ...mediaTutorials,
+  ...knowledgeTutorials,
+  ...charactersTutorials,
   ...myFeatureTutorials  // Add here
 ]
 ```
 
 ### Step 3: Add i18n Strings
 
-Add translations to `src/assets/locale/en/tutorials.json`:
+Add translations to both locale files:
+
+- `src/assets/locale/en/tutorials.json`
+- `src/public/_locales/en/tutorials.json`
+
+Example shape:
 
 ```json
 {
@@ -256,26 +289,31 @@ export { myFeatureTutorials } from "./definitions/my-feature"
 ### Verification Checklist
 
 - [ ] Tutorial appears in Help Modal (`?` key) when on the target page
+- [ ] Tutorial appears in Quick Chat Helper -> Browse Guides -> Tutorials for this page
 - [ ] All steps have valid targets (check console for warnings)
 - [ ] i18n keys resolve correctly (no fallback text showing)
 - [ ] Tutorial completes and marks as completed
 - [ ] First-visit prompt appears for new users
 - [ ] Replay button works for completed tutorials
+- [ ] Manual QA checklist passes: `Docs/Plans/MANUAL_QA_CHECKLIST_quick_chat_tutorials_section_2026_02_21.md`
 
 ## Route Pattern Matching
 
-The registry supports flexible route matching:
+The registry matches canonical routes and normalizes legacy route aliases:
 
 | Pattern | Matches |
 |---------|---------|
-| `/options/playground` | Exact match only |
-| `/options/*` | Any path under `/options/` |
-| `/options/prompt/*` | Any path under `/options/prompt/` |
+| `/chat` | Exact canonical chat route |
+| `/media` | Exact canonical media route |
+| `/settings/*` | Wildcard routes under `/settings/` |
+| `/options/playground` (input route) | Normalized to `/chat` before matching |
+| `chrome-extension://.../options.html#/knowledge?tab=x` (input route) | Normalized to `/knowledge` before matching |
 
 ```typescript
 // Examples
-routePattern: "/options/playground"     // Exact: /options/playground
-routePattern: "/options/media/*"        // Wildcard: /options/media/library, /options/media/search
+routePattern: "/chat"              // Canonical route in definitions
+routePattern: "/settings/*"        // Wildcard route
+normalizeTutorialRoute("/options/playground") // -> "/chat"
 ```
 
 ## i18n Integration
@@ -332,7 +370,7 @@ Customize individual step appearance using CSS classes on target elements if nee
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| Tutorial not showing | Route pattern doesn't match | Check `routePattern` against actual URL |
+| Tutorial not showing | Route pattern doesn't match | Use canonical route in definitions and verify normalization in `normalizeTutorialRoute()` |
 | Step skipped | Target not found | Verify `data-testid` exists and is visible |
 | Wrong position | Element layout | Try different `placement` value |
 | Prompt not appearing | Already seen | Clear localStorage key `tldw-tutorials` |

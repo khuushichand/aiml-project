@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from "react"
-import { Modal, Button, Tooltip, Select } from "antd"
+import { Modal, Button, Tooltip, Select, Segmented } from "antd"
 import { ExternalLink, AlertCircle } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
@@ -12,6 +12,9 @@ import { browser } from "wxt/browser"
 import { useConnectionPhase, useIsConnected } from "@/hooks/useConnectionState"
 import { ConnectionPhase } from "@/types/connection"
 import { useChatModelsSelect } from "@/hooks/useChatModelsSelect"
+import { QuickChatGuidesPanel } from "./QuickChatGuidesPanel"
+import { useLocation, useNavigate } from "react-router-dom"
+import { useTutorialStore } from "@/store/tutorials"
 
 const EMPTY_POP_OUT_TOOLTIP_STYLES = {
   root: { maxWidth: "200px" }
@@ -24,7 +27,11 @@ type Props = {
 
 export const QuickChatHelperModal: React.FC<Props> = ({ open, onClose }) => {
   const { t } = useTranslation(["option", "common"])
+  const navigate = useNavigate()
+  const location = useLocation()
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const { assistantMode, setAssistantMode } = useQuickChatStore()
+  const startTutorial = useTutorialStore((state) => state.startTutorial)
   const {
     messages,
     sendMessage,
@@ -111,7 +118,64 @@ export const QuickChatHelperModal: React.FC<Props> = ({ open, onClose }) => {
     ? "bg-success"
     : "bg-warn"
   const descriptionId =
-    messages.length === 0 ? "quick-chat-description" : undefined
+    messages.length === 0 && assistantMode !== "browse_guides"
+      ? "quick-chat-description"
+      : undefined
+  const docsModeActive = assistantMode === "docs_rag"
+  const browseModeActive = assistantMode === "browse_guides"
+
+  const handleModeChange = useCallback(
+    (value: string | number) => {
+      if (value === "chat" || value === "docs_rag" || value === "browse_guides") {
+        setAssistantMode(value)
+      }
+    },
+    [setAssistantMode]
+  )
+
+  const handleSendFromInput = useCallback(
+    (message: string) => {
+      void sendMessage(message, {
+        mode: docsModeActive ? "docs_rag" : "chat",
+        currentRoute: location.pathname
+      })
+    },
+    [docsModeActive, location.pathname, sendMessage]
+  )
+
+  const openWorkflowRoute = useCallback(
+    (route: string) => {
+      const normalized = route.startsWith("/") ? route : `/${route}`
+      const isOptionsPage =
+        typeof window !== "undefined" && /options\.html$/i.test(window.location.pathname)
+      if (isOptionsPage) {
+        navigate(normalized)
+        return
+      }
+      const optionsUrl = browser.runtime.getURL(`/options.html#${normalized}`)
+      window.open(optionsUrl, "_blank")
+    },
+    [navigate]
+  )
+
+  const handleAskGuide = useCallback(
+    (question: string) => {
+      setAssistantMode("docs_rag")
+      void sendMessage(question, {
+        mode: "docs_rag",
+        currentRoute: location.pathname
+      })
+    },
+    [location.pathname, sendMessage, setAssistantMode]
+  )
+
+  const handleStartTutorial = useCallback(
+    (tutorialId: string) => {
+      onClose()
+      startTutorial(tutorialId)
+    },
+    [onClose, startTutorial]
+  )
 
   return (
     <Modal
@@ -169,51 +233,102 @@ export const QuickChatHelperModal: React.FC<Props> = ({ open, onClose }) => {
             <span>{connectionLabel}</span>
           </span>
         </div>
-        {/* Messages area */}
-        <div
-          className="flex-1 overflow-y-auto px-1 py-2"
-          role="log"
-          aria-live="polite"
-          aria-label={t("common:chatMessages", "Chat messages")}>
-          {messages.length === 0 ? (
-            <div
-              id="quick-chat-description"
-              className="flex flex-col items-center justify-center h-full text-text-subtle text-center px-4">
-              <p className="text-sm">{emptyState}</p>
-              {!hasModel && (
-                <div className="mt-3 flex items-center gap-2 text-warn text-xs">
-                  <AlertCircle className="h-4 w-4" />
-                  <span>
-                    {t(
-                      "option:quickChatHelper.noModelWarning",
-                      "Select a model in the main chat or choose one here."
-                    )}
-                  </span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {messages.map((message, index) => (
-                <QuickChatMessage
-                  key={message.id}
-                  message={message}
-                  isStreaming={isStreaming}
-                  isLast={index === messages.length - 1}
-                />
-              ))}
-              <div ref={messagesEndRef} />
-            </>
-          )}
+        <div className="px-1 pb-2">
+          <Segmented
+            block
+            size="small"
+            value={assistantMode}
+            onChange={handleModeChange}
+            options={[
+              {
+                value: "chat",
+                label: t("option:quickChatHelper.mode.chat", "Chat")
+              },
+              {
+                value: "docs_rag",
+                label: t("option:quickChatHelper.mode.docs", "Docs Q&A")
+              },
+              {
+                value: "browse_guides",
+                label: t("option:quickChatHelper.mode.guides", "Browse Guides")
+              }
+            ]}
+          />
         </div>
+        {/* Messages area */}
+        {browseModeActive ? (
+          <div className="flex-1 overflow-hidden px-1 py-1">
+            <QuickChatGuidesPanel
+              onAskGuide={handleAskGuide}
+              onOpenRoute={openWorkflowRoute}
+              askDisabled={false}
+              currentRoute={location.pathname}
+              onStartTutorial={handleStartTutorial}
+            />
+          </div>
+        ) : (
+          <div
+            className="flex-1 overflow-y-auto px-1 py-2"
+            role="log"
+            aria-live="polite"
+            aria-label={t("common:chatMessages", "Chat messages")}>
+            {messages.length === 0 ? (
+              <div
+                id="quick-chat-description"
+                className="flex flex-col items-center justify-center h-full text-text-subtle text-center px-4">
+                <p className="text-sm">
+                  {docsModeActive
+                    ? t(
+                        "option:quickChatHelper.docsEmptyState",
+                        "Ask what you want to achieve and I will search indexed docs to suggest tools and steps."
+                      )
+                    : emptyState}
+                </p>
+                {!hasModel && !docsModeActive && (
+                  <div className="mt-3 flex items-center gap-2 text-warn text-xs">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>
+                      {t(
+                        "option:quickChatHelper.noModelWarning",
+                        "Select a model in the main chat or choose one here."
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                {messages.map((message, index) => (
+                  <QuickChatMessage
+                    key={message.id}
+                    message={message}
+                    isStreaming={isStreaming}
+                    isLast={index === messages.length - 1}
+                  />
+                ))}
+                <div ref={messagesEndRef} />
+              </>
+            )}
+          </div>
+        )}
 
         {/* Input area */}
-        <QuickChatInput
-          onSend={sendMessage}
-          onCancel={cancelStream}
-          isStreaming={isStreaming}
-          disabled={!hasModel}
-        />
+        {!browseModeActive && (
+          <QuickChatInput
+            onSend={handleSendFromInput}
+            onCancel={cancelStream}
+            isStreaming={isStreaming}
+            disabled={docsModeActive ? false : !hasModel}
+            placeholder={
+              docsModeActive
+                ? t(
+                    "option:quickChatHelper.docsInputPlaceholder",
+                    "Ask about a workflow or feature and I will search docs..."
+                  )
+                : undefined
+            }
+          />
+        )}
       </div>
     </Modal>
   )

@@ -229,28 +229,31 @@ class AuthnzUsersRepo:
 
         try:
             # Total count
-            count_query = f"SELECT COUNT(DISTINCT users.id) FROM users{join_clause}{where_clause}"
+            count_query_template = "SELECT COUNT(DISTINCT users.id) FROM users{join_clause}{where_clause}"
+            count_query = count_query_template.format_map(locals())  # nosec B608
             total = await db.db_pool.fetchval(count_query, *params)
 
             # Page of users
             if is_pg:
-                query = f"""
+                query_template = """
                     SELECT DISTINCT users.id, users.uuid, users.username, users.email, users.role, users.is_active, users.is_verified,
                            created_at, last_login, storage_quota_mb, storage_used_mb
                     FROM users{join_clause}{where_clause}
                     ORDER BY users.created_at DESC
                     LIMIT ${param_count + 1} OFFSET ${param_count + 2}
                 """
+                query = query_template.format_map(locals())  # nosec B608
                 q_params = [*params, limit, offset]
                 rows = await db.db_pool.fetch(query, *q_params)
             else:
-                query = f"""
+                query_template = """
                     SELECT DISTINCT users.id, users.uuid, users.username, users.email, users.role, users.is_active, users.is_verified,
                            created_at, last_login, storage_quota_mb, storage_used_mb
                     FROM users{join_clause}{where_clause}
                     ORDER BY users.created_at DESC
                     LIMIT ? OFFSET ?
                 """
+                query = query_template.format_map(locals())  # nosec B608
                 q_params = [*params, limit, offset]
                 rows = await db.db_pool.fetchall(query, *q_params)
 

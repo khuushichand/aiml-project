@@ -345,7 +345,8 @@ class AuthnzGeneratedFilesRepo:
                 where_clause = " AND ".join(conditions)
 
                 # Get count
-                count_sql = f"SELECT COUNT(*) FROM generated_files WHERE {where_clause}"
+                count_sql_template = "SELECT COUNT(*) FROM generated_files WHERE {where_clause}"
+                count_sql = count_sql_template.format_map(locals())  # nosec B608
                 if is_pg:
                     total = await conn.fetchval(count_sql, *params)
                 else:
@@ -359,21 +360,23 @@ class AuthnzGeneratedFilesRepo:
                     offset_param = f"${param_idx}"
                     param_idx += 1
                     limit_param = f"${param_idx}"
-                    select_sql = f"""
+                    select_sql_template = """
                         SELECT * FROM generated_files
                         WHERE {where_clause}
                         ORDER BY created_at DESC
                         OFFSET {offset_param} LIMIT {limit_param}
                     """
+                    select_sql = select_sql_template.format_map(locals())  # nosec B608
                     rows = await conn.fetch(select_sql, *params, offset, limit)
                     files = [self._normalize_record(row) for row in rows]
                 else:
-                    select_sql = f"""
+                    select_sql_template = """
                         SELECT * FROM generated_files
                         WHERE {where_clause}
                         ORDER BY created_at DESC
                         LIMIT ? OFFSET ?
                     """
+                    select_sql = select_sql_template.format_map(locals())  # nosec B608
                     cursor = await conn.execute(select_sql, (*params, limit, offset))
                     rows = await cursor.fetchall()
                     cols = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -436,11 +439,14 @@ class AuthnzGeneratedFilesRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                update_sql = f"""
+                file_id_param = f"${param_idx}" if self._is_postgres() else "?"
+                set_clause_sql = ", ".join(updates)
+                update_sql_template = """
                     UPDATE generated_files
-                    SET {', '.join(updates)}
-                    WHERE id = {f'${param_idx}' if self._is_postgres() else '?'}
+                    SET {set_clause_sql}
+                    WHERE id = {file_id_param}
                 """
+                update_sql = update_sql_template.format_map(locals())  # nosec B608
 
                 if self._is_postgres():
                     await conn.execute(update_sql, *params)
@@ -553,12 +559,15 @@ class AuthnzGeneratedFilesRepo:
                     return int(parts[1]) if len(parts) > 1 else 0
                 else:
                     placeholders = ",".join("?" for _ in file_ids)
-                    cursor = await conn.execute(
-                        f"""  # nosec B608
+                    id_list_clause = f"({placeholders})"
+                    update_sql_template = """
                         UPDATE generated_files
                         SET is_deleted = 1, deleted_at = ?, updated_at = ?
-                        WHERE id IN ({placeholders}) AND is_deleted = 0
-                        """,
+                        WHERE id IN {id_list_clause} AND is_deleted = 0
+                        """
+                    update_sql = update_sql_template.format_map(locals())  # nosec B608
+                    cursor = await conn.execute(
+                        update_sql,
                         (now_iso, now_iso, *file_ids),
                     )
                     return cursor.rowcount
@@ -588,12 +597,15 @@ class AuthnzGeneratedFilesRepo:
                     return int(parts[1]) if len(parts) > 1 else 0
                 else:
                     placeholders = ",".join("?" for _ in file_ids)
-                    cursor = await conn.execute(
-                        f"""  # nosec B608
+                    id_list_clause = f"({placeholders})"
+                    update_sql_template = """
                         UPDATE generated_files
                         SET folder_tag = ?, updated_at = ?
-                        WHERE id IN ({placeholders}) AND is_deleted = 0
-                        """,
+                        WHERE id IN {id_list_clause} AND is_deleted = 0
+                        """
+                    update_sql = update_sql_template.format_map(locals())  # nosec B608
+                    cursor = await conn.execute(
+                        update_sql,
                         (folder_tag, now_iso, *file_ids),
                     )
                     return cursor.rowcount

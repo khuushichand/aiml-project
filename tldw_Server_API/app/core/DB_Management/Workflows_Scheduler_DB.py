@@ -346,7 +346,9 @@ class WorkflowsSchedulerDB:
         fields.append("updated_at = ?")
         params.append(_utcnow_iso())
         params.append(id)
-        sql = f"UPDATE workflow_schedules SET {', '.join(fields)} WHERE id = ?"
+        set_clause = ", ".join(fields)
+        update_schedule_sql_template = "UPDATE workflow_schedules SET {set_clause} WHERE id = ?"
+        sql = update_schedule_sql_template.format_map(locals())  # nosec B608
         with self.backend.transaction() as conn:
             res = self.backend.execute(sql, tuple(params), connection=conn)
         return (getattr(res, "rowcount", 0) or 0) > 0

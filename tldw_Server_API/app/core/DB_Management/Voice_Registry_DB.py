@@ -241,8 +241,13 @@ class VoiceRegistryDB:
                 voice_ids = [record["voice_id"] for record in normalized_records]
                 if voice_ids:
                     placeholders = ",".join("?" for _ in voice_ids)
+                    voice_ids_clause = f"({placeholders})"
+                    delete_voice_sql_template = (
+                        "DELETE FROM voice_registry WHERE user_id = ? AND voice_id NOT IN {voice_ids_clause}"
+                    )
+                    delete_voice_sql = delete_voice_sql_template.format_map(locals())  # nosec B608
                     conn.execute(
-                        f"DELETE FROM voice_registry WHERE user_id = ? AND voice_id NOT IN ({placeholders})",
+                        delete_voice_sql,
                         [int(user_id), *voice_ids],
                     )
                 else:

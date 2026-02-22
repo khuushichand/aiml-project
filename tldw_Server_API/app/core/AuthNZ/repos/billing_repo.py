@@ -99,8 +99,7 @@ class AuthnzBillingRepo:
         try:
             async with self.db_pool.acquire() as conn:
                 if self._is_postgres(conn):
-                    rows = await conn.fetch(
-                        f"""  # nosec B608
+                    list_plans_sql_template = """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
                                stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
                                is_public,
@@ -109,11 +108,13 @@ class AuthnzBillingRepo:
                         {where_clause}
                         ORDER BY sort_order ASC, created_at ASC
                         """
+                    list_plans_sql = list_plans_sql_template.format_map(locals())  # nosec B608
+                    rows = await conn.fetch(
+                        list_plans_sql
                     )
                     return [self._plan_row_to_dict(dict(r)) for r in rows]
                 else:
-                    cur = await conn.execute(
-                        f"""
+                    list_plans_sql_template = """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
                                stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
                                is_public,
@@ -122,6 +123,9 @@ class AuthnzBillingRepo:
                         {where_clause}
                         ORDER BY sort_order ASC, created_at ASC
                         """
+                    list_plans_sql = list_plans_sql_template.format_map(locals())  # nosec B608
+                    cur = await conn.execute(
+                        list_plans_sql
                     )
                     rows = await cur.fetchall()
                     row_dicts = self._rows_to_dicts(cur, rows)

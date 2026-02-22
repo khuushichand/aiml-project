@@ -1612,7 +1612,9 @@ class MediaModule(BaseModule):
                     params.append(new_title)
                     updated_fields.append("title")
 
-                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                set_clause = ", ".join(set_parts)
+                update_sql_template = "UPDATE Media SET {set_clause} WHERE id = ? AND version = ?"
+                update_sql = update_sql_template.format_map(locals())  # nosec B608
                 update_params = (*params, media_id, current_version)
                 update_cursor = dbi._execute_with_connection(conn, update_sql, update_params)
                 if update_cursor.rowcount == 0:

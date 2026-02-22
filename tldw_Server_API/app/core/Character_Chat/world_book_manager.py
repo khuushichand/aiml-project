@@ -1893,13 +1893,16 @@ class WorldBookService:
                 params.append(world_book_id)
 
                 set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
-                cursor = conn.execute(
-                    f"""  # nosec B608
+                entry_ids_clause = f"({placeholders})"
+                update_entries_sql_template = """
                     UPDATE world_book_entries
                     SET {set_clause}
-                    WHERE id IN ({placeholders})
+                    WHERE id IN {entry_ids_clause}
                     AND world_book_id = ?
-                    """,
+                    """
+                update_entries_sql = update_entries_sql_template.format_map(locals())  # nosec B608
+                cursor = conn.execute(
+                    update_entries_sql,
                     params
                 )
                 conn.commit()

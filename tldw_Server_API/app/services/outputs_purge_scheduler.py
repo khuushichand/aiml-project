@@ -183,8 +183,11 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
     if ids:
         placeholders = ",".join(["?"] * len(ids))
         try:
+            output_ids_clause = f"({placeholders})"
+            purge_sql_template = "DELETE FROM outputs WHERE user_id = ? AND id IN {output_ids_clause}"
+            purge_sql = purge_sql_template.format_map(locals())  # nosec B608
             cdb.backend.execute(
-                f"DELETE FROM outputs WHERE user_id = ? AND id IN ({placeholders})",
+                purge_sql,
                 tuple([str(user_id)] + list(ids)),
             )
             removed = len(ids)

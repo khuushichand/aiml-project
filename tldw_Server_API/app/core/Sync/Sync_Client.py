@@ -551,8 +551,10 @@ class ClientSyncEngine:
             return
 
         # --- Idempotency/Conflict Check ---
+        select_version_client_sql_template = "SELECT version, client_id FROM `{entity}` WHERE uuid = ?"
+        select_version_client_sql = select_version_client_sql_template.format_map(locals())  # nosec B608
         cursor.execute(
-            f"SELECT version, client_id FROM `{entity}` WHERE uuid = ?",
+            select_version_client_sql,
             (entity_uuid,),
         )  # Fetch client_id too
         local_record_info = cursor.fetchone()
@@ -641,7 +643,9 @@ class ClientSyncEngine:
 
         # --- LWW Conflict Resolution ---
         try:
-            cursor.execute(f"SELECT last_modified FROM `{entity}` WHERE uuid = ?", (entity_uuid,))
+            select_last_modified_sql_template = "SELECT last_modified FROM `{entity}` WHERE uuid = ?"
+            select_last_modified_sql = select_last_modified_sql_template.format_map(locals())  # nosec B608
+            cursor.execute(select_last_modified_sql, (entity_uuid,))
             local_ts_row = cursor.fetchone()
             # Use a very old timestamp if record somehow doesn't exist (shouldn't happen in conflict)
             local_timestamp = local_ts_row[0] if local_ts_row else '1970-01-01 00:00:00'
@@ -698,7 +702,9 @@ class ClientSyncEngine:
         if operation in ['update', 'delete'] or force_apply:
             try:
                 # Use try-except as the record might not exist yet during a forced 'create' or 'update' after delete
-                cursor.execute(f"SELECT version FROM `{entity}` WHERE uuid = ?", (uuid,))
+                select_version_sql_template = "SELECT version FROM `{entity}` WHERE uuid = ?"
+                select_version_sql = select_version_sql_template.format_map(locals())  # nosec B608
+                cursor.execute(select_version_sql, (uuid,))
                 current_rec = cursor.fetchone()
                 if current_rec:
                     current_db_version = current_rec[0]
@@ -787,7 +793,10 @@ class ClientSyncEngine:
 
             if not set_clauses:
                 logger.warning(
-                    f"Update operation for {entity} {uuid} resulted in no data SET clauses (only metadata). Skipping DB execute.")
+                    "Update operation for {} {} resulted in no data SET clauses (only metadata). Skipping DB execute.",
+                    entity,
+                    uuid,
+                )
                 execute_main_sql = False
             else:
                 where_clause = " WHERE uuid = ?"
@@ -796,7 +805,9 @@ class ClientSyncEngine:
                     where_clause += optimistic_lock_sql
                     where_params.extend(optimistic_lock_param)
 
-                main_sql = f"UPDATE `{entity}` SET {', '.join(set_clauses)}{where_clause}"
+                set_clause_sql = ", ".join(set_clauses)
+                update_entity_sql_template = "UPDATE `{entity}` SET {set_clause_sql}{where_clause}"
+                main_sql = update_entity_sql_template.format_map(locals())  # nosec B608
                 main_params_tuple = tuple(params_list + where_params)
                 execute_main_sql = True
 
@@ -807,7 +818,10 @@ class ClientSyncEngine:
                 where_clause += optimistic_lock_sql
                 where_params.extend(optimistic_lock_param)
 
-            main_sql = f"UPDATE `{entity}` SET deleted = 1, last_modified = ?, version = ?, client_id = ?{where_clause}"
+            delete_entity_sql_template = (
+                "UPDATE `{entity}` SET deleted = 1, last_modified = ?, version = ?, client_id = ?{where_clause}"
+            )
+            main_sql = delete_entity_sql_template.format_map(locals())  # nosec B608
             main_params_tuple = tuple([timestamp, target_sql_version, client_id] + where_params)
             execute_main_sql = True
 

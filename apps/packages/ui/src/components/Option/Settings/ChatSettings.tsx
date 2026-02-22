@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, type ChangeEvent } from "react"
-import { Select, Switch, Tooltip } from "antd"
+import { Input, Select, Switch, Tooltip } from "antd"
+import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
 import {
   DEFAULT_CHAT_SETTINGS,
@@ -17,11 +18,17 @@ import { toBase64 } from "@/libs/to-base64"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { RotateCcw, Upload } from "lucide-react"
 import { DiscoSkillsSettings } from "./DiscoSkillsSettings"
+import { QuickChatWorkflowGuidesSettings } from "./QuickChatWorkflowGuidesSettings"
 import Markdown from "@/components/Common/Markdown"
 import {
   CHAT_RICH_TEXT_STYLE_PRESETS,
   normalizeChatRichTextStylePreset
 } from "@/utils/chat-rich-text-style"
+import {
+  normalizeQuickChatDocsMediaIds,
+  QUICK_CHAT_DEFAULT_PROJECT_DOCS_NAMESPACE,
+  toQuickChatDocsMediaIdsInputValue
+} from "@/components/Common/QuickChatHelper/docs-rag-profile"
 
 const SELECT_CLASSNAME = "w-[200px]"
 const CHAT_BACKGROUND_MAX_BASE64_LENGTH = 3_000_000
@@ -32,7 +39,30 @@ export const ChatSettings = () => {
   const [chatBackgroundImage, setChatBackgroundImage] = useSetting(
     CHAT_BACKGROUND_IMAGE_SETTING
   )
+  const [quickChatStrictDocsOnly, setQuickChatStrictDocsOnly] = useStorage<boolean>(
+    "quickChatStrictDocsOnly",
+    true
+  )
+  const [quickChatDocsNamespace, setQuickChatDocsNamespace] = useStorage<string>(
+    "quickChatDocsIndexNamespace",
+    QUICK_CHAT_DEFAULT_PROJECT_DOCS_NAMESPACE
+  )
+  const [quickChatDocsMediaIdsRaw, setQuickChatDocsMediaIdsRaw] =
+    useStorage<unknown>("quickChatDocsProjectMediaIds", [])
   const chatBackgroundInputRef = useRef<HTMLInputElement | null>(null)
+  const quickChatStrictEnabled = quickChatStrictDocsOnly !== false
+  const quickChatNamespaceInputValue =
+    typeof quickChatDocsNamespace === "string" ? quickChatDocsNamespace : ""
+  const quickChatEffectiveNamespace =
+    quickChatNamespaceInputValue.trim() || QUICK_CHAT_DEFAULT_PROJECT_DOCS_NAMESPACE
+  const quickChatMediaIdsInputValue = useMemo(
+    () => toQuickChatDocsMediaIdsInputValue(quickChatDocsMediaIdsRaw),
+    [quickChatDocsMediaIdsRaw]
+  )
+  const quickChatParsedMediaIds = useMemo(
+    () => normalizeQuickChatDocsMediaIds(quickChatDocsMediaIdsRaw),
+    [quickChatDocsMediaIdsRaw]
+  )
 
   const {
     copilotResumeLastChat,
@@ -533,6 +563,112 @@ export const ChatSettings = () => {
           />
         }
       />
+      <div className="rounded-md border border-border bg-surface2/40 p-3 space-y-1">
+        <p className="text-xs font-semibold text-text-muted">
+          {t(
+            "generalSettings.settings.quickChatDocsScope.title",
+            "Quick Chat Docs Q&A scope"
+          )}
+        </p>
+        <p className="text-xs text-text-muted">
+          {t(
+            "generalSettings.settings.quickChatDocsScope.description",
+            "Limit Docs Q&A to project documentation and optional media ID filters."
+          )}
+        </p>
+        <SettingRow
+          label={t(
+            "generalSettings.settings.quickChatDocsScope.strictOnly.label",
+            "Restrict Quick Chat Docs Q&A to project documentation"
+          )}
+          description={t(
+            "generalSettings.settings.quickChatDocsScope.strictOnly.description",
+            "When enabled, docs mode queries only media_db with a project-doc namespace."
+          )}
+          modified={quickChatStrictEnabled !== true}
+          onReset={() => void setQuickChatStrictDocsOnly(true)}
+          control={
+            <Switch
+              checked={quickChatStrictEnabled}
+              onChange={(checked) => setQuickChatStrictDocsOnly(checked)}
+              aria-label={t(
+                "generalSettings.settings.quickChatDocsScope.strictOnly.label",
+                "Restrict Quick Chat Docs Q&A to project documentation"
+              )}
+            />
+          }
+        />
+        <SettingRow
+          label={t(
+            "generalSettings.settings.quickChatDocsScope.namespace.label",
+            "Quick Chat project docs namespace"
+          )}
+          description={t(
+            "generalSettings.settings.quickChatDocsScope.namespace.description",
+            "Defaults to project_docs when blank."
+          )}
+          modified={
+            quickChatEffectiveNamespace !==
+            QUICK_CHAT_DEFAULT_PROJECT_DOCS_NAMESPACE
+          }
+          onReset={() => void setQuickChatDocsNamespace("")}
+          control={
+            <Input
+              className="w-[260px]"
+              value={quickChatNamespaceInputValue}
+              onChange={(event) => setQuickChatDocsNamespace(event.target.value)}
+              placeholder={QUICK_CHAT_DEFAULT_PROJECT_DOCS_NAMESPACE}
+              disabled={!quickChatStrictEnabled}
+              aria-label={t(
+                "generalSettings.settings.quickChatDocsScope.namespace.label",
+                "Quick Chat project docs namespace"
+              )}
+            />
+          }
+        />
+        <SettingRow
+          label={t(
+            "generalSettings.settings.quickChatDocsScope.mediaIds.label",
+            "Quick Chat project docs media IDs"
+          )}
+          description={t(
+            "generalSettings.settings.quickChatDocsScope.mediaIds.description",
+            "Optional comma-separated IDs (for example: 101, 205, 309). Invalid values are ignored."
+          )}
+          modified={quickChatMediaIdsInputValue.trim().length > 0}
+          onReset={() => void setQuickChatDocsMediaIdsRaw([])}
+          control={
+            <Input
+              className="w-[320px]"
+              value={quickChatMediaIdsInputValue}
+              onChange={(event) =>
+                setQuickChatDocsMediaIdsRaw(event.target.value)
+              }
+              placeholder={t(
+                "generalSettings.settings.quickChatDocsScope.mediaIds.placeholder",
+                "Leave blank to search all project docs"
+              )}
+              disabled={!quickChatStrictEnabled}
+              aria-label={t(
+                "generalSettings.settings.quickChatDocsScope.mediaIds.label",
+                "Quick Chat project docs media IDs"
+              )}
+            />
+          }
+        />
+        {quickChatStrictEnabled && quickChatParsedMediaIds.length > 0 ? (
+          <p className="px-1 text-[11px] text-text-muted">
+            {t(
+              "generalSettings.settings.quickChatDocsScope.mediaIds.applied",
+              {
+                defaultValue: "Applied media ID filter: {{ids}}",
+                ids: quickChatParsedMediaIds.join(", ")
+              }
+            )}
+          </p>
+        ) : null}
+      </div>
+      <QuickChatWorkflowGuidesSettings />
       <SettingRow
         label={t("generalSettings.settings.restoreLastChatModel.label")}
         {...getResetProps(

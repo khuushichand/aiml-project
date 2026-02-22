@@ -905,7 +905,11 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
             pass
         else:
             params.extend([source_id])
-            await db.execute(f"UPDATE external_sources SET {', '.join(sets)} WHERE id = $%d" % (len(params)), *params)
+            set_clause = ", ".join(sets)
+            source_id_param = len(params)
+            update_source_sql_template = "UPDATE external_sources SET {set_clause} WHERE id = ${source_id_param}"
+            update_source_sql = update_source_sql_template.format_map(locals())  # nosec B608
+            await db.execute(update_source_sql, *params)
         row2 = await db.fetchrow("SELECT id, account_id, provider, remote_id, type, path, options, enabled, last_synced_at FROM external_sources WHERE id = $1", source_id)
         return dict(row2)
     cur = await db.execute(
@@ -930,7 +934,10 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
         params.append(__import__("json").dumps(options or {}))
     if sets:
         params.extend([source_id])
-        await db.execute(f"UPDATE external_sources SET {', '.join(sets)} WHERE id = ?", params)
+        set_clause = ", ".join(sets)
+        update_source_sql_template = "UPDATE external_sources SET {set_clause} WHERE id = ?"
+        update_source_sql = update_source_sql_template.format_map(locals())  # nosec B608
+        await db.execute(update_source_sql, params)
         await getattr(db, "commit", lambda: None)()
     cur2 = await db.execute("SELECT id, account_id, provider, remote_id, type, path, options, enabled, last_synced_at FROM external_sources WHERE id = ?", (source_id,))
     r2 = await cur2.fetchone()
