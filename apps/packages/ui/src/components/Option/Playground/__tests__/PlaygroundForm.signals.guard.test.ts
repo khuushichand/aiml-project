@@ -38,6 +38,8 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain(
       "playground:composer.validationCompareMinModelsInline"
     )
+    expect(formSource).toContain("tldw:playground-starter-selected")
+    expect(formSource).toContain('{ mode: "voice" }')
     expect(formSource).toContain("useMobileComposerViewport")
     expect(formSource).toContain("data-mobile-keyboard")
     expect(formSource).toContain("scrollMarginBottom")

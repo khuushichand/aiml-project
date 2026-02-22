@@ -3980,6 +3980,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     if (!voiceChatEnabled) {
       if (isListening) stopSpeechRecognition()
       if (isServerDictating) stopServerDictation()
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("tldw:playground-starter-selected", {
+            detail: { mode: "voice" }
+          })
+        )
+      }
     }
     if (voiceChatEnabled) {
       voiceChatMessages.abandonTurn()

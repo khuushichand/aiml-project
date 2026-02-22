@@ -145,8 +145,10 @@ describe("MessageActionsBar menu options", () => {
 
     const prevButton = screen.getByTestId("variant-prev-button")
     const nextButton = screen.getByTestId("variant-next-button")
+    const countLabel = screen.getByTestId("variant-count-label")
     const overflowChip = screen.getByTestId("message-actions-overflow-chip")
 
+    expect(countLabel).toHaveTextContent("1 of 3")
     expect(prevButton.className).toContain("min-h-[44px]")
     expect(prevButton.className).toContain("min-w-[44px]")
     expect(nextButton.className).toContain("min-h-[44px]")

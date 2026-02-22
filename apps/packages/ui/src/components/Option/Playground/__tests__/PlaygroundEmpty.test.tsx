@@ -64,7 +64,7 @@ describe("PlaygroundEmpty", () => {
     vi.clearAllMocks()
   })
 
-  it("dispatches a starter event when compare starter is selected", () => {
+  it("dispatches starter telemetry and starter action events when compare is selected", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent")
     render(<PlaygroundEmpty />)
 
@@ -78,6 +78,16 @@ describe("PlaygroundEmpty", () => {
       | undefined
     expect(compareEvent).toBeDefined()
     expect((compareEvent as CustomEvent).detail).toMatchObject({
+      mode: "compare"
+    })
+
+    const telemetryEvent = dispatchSpy.mock.calls
+      .map((call) => call[0])
+      .find(
+        (event) => event.type === "tldw:playground-starter-selected"
+      ) as CustomEvent | undefined
+    expect(telemetryEvent).toBeDefined()
+    expect((telemetryEvent as CustomEvent).detail).toMatchObject({
       mode: "compare"
     })
   })
