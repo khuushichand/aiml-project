@@ -481,7 +481,7 @@ def _read_chacha_memories(
 
 def _deterministic_backfill_entry_id(*parts: str) -> str:
     joined = "|".join(str(part or "") for part in parts)
-    digest = hashlib.sha1(joined.encode("utf-8"), usedforsecurity=False).hexdigest()
+    digest = hashlib.sha256(joined.encode("utf-8")).hexdigest()
     return f"persona_mem_{digest[:24]}"
 
 
