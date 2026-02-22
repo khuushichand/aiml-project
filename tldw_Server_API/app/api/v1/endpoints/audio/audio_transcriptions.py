@@ -183,7 +183,7 @@ def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> l
     for segment in raw_segments:
         if not isinstance(segment, dict):
             continue
-        text = str(segment.get("Text") or segment.get("text") or "").strip()
+        text = str(segment.get("text") or "").strip()
         if not text:
             continue
         try:
