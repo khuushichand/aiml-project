@@ -250,9 +250,10 @@ class FasterWhisperAdapter(SttProviderAdapter):
         # Strip Whisper metadata header so callers see only user content
         segments_for_response = strip_whisper_metadata_header(segments_list)
         text = " ".join(
-            str(seg.get("Text") or seg.get("text") or "").strip()
+            str(seg.get("text") or "").strip()
             for seg in segments_for_response
             if isinstance(seg, dict)
+        )
         )
 
         return {
