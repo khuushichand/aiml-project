@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -12,13 +12,13 @@ import {
   Tabs,
   message
 } from "antd"
-import DOMPurify from "dompurify"
-import { marked } from "marked"
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistTemplate,
+  fetchWatchlistRuns,
   getWatchlistTemplate,
-  getWatchlistTemplateVersions
+  getWatchlistTemplateVersions,
+  validateWatchlistTemplate
 } from "@/services/watchlists"
 import type {
   WatchlistTemplate,
@@ -26,6 +26,10 @@ import type {
   WatchlistTemplateVersionSummary
 } from "@/types/watchlists"
 import { WatchlistsHelpTooltip } from "../shared"
+import { TemplateCodeEditor, type TemplateCodeEditorHandle } from "./TemplateCodeEditor"
+import { TemplateVariablesPanel } from "./TemplateVariablesPanel"
+import { TemplateSnippetPalette } from "./TemplateSnippetPalette"
+import { TemplatePreviewPane } from "./TemplatePreviewPane"
 
 interface TemplateEditorProps {
   template: WatchlistTemplate | null
@@ -47,6 +51,9 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [selectedVersion, setSelectedVersion] = useState<number | undefined>(undefined)
   const [loadedVersion, setLoadedVersion] = useState<number | null>(null)
   const [loadedContentBaseline, setLoadedContentBaseline] = useState("")
+  const editorRef = useRef<TemplateCodeEditorHandle>(null)
+  const [validationErrors, setValidationErrors] = useState<Array<{ line?: number | null; column?: number | null; message: string }>>([])
+  const [availableRuns, setAvailableRuns] = useState<Array<{ id: number; label: string }>>([])
 
   const isEditing = !!template
   const formatValue = Form.useWatch("format", form)
@@ -69,7 +76,6 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     }
   }
 
-  // Load template content/version history when editing
   useEffect(() => {
     if (open && template) {
       Promise.all([
@@ -98,10 +104,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         })
     } else if (open) {
       form.resetFields()
-      form.setFieldsValue({
-        format: "html",
-        content: DEFAULT_HTML_TEMPLATE
-      })
+      form.setFieldsValue({ format: "html", content: DEFAULT_HTML_TEMPLATE })
       setTemplateVersions([])
       setSelectedVersion(undefined)
       setLoadedVersion(null)
@@ -109,14 +112,32 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     }
   }, [open, template, form, t])
 
+  // Fetch recent completed runs for live preview
+  useEffect(() => {
+    if (!open) {
+      setAvailableRuns([])
+      return
+    }
+    fetchWatchlistRuns({ q: "completed", size: 20 })
+      .then((res) => {
+        setAvailableRuns(
+          (res.items || []).map((r) => ({
+            id: r.id,
+            label: `Run #${r.id}${r.started_at ? ` - ${r.started_at}` : ""}`,
+          }))
+        )
+      })
+      .catch(() => {
+        setAvailableRuns([])
+      })
+  }, [open])
+
   const handleLoadSelectedVersion = async () => {
     if (!template || !selectedVersion) return
     try {
       await loadTemplate(template.name, selectedVersion)
       message.success(
-        t("watchlists:templates.versionLoaded", "Loaded template version {{version}}", {
-          version: selectedVersion,
-        })
+        t("watchlists:templates.versionLoaded", "Loaded template version {{version}}", { version: selectedVersion })
       )
     } catch (err) {
       console.error("Failed to load template version:", err)
@@ -136,12 +157,24 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     }
   }
 
-  // Handle save
   const handleSave = async () => {
     try {
       const values = await form.validateFields()
+      // Server-side validation
+      try {
+        const validation = await validateWatchlistTemplate(values.content, values.format)
+        if (!validation.valid) {
+          setValidationErrors(validation.errors)
+          message.error("Template has syntax errors. Fix them before saving.")
+          return
+        }
+        setValidationErrors([])
+      } catch (validationErr) {
+        // Validation endpoint unavailable — clear stale markers and proceed
+        console.warn("Template validation endpoint unavailable:", validationErr)
+        setValidationErrors([])
+      }
       setSaving(true)
-
       const payload: WatchlistTemplateCreate = {
         name: values.name,
         description: values.description || null,
@@ -149,7 +182,6 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         format: values.format,
         overwrite: isEditing
       }
-
       await createWatchlistTemplate(payload)
       message.success(
         isEditing
@@ -158,7 +190,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       )
       onClose(true)
     } catch (err: any) {
-      if (err.errorFields) return // Validation error
+      if (err.errorFields) return
       console.error("Failed to save template:", err)
       message.error(t("watchlists:templates.saveError", "Failed to save template"))
     } finally {
@@ -172,21 +204,10 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     if (touched) return
     if (formatValue === "md") {
       form.setFieldsValue({ content: DEFAULT_MARKDOWN_TEMPLATE })
-      return
-    }
-    if (formatValue === "html") {
+    } else if (formatValue === "html") {
       form.setFieldsValue({ content: DEFAULT_HTML_TEMPLATE })
     }
   }, [formatValue, form, isEditing, open])
-
-  const previewHtml = useMemo(() => {
-    if (!contentValue) return ""
-    if (formatValue === "md") {
-      const rendered = marked.parse(contentValue)
-      return DOMPurify.sanitize(String(rendered), { USE_PROFILES: { html: true } })
-    }
-    return DOMPurify.sanitize(contentValue, { USE_PROFILES: { html: true } })
-  }, [contentValue, formatValue])
 
   const hasVersionDrift = useMemo(() => {
     if (!isEditing || typeof loadedVersion !== "number") return false
@@ -194,12 +215,26 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   }, [contentValue, isEditing, loadedContentBaseline, loadedVersion])
 
   const insertSnippet = (snippet: string) => {
-    const current = String(form.getFieldValue("content") || "")
-    const needsSpacer = current.length > 0 && !current.endsWith("\n")
-    const nextValue = `${current}${needsSpacer ? "\n\n" : ""}${snippet}`
-    form.setFieldsValue({ content: nextValue })
+    if (editorRef.current) {
+      editorRef.current.insertSnippet(snippet)
+      // Sync form value from editor
+      const newVal = editorRef.current.getValue()
+      form.setFieldsValue({ content: newVal })
+    } else {
+      const current = String(form.getFieldValue("content") || "")
+      const needsSpacer = current.length > 0 && !current.endsWith("\n")
+      form.setFieldsValue({ content: `${current}${needsSpacer ? "\n\n" : ""}${snippet}` })
+    }
     setActiveTab("editor")
   }
+
+  const QUICK_SNIPPETS = [
+    { label: t("watchlists:templates.snippetLoop", "Items loop"), snippet: "{% for item in items %}\n{{ item.title }}\n{% endfor %}" },
+    { label: t("watchlists:templates.snippetGroupsLoop", "Groups loop"), snippet: "{% for group in groups %}\n## {{ group.name }}\n{% for item in group.items %}\n- {{ item.title }}\n{% endfor %}\n{% endfor %}" },
+    { label: t("watchlists:templates.snippetBriefingSummary", "Briefing summary"), snippet: "{% if has_briefing_summary %}\n{{ briefing_summary }}\n{% endif %}" },
+    { label: t("watchlists:templates.snippetSummary", "Summary block"), snippet: "{% if item.summary %}\n{{ item.summary }}\n{% endif %}" },
+    { label: t("watchlists:templates.snippetGeneratedAt", "Generated timestamp"), snippet: "{{ generated_at }}" },
+  ]
 
   const tabItems = [
     {
@@ -218,18 +253,11 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
               </Button>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button size="small" onClick={() => insertSnippet("{% for item in items %}\n{{ item.title }}\n{% endfor %}")}>
-                {t("watchlists:templates.snippetLoop", "Items loop")}
-              </Button>
-              <Button size="small" onClick={() => insertSnippet("{% if filter_tallies %}\n{{ filter_tallies }}\n{% endif %}")}>
-                {t("watchlists:templates.snippetTallies", "Filter tallies")}
-              </Button>
-              <Button size="small" onClick={() => insertSnippet("{% if item.summary %}\n{{ item.summary }}\n{% endif %}")}>
-                {t("watchlists:templates.snippetSummary", "Summary block")}
-              </Button>
-              <Button size="small" onClick={() => insertSnippet("{{ generated_at }}")}>
-                {t("watchlists:templates.snippetGeneratedAt", "Generated timestamp")}
-              </Button>
+              {QUICK_SNIPPETS.map((s, i) => (
+                <Button key={i} size="small" onClick={() => insertSnippet(s.snippet)}>
+                  {s.label}
+                </Button>
+              ))}
             </div>
           </div>
 
@@ -238,11 +266,13 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             rules={[{ required: true, message: t("watchlists:templates.contentRequired", "Template content is required") }]}
             className="mb-0"
           >
-            <Input.TextArea
-              rows={18}
-              placeholder={t("watchlists:templates.contentPlaceholder", "Enter Jinja2 template...")}
-              className="font-mono text-sm"
-              style={{ resize: "none" }}
+            <TemplateCodeEditor
+              ref={editorRef}
+              value={contentValue || ""}
+              onChange={(v) => form.setFieldsValue({ content: v })}
+              format={formatValue === "md" ? "md" : "html"}
+              height={400}
+              validationErrors={validationErrors}
             />
           </Form.Item>
         </div>
@@ -252,66 +282,28 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       key: "preview",
       label: t("watchlists:templates.preview.tab", "Preview"),
       children: (
-        <div className="space-y-3">
-          <Alert
-            title={t(
-              "watchlists:templates.preview.note",
-              "Preview shows rendered markup only; Jinja2 logic is not evaluated."
-            )}
-            type="info"
-            showIcon
-          />
-          {previewHtml ? (
-            <div
-              className="prose dark:prose-invert max-w-none p-4 bg-surface rounded-lg border border-border overflow-auto max-h-96"
-              dangerouslySetInnerHTML={{ __html: previewHtml }}
-            />
-          ) : (
-            <div className="text-sm text-text-muted">
-              {t("watchlists:templates.preview.empty", "Nothing to preview yet.")}
-            </div>
-          )}
-        </div>
+        <TemplatePreviewPane
+          content={contentValue || ""}
+          format={formatValue === "md" ? "md" : "html"}
+          runs={availableRuns}
+        />
       )
     },
     {
       key: "docs",
-      label: t("watchlists:templates.docs.tab", "Variables"),
+      label: t("watchlists:templates.docs.tab", "Variables & Snippets"),
       children: (
-        <div className="space-y-4 text-sm">
-          <Alert
-            title={t("watchlists:templates.docs.title", "Available Variables")}
-            description={t("watchlists:templates.docs.description", "These variables are available in your Jinja2 template.")}
-            type="info"
-            showIcon
-          />
-          <div className="bg-surface rounded-lg p-4 font-mono text-xs space-y-2 max-h-80 overflow-auto">
-            <div><span className="text-primary">{"{{ job }}"}</span> - Monitor object with name, description, filters</div>
-            <div><span className="text-primary">{"{{ run }}"}</span> - Run object with status, stats, timestamps</div>
-            <div><span className="text-primary">{"{{ items }}"}</span> - List of scraped items</div>
-            <div className="ml-4"><span className="text-success">item.title</span> - Item title</div>
-            <div className="ml-4"><span className="text-success">item.url</span> - Source URL</div>
-            <div className="ml-4"><span className="text-success">item.content</span> - Full content text</div>
-            <div className="ml-4"><span className="text-success">item.summary</span> - AI-generated summary</div>
-            <div className="ml-4"><span className="text-success">item.author</span> - Author name</div>
-            <div className="ml-4"><span className="text-success">item.published_at</span> - Publish date</div>
-            <div className="ml-4"><span className="text-success">item.source</span> - Source object</div>
-            <div className="ml-4"><span className="text-success">item.filter_matches</span> - Matched filter names</div>
-            <div><span className="text-primary">{"{{ filter_tallies }}"}</span> - Dict of filter name → count</div>
-            <div><span className="text-primary">{"{{ generated_at }}"}</span> - Generation timestamp</div>
+        <div className="grid grid-cols-2 gap-4" style={{ minHeight: 300 }}>
+          <div>
+            <div className="text-xs font-semibold text-text-muted mb-2">{t("watchlists:templates.docs.variables", "Variables")}</div>
+            <TemplateVariablesPanel onInsert={insertSnippet} />
           </div>
-
-          <div className="rounded-lg border border-border bg-surface p-3">
-            <div className="mb-2 text-xs font-medium text-text-muted">
-              {t("watchlists:templates.docs.sampleContextTitle", "Sample context payload")}
-            </div>
-            <pre className="max-h-52 overflow-auto text-[11px] leading-4">
-              {JSON.stringify(SAMPLE_TEMPLATE_CONTEXT_PAYLOAD, null, 2)}
-            </pre>
-          </div>
-
-          <div className="text-text-muted text-xs">
-            {t("watchlists:templates.docs.hint", "Use Jinja2 syntax: {% for item in items %}, {{ item.title }}, {% if condition %}, etc.")}
+          <div>
+            <div className="text-xs font-semibold text-text-muted mb-2">{t("watchlists:templates.docs.snippets", "Snippets")}</div>
+            <TemplateSnippetPalette
+              format={formatValue === "md" ? "md" : "html"}
+              onInsert={insertSnippet}
+            />
           </div>
         </div>
       )
@@ -327,7 +319,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       }
       open={open}
       onCancel={() => onClose()}
-      width={800}
+      width={1200}
       footer={
         <Space>
           <Button onClick={() => onClose()}>
@@ -340,7 +332,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       }
     >
       <Form form={form} layout="vertical" className="mt-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           <Form.Item
             name="name"
             label={t("watchlists:templates.fields.name", "Template Name")}
@@ -361,16 +353,14 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
               <Radio value="md">Markdown</Radio>
             </Radio.Group>
           </Form.Item>
-        </div>
 
-        <Form.Item
-          name="description"
-          label={t("watchlists:templates.fields.description", "Description")}
-        >
-          <Input
-            placeholder={t("watchlists:templates.descriptionPlaceholder", "Optional description...")}
-          />
-        </Form.Item>
+          <Form.Item
+            name="description"
+            label={t("watchlists:templates.fields.description", "Description")}
+          >
+            <Input placeholder={t("watchlists:templates.descriptionPlaceholder", "Optional description...")} />
+          </Form.Item>
+        </div>
 
         {isEditing && (
           <>
@@ -392,27 +382,16 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
                       : t("watchlists:templates.versionLabel", "v{{version}}", { version: entry.version })
                   }))}
                 />
-                <Button
-                  onClick={handleLoadSelectedVersion}
-                  disabled={!selectedVersion}
-                  loading={loadingVersion}
-                >
+                <Button onClick={handleLoadSelectedVersion} disabled={!selectedVersion} loading={loadingVersion}>
                   {t("watchlists:templates.loadVersion", "Load version")}
                 </Button>
-                <Button
-                  onClick={handleLoadLatest}
-                  loading={loadingVersion}
-                >
+                <Button onClick={handleLoadLatest} loading={loadingVersion}>
                   {t("watchlists:templates.loadLatest", "Load latest")}
                 </Button>
               </div>
               {typeof loadedVersion === "number" && (
                 <div className="mt-2 text-xs text-text-muted">
-                  {t(
-                    "watchlists:templates.loadedVersionHint",
-                    "Currently loaded: v{{version}}. Saving restores this content as a new latest version.",
-                    { version: loadedVersion }
-                  )}
+                  {t("watchlists:templates.loadedVersionHint", "Currently loaded: v{{version}}. Saving restores this content as a new latest version.", { version: loadedVersion })}
                 </div>
               )}
               {hasVersionDrift && (
@@ -420,10 +399,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
                   className="mt-3"
                   type="warning"
                   showIcon
-                  title={t(
-                    "watchlists:templates.unsavedDrift",
-                    "Current editor content differs from the loaded version."
-                  )}
+                  title={t("watchlists:templates.unsavedDrift", "Current editor content differs from the loaded version.")}
                 />
               )}
             </div>
@@ -440,50 +416,10 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   )
 }
 
-const SAMPLE_TEMPLATE_CONTEXT_PAYLOAD = {
-  job: {
-    id: 77,
-    name: "Morning Monitor",
-    description: "Daily digest",
-    scope: {
-      sources: [1, 2],
-      tags: ["tech"]
-    }
-  },
-  run: {
-    id: 101,
-    status: "completed",
-    started_at: "2026-02-18T09:00:00Z",
-    finished_at: "2026-02-18T09:02:00Z",
-    stats: {
-      items_found: 4,
-      items_ingested: 3,
-      items_filtered: 1
-    }
-  },
-  generated_at: "2026-02-18T09:02:05Z",
-  filter_tallies: {
-    include: 3,
-    exclude: 1
-  },
-  items: [
-    {
-      title: "AI policy update",
-      url: "https://example.com/ai-policy",
-      summary: "Summary text",
-      author: "Reporter",
-      published_at: "2026-02-18T08:55:00Z",
-      source: { name: "Tech Daily" },
-      filter_matches: ["policy include"]
-    }
-  ]
-}
-
-// Default template for new templates
 const DEFAULT_HTML_TEMPLATE = `<!DOCTYPE html>
 <html>
 <head>
-  <title>{{ job.name }} - {{ generated_at }}</title>
+  <title>{{ title }} - {{ generated_at }}</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
     .header { border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
@@ -492,15 +428,20 @@ const DEFAULT_HTML_TEMPLATE = `<!DOCTYPE html>
     .item-title a { color: rgb(37 99 235); text-decoration: none; }
     .item-meta { font-size: 0.85em; color: #666; margin-bottom: 8px; }
     .item-summary { line-height: 1.6; }
-    .filters { display: flex; gap: 8px; margin-top: 8px; }
-    .filter-tag { background: rgb(224 231 255); color: rgb(55 48 163); padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>{{ job.name }}</h1>
-    <p>Generated: {{ generated_at }} | Items: {{ items | length }}</p>
+    <h1>{{ title }}</h1>
+    <p>Generated: {{ generated_at }} | Items: {{ item_count }}</p>
   </div>
+
+  {% if has_briefing_summary %}
+  <div style="background: #f0f7ff; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+    <h2>Executive Summary</h2>
+    <p>{{ briefing_summary }}</p>
+  </div>
+  {% endif %}
 
   {% for item in items %}
   <div class="item">
@@ -508,51 +449,43 @@ const DEFAULT_HTML_TEMPLATE = `<!DOCTYPE html>
       <a href="{{ item.url }}" target="_blank">{{ item.title }}</a>
     </div>
     <div class="item-meta">
-      {% if item.author %}By {{ item.author }} | {% endif %}
       {{ item.published_at | default('Unknown date') }}
-      {% if item.source %} | {{ item.source.name }}{% endif %}
     </div>
-    {% if item.summary %}
+    {% if item.llm_summary %}
+    <div class="item-summary">{{ item.llm_summary }}</div>
+    {% elif item.summary %}
     <div class="item-summary">{{ item.summary }}</div>
-    {% endif %}
-    {% if item.filter_matches %}
-    <div class="filters">
-      {% for filter in item.filter_matches %}
-      <span class="filter-tag">{{ filter }}</span>
-      {% endfor %}
-    </div>
     {% endif %}
   </div>
   {% endfor %}
 </body>
 </html>`
 
-const DEFAULT_MARKDOWN_TEMPLATE = `# {{ job.name }}
+const DEFAULT_MARKDOWN_TEMPLATE = `# {{ title }}
 
 Generated: {{ generated_at }}
-Items: {{ items | length }}
+Items: {{ item_count }}
+
+{% if has_briefing_summary %}
+## Executive Summary
+
+{{ briefing_summary }}
+
+---
+{% endif %}
 
 {% for item in items %}
 ## {{ item.title }}
 {{ item.url }}
 
-{% if item.summary %}
+{% if item.llm_summary %}
+{{ item.llm_summary }}
+{% elif item.summary %}
 {{ item.summary }}
 {% endif %}
 
-{% if item.author %}
-- Author: {{ item.author }}
-{% endif %}
-{% if item.published_at %}
-- Published: {{ item.published_at }}
-{% endif %}
-{% if item.source %}
-- Source: {{ item.source.name }}
-{% endif %}
-
-{% if item.filter_matches %}
-Matched filters: {{ item.filter_matches | join(", ") }}
-{% endif %}
+{% if item.published_at %}- Published: {{ item.published_at }}{% endif %}
+{% if item.tags %}- Tags: {{ item.tags | join(", ") }}{% endif %}
 
 ---
 {% endfor %}
