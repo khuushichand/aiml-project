@@ -34,10 +34,8 @@ export const ImportPanel = ({ onImported }: ImportPanelProps) => {
       setImportResult(result)
       onImported(result.board.id)
     },
-    onError: (err) => {
-      message.error(
-        `Import failed: ${err instanceof Error ? err.message : "Unknown error"}`
-      )
+    onError: () => {
+      message.error("Failed to import board. Please try again.")
     }
   })
 
