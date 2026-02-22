@@ -54,6 +54,15 @@ and this project adheres to Some kind of Versioning
   - Added knowledge QA golden-layout and interaction guardrails to preserve high-quality search/history UX.
   - Added workspace/playground positive-pattern guardrail tests (Data Tables, Evaluations, Chunking, Workspace desktop layout).
   - Added explicit home theme-toggle control and associated unit/E2E coverage.
+- Claims extraction portability hardening (LangExtract-aligned):
+  - Centralized claims output parsing and response coercion with strict/lenient modes, fenced-JSON handling, wrapper-key normalization, and structured parse errors.
+  - Shared claims runtime configuration and analyze-callback typing modules reused across extraction, ingestion, adjudication, and service paths.
+  - New claims telemetry counters for structured output, parsing quality, and fallback/degradation:
+    - `claims_response_format_selected_total`
+    - `claims_output_parse_events_total`
+    - `claims_fallback_total`
+  - New claims monitoring dashboard JSON with parse/fallback ratio panels and response-format selection visibility.
+  - New claims regression coverage for response-format contracts, strict/lenient API behavior, fallback resilience, parse-failure telemetry, and config precedence.
 
 ### Changed
 - Normalized Loguru formatting across tldw_Server_API/app from %-style placeholders to {} style.
@@ -114,6 +123,12 @@ and this project adheres to Some kind of Versioning
   - Updated shared markdown wrappers for ReactMarkdown v10 API compatibility (styling moved off direct `ReactMarkdown` `className` prop).
 - CI gating:
   - Frontend UX gates workflow now runs the Stage 5 audited-route smoke gate before the broad all-pages smoke job.
+- Claims extraction/verification internals:
+  - Refactored claims engine, ingestion claims, adjudicator, and claims service to use shared runtime config and shared LLM response coercion helpers.
+  - Standardized provider `response_format` selection (`json_schema` when supported, `json_object` fallback) with graceful downgrade when unsupported.
+  - Extended claims monitoring docs and operations guidance (metrics catalog, parse/fallback alerts, runbook triage and tuning guidance).
+  - Tuned parse/fallback alert rules to use ratio + minimum-volume gates for mixed traffic profiles.
+  - Updated code documentation and published mirrors for claims parse mode, alignment mode, adaptive throttling, and monitoring behavior.
 
 ### Removed
 - UI
@@ -211,6 +226,7 @@ and this project adheres to Some kind of Versioning
   - Fixed core route identity duplication so home/setup/onboarding-test have distinct purpose and route contracts.
   - Fixed release-readiness reliability with passing gate suite reruns at closeout: Stage 5 (`12 passed`), Stage 6 (`6 passed`), Stage 7 (`4 passed`).
   - Fixed program-level UX closure criteria by completing all nine UX implementation plans and finalizing the overarching oversight plan status to complete.
+- Restored `Docs/Design/rich_text_chat_rendering_v1_2026_02_15.md` after an unintended deletion in a prior docs commit.
 
 
 ## [0.1.20] 2026-02-07
