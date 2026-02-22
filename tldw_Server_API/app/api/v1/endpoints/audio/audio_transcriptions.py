@@ -191,7 +191,7 @@ def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> l
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
             start = 0.0
         try:
-            end = float(segment.get("end_seconds", segment.get("end", start)) or start)
+            end = float(segment.get("end_seconds", start) or start)
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
             end = start
         if end < start:
