@@ -58,7 +58,7 @@ export const ArchivedItemsDrawer = ({
       queryClient.invalidateQueries({ queryKey: ["kanban-boards-archived"] })
     },
     onError: (err) => {
-      message.error(`Failed to restore: ${err instanceof Error ? err.message : "Unknown error"}`)
+      message.error(`Failed to restore board: ${err instanceof Error ? err.message : "Unknown error"}`)
     }
   })
 
