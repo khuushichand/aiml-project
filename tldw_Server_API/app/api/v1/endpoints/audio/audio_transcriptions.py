@@ -187,7 +187,7 @@ def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> l
         if not text:
             continue
         try:
-            start = float(segment.get("start_seconds", segment.get("start", 0.0)) or 0.0)
+            start = float(segment.get("start_seconds", 0.0) or 0.0)
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
             start = 0.0
         try:
