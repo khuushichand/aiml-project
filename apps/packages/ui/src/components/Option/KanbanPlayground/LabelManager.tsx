@@ -14,15 +14,15 @@ import {
 } from "@/services/kanban"
 import type { Label } from "@/types/kanban"
 
-const PRESET_COLORS = [
-  "#ef4444", // red
-  "#f97316", // orange
-  "#eab308", // yellow
-  "#22c55e", // green
-  "#3b82f6", // blue
-  "#8b5cf6", // violet
-  "#ec4899", // pink
-  "#6b7280"  // gray
+const PRESET_COLORS: { hex: string; name: string }[] = [
+  { hex: "#ef4444", name: "Red" },
+  { hex: "#f97316", name: "Orange" },
+  { hex: "#eab308", name: "Yellow" },
+  { hex: "#22c55e", name: "Green" },
+  { hex: "#3b82f6", name: "Blue" },
+  { hex: "#8b5cf6", name: "Violet" },
+  { hex: "#ec4899", name: "Pink" },
+  { hex: "#6b7280", name: "Gray" }
 ]
 
 interface LabelManagerProps {
@@ -45,7 +45,7 @@ export const LabelManager = ({
 
   // Creating new label
   const [newLabelName, setNewLabelName] = useState("")
-  const [newLabelColor, setNewLabelColor] = useState(PRESET_COLORS[0])
+  const [newLabelColor, setNewLabelColor] = useState(PRESET_COLORS[0].hex)
 
   // Editing existing label
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -163,19 +163,21 @@ export const LabelManager = ({
                   onPressEnter={confirmEdit}
                   autoFocus
                 />
-                <div className="flex gap-1">
+                <div className="flex gap-1" role="radiogroup" aria-label="Label color">
                   {PRESET_COLORS.map((c) => (
                     <button
-                      key={c}
+                      key={c.hex}
+                      role="radio"
+                      aria-checked={editColor === c.hex}
                       className={`w-5 h-5 rounded-sm border-2 ${
-                        editColor === c
+                        editColor === c.hex
                           ? "border-text"
                           : "border-transparent"
                       }`}
-                      style={{ backgroundColor: c }}
-                      onClick={() => setEditColor(c)}
-                      aria-label={`Select color ${c}`}
-                      title={c}
+                      style={{ backgroundColor: c.hex }}
+                      onClick={() => setEditColor(c.hex)}
+                      aria-label={`${c.name}${editColor === c.hex ? " (selected)" : ""}`}
+                      title={c.name}
                     />
                   ))}
                 </div>
@@ -241,19 +243,21 @@ export const LabelManager = ({
           onChange={(e) => setNewLabelName(e.target.value)}
           onPressEnter={handleCreate}
         />
-        <div className="flex gap-1">
+        <div className="flex gap-1" role="radiogroup" aria-label="Label color">
           {PRESET_COLORS.map((c) => (
             <button
-              key={c}
+              key={c.hex}
+              role="radio"
+              aria-checked={newLabelColor === c.hex}
               className={`w-5 h-5 rounded-sm border-2 ${
-                newLabelColor === c
+                newLabelColor === c.hex
                   ? "border-text"
                   : "border-transparent"
               }`}
-              style={{ backgroundColor: c }}
-              onClick={() => setNewLabelColor(c)}
-              aria-label={`Select color ${c}`}
-              title={c}
+              style={{ backgroundColor: c.hex }}
+              onClick={() => setNewLabelColor(c.hex)}
+              aria-label={`${c.name}${newLabelColor === c.hex ? " (selected)" : ""}`}
+              title={c.name}
             />
           ))}
         </div>
