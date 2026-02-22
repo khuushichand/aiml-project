@@ -177,25 +177,25 @@ def _stt_provider_availability(
 
 
 def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Normalize provider segment payloads into a canonical timed-segment schema.
+    """Normalize raw segment mappings into cleaned timed segment dictionaries.
 
     Args:
-        raw_segments: Optional provider segment list. Each element is expected to
-            be a mapping with text and timing fields (`Text`/`text`,
-            `start_seconds`/`start`, `end_seconds`/`end`).
+        raw_segments: Optional ``list[dict[str, Any]]`` containing provider
+            segment payloads.
 
     Returns:
-        A list of normalized segment dictionaries. Every returned segment
-        includes `text`, `start_seconds`, and `end_seconds`; optional `words`
-        are preserved when provided as a list.
+        list[dict[str, Any]]: Normalized segments shaped as
+        ``{"text": str, "start_seconds": float, "end_seconds": float}``.
+        ``"words"`` is included when the source segment provides it as a list.
 
     Notes:
-        - Non-dict entries and empty-text segments are dropped.
-        - Start/end values are parsed defensively and default to `0.0` / start
-          time when parsing fails.
-        - End time is clamped so `end_seconds >= start_seconds`.
-        - Numeric coercion failures are handled via
-          `_AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS`.
+        - Filters out entries that are not dictionaries or have empty ``text``.
+        - Extracts ``text``, ``start_seconds``, and ``end_seconds`` with
+          defensive float parsing fallbacks (``start`` defaults to ``0.0`` and
+          ``end`` defaults to ``start`` when parsing fails or fields are empty).
+        - Clamps ``end_seconds`` to ``start_seconds`` when ``end < start``.
+        - Non-critical coercion errors are caught via
+          ``_AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS``.
     """
     normalized: list[dict[str, Any]] = []
     if not isinstance(raw_segments, list):
