@@ -51,7 +51,12 @@ import {
 const WORKSPACE_SWITCH_TRANSITION_MS = 420
 const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
 const WORKSPACE_NOTE_SEARCH_LIMIT = 75
-const WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES = 5 * 1024 * 1024
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_DEFAULT_MB = 5
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_VITE_ENV =
+  "VITE_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_NEXT_ENV =
+  "NEXT_PUBLIC_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB"
+const WORKSPACE_STORAGE_SPLIT_KEY_PREFIX = `${WORKSPACE_STORAGE_KEY}:workspace:`
 const WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS = 120
 const ACCOUNT_STORAGE_USAGE_REFRESH_DELAY_MS = 1400
 const WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY =
@@ -208,6 +213,63 @@ const estimateUtf8ByteLength = (value: string): number => {
   }
   return unescape(encodeURIComponent(value)).length
 }
+
+const parseStorageBudgetCandidateMb = (
+  candidate: unknown
+): number | null => {
+  if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+    return candidate
+  }
+  if (typeof candidate !== "string") return null
+  const parsed = Number(candidate.trim())
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return parsed
+}
+
+const resolveWorkspacePayloadBudgetBytes = (): number => {
+  const viteEnv = (import.meta as unknown as { env?: Record<string, unknown> }).env
+  const viteBudgetMb = parseStorageBudgetCandidateMb(
+    viteEnv?.[WORKSPACE_STORAGE_PAYLOAD_BUDGET_VITE_ENV]
+  )
+  if (viteBudgetMb != null) {
+    return Math.round(viteBudgetMb * 1024 * 1024)
+  }
+
+  const nextProcess =
+    typeof globalThis !== "undefined"
+      ? (globalThis as { process?: { env?: Record<string, string | undefined> } })
+          .process
+      : undefined
+  const nextBudgetMb = parseStorageBudgetCandidateMb(
+    nextProcess?.env?.[WORKSPACE_STORAGE_PAYLOAD_BUDGET_NEXT_ENV]
+  )
+  if (nextBudgetMb != null) {
+    return Math.round(nextBudgetMb * 1024 * 1024)
+  }
+
+  return WORKSPACE_STORAGE_PAYLOAD_BUDGET_DEFAULT_MB * 1024 * 1024
+}
+
+const isWorkspacePersistenceStorageKey = (key: string): boolean =>
+  key === WORKSPACE_STORAGE_KEY || key.startsWith(WORKSPACE_STORAGE_SPLIT_KEY_PREFIX)
+
+const estimateWorkspacePersistedPayloadBytes = (
+  storage: Storage
+): number => {
+  let totalBytes = 0
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (!key || !isWorkspacePersistenceStorageKey(key)) continue
+    const value = storage.getItem(key)
+    if (value == null) continue
+    totalBytes += estimateUtf8ByteLength(key)
+    totalBytes += estimateUtf8ByteLength(value)
+  }
+  return totalBytes
+}
+
+const WORKSPACE_STORAGE_PAYLOAD_BUDGET_BYTES =
+  resolveWorkspacePayloadBudgetBytes()
 
 const sanitizeRefreshLoopTimestamps = (
   candidate: unknown
@@ -569,7 +631,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const [workspaceStorageUsage, setWorkspaceStorageUsage] =
     React.useState<WorkspaceStorageUsageState>({
     usedBytes: 0,
-    quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES,
+    quotaBytes: WORKSPACE_STORAGE_PAYLOAD_BUDGET_BYTES,
     originUsedBytes: null,
     originQuotaBytes: null,
     accountUsedBytes: null,
@@ -708,10 +770,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const refreshWorkspaceStorageUsage = React.useCallback(async () => {
     if (typeof window === "undefined") return
     try {
-      const serializedWorkspace = window.localStorage.getItem(WORKSPACE_STORAGE_KEY)
-      const usedBytes = serializedWorkspace
-        ? estimateUtf8ByteLength(serializedWorkspace)
-        : 0
+      const usedBytes = estimateWorkspacePersistedPayloadBytes(window.localStorage)
       let originUsedBytes: number | null = null
       let originQuotaBytes: number | null = null
       if (
@@ -736,7 +795,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       setWorkspaceStorageUsage((previousState) => ({
         ...previousState,
         usedBytes,
-        quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES,
+        quotaBytes: WORKSPACE_STORAGE_PAYLOAD_BUDGET_BYTES,
         originUsedBytes,
         originQuotaBytes
       }))

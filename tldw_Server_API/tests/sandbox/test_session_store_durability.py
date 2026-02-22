@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from tldw_Server_API.app.core.config import clear_config_cache, settings as app_settings
-from tldw_Server_API.app.core.Sandbox.models import RuntimeType, RunSpec, SessionSpec
-from tldw_Server_API.app.core.Sandbox.orchestrator import SandboxOrchestrator
+from tldw_Server_API.app.core.Sandbox.models import RunPhase, RuntimeType, RunSpec, SessionSpec
+from tldw_Server_API.app.core.Sandbox.orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.store import get_store
 
@@ -113,6 +116,44 @@ def test_cross_node_delete_invalidates_cached_session_state(monkeypatch, tmp_pat
     with orch_b._lock:
         assert source.id not in orch_b._sessions
         assert source.id not in orch_b._session_roots
+
+
+def test_destroy_session_rejects_when_active_runs_exist(monkeypatch, tmp_path: Path) -> None:
+    _configure_sqlite_store(monkeypatch, tmp_path)
+
+    orch = SandboxOrchestrator()
+    session = orch.create_session(
+        user_id="user-66",
+        spec=SessionSpec(runtime=RuntimeType.docker, base_image="python:3.11-slim"),
+        spec_version="1.0",
+        idem_key=None,
+        body={"spec_version": "1.0", "runtime": "docker"},
+    )
+    run = orch.enqueue_run(
+        user_id="user-66",
+        spec=RunSpec(
+            session_id=session.id,
+            runtime=RuntimeType.docker,
+            base_image="python:3.11-slim",
+            command=["python", "-c", "print('queued')"],
+        ),
+        spec_version="1.0",
+        idem_key=None,
+        body={"command": ["python", "-c", "print('queued')"], "session_id": session.id},
+    )
+
+    with pytest.raises(SessionActiveRunsConflict) as excinfo:
+        orch.destroy_session(session.id)
+    assert excinfo.value.active_runs == 1
+
+    queued = orch.get_run(run.id)
+    assert queued is not None
+    queued.phase = RunPhase.completed
+    queued.exit_code = 0
+    queued.finished_at = datetime.now(timezone.utc)
+    orch.update_run(run.id, queued)
+
+    assert orch.destroy_session(session.id) is True
 
 
 def test_session_tenancy_metadata_roundtrips_across_orchestrators(monkeypatch, tmp_path: Path) -> None:

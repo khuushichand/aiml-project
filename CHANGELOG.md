@@ -85,6 +85,10 @@ and this project adheres to Some kind of Versioning
   - Hardened extension dictation fallback E2E by forcing taxonomy-classified server STT failures through the extension upload transport path.
   - Added `/chat` integration coverage for dictation mode routing (`server` vs `browser`) and transcript insertion behavior.
   - Added sanitized dictation diagnostics event schema (`tldw:dictation:diagnostics`) with explicit privacy guarantees (no transcript/prompt/audio payload content).
+  - Fixed STT health false-negatives for non-Whisper providers by making model-status checks provider-aware (`parakeet`, `canary`, `external`, `qwen2audio`, `qwen3-asr`, `vibevoice` vs `whisper` local-model preflight).
+  - Changed STT health payload semantics to include `usable` and `on_demand`, and updated Whisper `warm=true` behavior to mark warmed models as ready.
+  - Fixed dictation gating in WebUI/extension (`useTldwAudioStatus`) to fail-open for non-Whisper provider readiness probes so dictation is not disabled when server transcription remains usable.
+  - Added targeted regression coverage for STT health `usable` semantics and non-Whisper dictation health fail-open behavior (backend pytest + UI Vitest).
 - MkDocs strict-build blockers for published documentation:
   - Fixed missing-nav-entry blockers by including all published pages reported as out-of-nav.
   - Fixed broken published links to removed/non-published `User_Guides` and `Development` paths.

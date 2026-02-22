@@ -2,12 +2,18 @@ import type { ACPSession } from "@/services/acp/types"
 
 const MESSAGE_UPDATE_TYPES = new Set(["text", "assistant_text", "user_text"])
 
-export const getSessionMessageCount = (session: Pick<ACPSession, "updates">): number => {
+export const getSessionMessageCount = (
+  session: Pick<ACPSession, "updates" | "messageCount">
+): number => {
   const explicitMessageCount = session.updates.filter((update) => MESSAGE_UPDATE_TYPES.has(update.type)).length
-  return explicitMessageCount > 0 ? explicitMessageCount : session.updates.length
+  const updatesMessageCount = explicitMessageCount > 0 ? explicitMessageCount : session.updates.length
+  const serverMessageCount = typeof session.messageCount === "number" ? session.messageCount : 0
+  return Math.max(updatesMessageCount, serverMessageCount)
 }
 
-export const getSessionTokenUsage = (session: Pick<ACPSession, "updates">): number | null => {
+export const getSessionTokenUsage = (
+  session: Pick<ACPSession, "updates" | "usage">
+): number | null => {
   let total = 0
   let hasAnyUsage = false
 
@@ -38,5 +44,15 @@ export const getSessionTokenUsage = (session: Pick<ACPSession, "updates">): numb
     }
   }
 
-  return hasAnyUsage ? total : null
+  const serverTotal = typeof session.usage?.total_tokens === "number"
+    ? session.usage.total_tokens
+    : null
+
+  if (hasAnyUsage && serverTotal !== null) {
+    return Math.max(total, serverTotal)
+  }
+  if (hasAnyUsage) {
+    return total
+  }
+  return serverTotal
 }

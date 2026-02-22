@@ -176,6 +176,84 @@ describe("ACPSessionPanel filters and sorting", () => {
     })
   })
 
+  it("calls backend fork with message_index from session detail", async () => {
+    const store = useACPSessionsStore.getState()
+    const alphaId = store.createSession({ cwd: "/workspace/alpha", name: "Alpha Session" })
+
+    let forkRequestBody: Record<string, unknown> | null = null
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: RequestInfo | URL, init?: RequestInit) => {
+        const urlString = String(url)
+
+        if (urlString.includes(`/api/v1/acp/sessions/${alphaId}/detail`)) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              session_id: alphaId,
+              user_id: 1,
+              agent_type: "custom",
+              name: "Alpha Session",
+              status: "active",
+              created_at: "2024-01-01T00:00:00.000Z",
+              last_activity_at: "2024-01-01T00:00:05.000Z",
+              message_count: 3,
+              usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+              tags: [],
+              has_websocket: false,
+              messages: [{ id: 1 }, { id: 2 }, { id: 3 }],
+              cwd: "/workspace/alpha",
+            }),
+          })
+        }
+
+        if (urlString.includes(`/api/v1/acp/sessions/${alphaId}/fork`)) {
+          forkRequestBody = JSON.parse(String(init?.body || "{}"))
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              session_id: "fork-session-1",
+              name: "Alpha Session (fork)",
+              forked_from: alphaId,
+              message_count: 3,
+            }),
+          })
+        }
+
+        if (urlString.includes("/api/v1/acp/sessions/fork-session-1/usage")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              session_id: "fork-session-1",
+              user_id: 1,
+              agent_type: "custom",
+              usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+              message_count: 3,
+              created_at: "2024-01-01T00:00:00.000Z",
+              last_activity_at: "2024-01-01T00:00:06.000Z",
+            }),
+          })
+        }
+
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({}) })
+      })
+    )
+
+    render(<ACPSessionPanel />)
+
+    fireEvent.click(screen.getByTestId(`acp-session-fork-${alphaId}`))
+
+    await waitFor(() => {
+      expect(screen.getByText("Alpha Session (fork)")).toBeInTheDocument()
+    })
+
+    expect(forkRequestBody).toMatchObject({ message_index: 2 })
+  })
+
   it("falls back to local fork when backend fork endpoint is unavailable", async () => {
     const store = useACPSessionsStore.getState()
     const alphaId = store.createSession({ cwd: "/workspace/alpha", name: "Alpha Session" })

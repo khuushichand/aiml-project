@@ -5,6 +5,8 @@ import base64
 import contextlib
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from loguru import logger
@@ -71,6 +73,10 @@ class SandboxService:
         self.policy = policy or SandboxPolicy(cfg)
         self._orch = SandboxOrchestrator(self.policy)
         self._supported_specs = list(self.policy.cfg.supported_spec_versions or ["1.0"])
+        self._claim_worker_id = f"sandbox-worker-{os.getpid()}-{id(self)}"
+        self._bg_executor_lock = threading.RLock()
+        self._bg_executor: ThreadPoolExecutor | None = None
+        self._bg_executor_workers = 0
         self._snapshots = SnapshotManager(
             storage_path=os.getenv("SANDBOX_SNAPSHOT_PATH")
         )
@@ -140,6 +146,99 @@ class SandboxService:
             return
         if spec_version not in self._supported_specs:
             raise SandboxService.InvalidSpecVersion(spec_version, self._supported_specs)
+
+    def _effective_claim_lease_seconds(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_RUN_CLAIM_LEASE_SEC", 30)
+            return max(1, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 30
+
+    def _effective_max_concurrent_runs(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_MAX_CONCURRENT_RUNS")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_MAX_CONCURRENT_RUNS", 8)
+            return max(1, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 8
+
+    def _background_executor(self) -> ThreadPoolExecutor:
+        workers = self._effective_max_concurrent_runs()
+        with self._bg_executor_lock:
+            if self._bg_executor is not None and self._bg_executor_workers == workers:
+                return self._bg_executor
+            old = self._bg_executor
+            self._bg_executor = ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="sandbox-runner",
+            )
+            self._bg_executor_workers = workers
+            if old is not None:
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    old.shutdown(wait=False, cancel_futures=False)
+            return self._bg_executor
+
+    def _submit_background_worker(self, worker_fn) -> None:
+        # Keep worker fan-out bounded by executor max_workers.
+        self._background_executor().submit(worker_fn)
+
+    def _admit_run_starting(self, run_id: str) -> RunStatus | None:
+        max_active_runs = self._effective_max_concurrent_runs()
+        lease_seconds = self._effective_claim_lease_seconds()
+        while True:
+            admitted = self._orch.try_admit_run_start(
+                run_id,
+                worker_id=self._claim_worker_id,
+                max_active_runs=max_active_runs,
+                lease_seconds=lease_seconds,
+            )
+            if admitted is not None:
+                return admitted
+            current = self._orch.get_run(run_id)
+            if current is None:
+                return None
+            owner = str(getattr(current, "claim_owner", "") or "").strip()
+            if current.phase != RunPhase.queued or owner != self._claim_worker_id:
+                return current
+            time.sleep(0.05)
+
+    def _apply_admitted_status(self, target: RunStatus, admitted: RunStatus) -> None:
+        target.phase = admitted.phase
+        target.started_at = admitted.started_at
+        target.finished_at = admitted.finished_at
+        target.exit_code = admitted.exit_code
+        target.claim_owner = admitted.claim_owner
+        target.claim_expires_at = admitted.claim_expires_at
+
+    def _run_with_claim_lease(self, run_id: str, fn):
+        lease_seconds = self._effective_claim_lease_seconds()
+        heartbeat_interval = max(1, min(10, lease_seconds // 3 if lease_seconds > 2 else 1))
+        stop = threading.Event()
+
+        def _heartbeat() -> None:
+            while not stop.wait(heartbeat_interval):
+                try:
+                    ok = self._orch.renew_run_claim(
+                        run_id,
+                        worker_id=self._claim_worker_id,
+                        lease_seconds=lease_seconds,
+                    )
+                except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+                    ok = False
+                if not ok:
+                    break
+
+        hb = threading.Thread(target=_heartbeat, daemon=True)
+        hb.start()
+        try:
+            return fn()
+        finally:
+            stop.set()
+            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                hb.join(timeout=0.1)
 
     def feature_discovery(self) -> list[dict]:
         images = [
@@ -432,6 +531,17 @@ class SandboxService:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
+        if execute_enabled:
+            lease_seconds = self._effective_claim_lease_seconds()
+            claimed = self._orch.try_claim_run(
+                status.id,
+                worker_id=self._claim_worker_id,
+                lease_seconds=lease_seconds,
+            )
+            if claimed is None:
+                existing = self._orch.get_run(status.id)
+                return existing or status
+            status = claimed
         if execute_enabled and spec.runtime == RuntimeType.docker:
             try:
                 env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
@@ -447,16 +557,6 @@ class SandboxService:
                     pass
                 if background:
                     # Return early and execute in background
-                    status.phase = RunPhase.starting
-                    # Best-effort status update; do not abort if orchestrator lacks method
-                    try:
-                        self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
-                        logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    # Proactively publish a 'start' event so WS subscribers connecting
-                    # immediately after POST observe at least one event.
-                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                        get_hub().publish_event(status.id, "start", {"bg": True})
                     # Metrics: queue wait histogram (if enqueued timestamp known)
                     try:
                         ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
@@ -468,9 +568,18 @@ class SandboxService:
                         pass
                     def _worker():
                         try:
+                            admitted = self._admit_run_starting(status.id)
+                            if admitted is None or admitted.phase != RunPhase.starting:
+                                return
+                            self._apply_admitted_status(status, admitted)
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                                get_hub().publish_event(status.id, "start", {"bg": True})
                             dr = DockerRunner()
                             ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                            real = dr.start_run(status.id, spec, ws)
+                            real = self._run_with_claim_lease(
+                                status.id,
+                                lambda: dr.start_run(status.id, spec, ws),
+                            )
                             real.id = status.id
                             # Merge results
                             status.phase = real.phase
@@ -501,7 +610,10 @@ class SandboxService:
                             self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Background docker execution failed: {e}")
-                    threading.Thread(target=_worker, daemon=True).start()
+                    try:
+                        self._submit_background_worker(_worker)
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Background docker submission failed: {e}")
                 else:
                     dr = DockerRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
@@ -514,7 +626,17 @@ class SandboxService:
                             observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": "docker"})
                     except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         pass
-                    real = dr.start_run(status.id, spec, ws)
+                    admitted = self._admit_run_starting(status.id)
+                    if admitted is None:
+                        existing = self._orch.get_run(status.id)
+                        return existing or status
+                    if admitted.phase != RunPhase.starting:
+                        return admitted
+                    self._apply_admitted_status(status, admitted)
+                    real = self._run_with_claim_lease(
+                        status.id,
+                        lambda: dr.start_run(status.id, spec, ws),
+                    )
                     real.id = status.id
                     status.phase = real.phase
                     status.exit_code = real.exit_code
@@ -543,18 +665,20 @@ class SandboxService:
                 else:
                     background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
                 if background:
-                    status.phase = RunPhase.starting
-                    try:
-                        self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
-                        logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                        get_hub().publish_event(status.id, "start", {"bg": True})
                     def _worker_fc():
                         try:
+                            admitted = self._admit_run_starting(status.id)
+                            if admitted is None or admitted.phase != RunPhase.starting:
+                                return
+                            self._apply_admitted_status(status, admitted)
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                                get_hub().publish_event(status.id, "start", {"bg": True})
                             fr = FirecrackerRunner()
                             ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                            real = fr.start_run(status.id, spec, ws)
+                            real = self._run_with_claim_lease(
+                                status.id,
+                                lambda: fr.start_run(status.id, spec, ws),
+                            )
                             real.id = status.id
                             status.phase = real.phase
                             status.exit_code = real.exit_code
@@ -575,12 +699,25 @@ class SandboxService:
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
-                    threading.Thread(target=_worker_fc, daemon=True).start()
+                    try:
+                        self._submit_background_worker(_worker_fc)
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Firecracker background submission failed: {e}")
                 else:
                     # Foreground
                     fr = FirecrackerRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                    real = fr.start_run(status.id, spec, ws)
+                    admitted = self._admit_run_starting(status.id)
+                    if admitted is None:
+                        existing = self._orch.get_run(status.id)
+                        return existing or status
+                    if admitted.phase != RunPhase.starting:
+                        return admitted
+                    self._apply_admitted_status(status, admitted)
+                    real = self._run_with_claim_lease(
+                        status.id,
+                        lambda: fr.start_run(status.id, spec, ws),
+                    )
                     real.id = status.id
                     status.phase = real.phase
                     status.exit_code = real.exit_code
@@ -618,18 +755,20 @@ class SandboxService:
                 else:
                     background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
                 if background:
-                    status.phase = RunPhase.starting
-                    try:
-                        self._orch.update_run(status.id, status)
-                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
-                        logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                        get_hub().publish_event(status.id, "start", {"bg": True})
                     def _worker_lima():
                         try:
+                            admitted = self._admit_run_starting(status.id)
+                            if admitted is None or admitted.phase != RunPhase.starting:
+                                return
+                            self._apply_admitted_status(status, admitted)
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                                get_hub().publish_event(status.id, "start", {"bg": True})
                             lr = LimaRunner()
                             ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                            real = lr.start_run(status.id, spec, ws)
+                            real = self._run_with_claim_lease(
+                                status.id,
+                                lambda: lr.start_run(status.id, spec, ws),
+                            )
                             real.id = status.id
                             status.phase = real.phase
                             status.exit_code = real.exit_code
@@ -650,12 +789,25 @@ class SandboxService:
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
-                    threading.Thread(target=_worker_lima, daemon=True).start()
+                    try:
+                        self._submit_background_worker(_worker_lima)
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Lima background submission failed: {e}")
                 else:
                     # Foreground
                     lr = LimaRunner()
                     ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                    real = lr.start_run(status.id, spec, ws)
+                    admitted = self._admit_run_starting(status.id)
+                    if admitted is None:
+                        existing = self._orch.get_run(status.id)
+                        return existing or status
+                    if admitted.phase != RunPhase.starting:
+                        return admitted
+                    self._apply_admitted_status(status, admitted)
+                    real = self._run_with_claim_lease(
+                        status.id,
+                        lambda: lr.start_run(status.id, spec, ws),
+                    )
                     real.id = status.id
                     status.phase = real.phase
                     status.exit_code = real.exit_code

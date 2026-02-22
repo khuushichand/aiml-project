@@ -127,6 +127,89 @@ const WORKSPACE_STORAGE_RECOVERY_MIN_RECLAIM_BYTES = 64 * 1024
 const WORKSPACE_STORAGE_OVERSIZED_ARTIFACT_MIN_BYTES = 12 * 1024
 const WORKSPACE_SPLIT_INDEX_SCHEMA = "workspace_split_v1"
 const WORKSPACE_SPLIT_INDEX_VERSION = 1
+export const WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY =
+  "tldw:feature-rollout:workspace_split_storage_v1:enabled"
+export const WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY =
+  "tldw:feature-rollout:workspace_indexeddb_offload_v1:enabled"
+const WORKSPACE_STORAGE_SPLIT_KEY_FLAG_VITE_ENV =
+  "VITE_WORKSPACE_SPLIT_STORAGE_V1_ENABLED"
+const WORKSPACE_STORAGE_SPLIT_KEY_FLAG_NEXT_ENV =
+  "NEXT_PUBLIC_WORKSPACE_SPLIT_STORAGE_V1_ENABLED"
+const WORKSPACE_STORAGE_INDEXEDDB_FLAG_VITE_ENV =
+  "VITE_WORKSPACE_INDEXEDDB_OFFLOAD_V1_ENABLED"
+const WORKSPACE_STORAGE_INDEXEDDB_FLAG_NEXT_ENV =
+  "NEXT_PUBLIC_WORKSPACE_INDEXEDDB_OFFLOAD_V1_ENABLED"
+const WORKSPACE_STORAGE_SPLIT_KEY_DEFAULT_ENABLED = true
+const WORKSPACE_STORAGE_INDEXEDDB_DEFAULT_ENABLED = true
+const WORKSPACE_INDEXEDDB_NAME = "tldw-workspace-storage"
+const WORKSPACE_INDEXEDDB_VERSION = 1
+const WORKSPACE_INDEXEDDB_CHAT_STORE = "workspace-chat-sessions"
+const WORKSPACE_INDEXEDDB_ARTIFACT_STORE = "workspace-artifact-payloads"
+const WORKSPACE_CHAT_OFFLOAD_MIN_BYTES = 8 * 1024
+const WORKSPACE_ARTIFACT_OFFLOAD_MIN_BYTES = 12 * 1024
+const WORKSPACE_PERSIST_MAX_CHAT_MESSAGES_PER_SESSION = 250
+const WORKSPACE_PERSIST_SERVER_ARTIFACT_CONTENT_MAX_BYTES = 24 * 1024
+const WORKSPACE_PERSIST_SERVER_ARTIFACT_DATA_MAX_BYTES = 16 * 1024
+const WORKSPACE_PERSIST_TRUNCATION_SUFFIX =
+  "\n\n[Truncated in local persistence cache; open the server output for full content.]"
+const WORKSPACE_ARTIFACT_PAYLOAD_POINTER_KEY = "__tldwArtifactPayloadRef"
+const WORKSPACE_CHAT_POINTER_KIND = "workspace_chat_session_v1"
+const WORKSPACE_ARTIFACT_POINTER_KIND = "workspace_artifact_payload_v1"
+
+type WorkspaceIndexedDbChatPointer = {
+  offloadType: typeof WORKSPACE_CHAT_POINTER_KIND
+  key: string
+  historyId: string | null
+  serverChatId: string | null
+  updatedAt: number
+}
+
+type WorkspaceIndexedDbArtifactPayloadPointer = {
+  offloadType: typeof WORKSPACE_ARTIFACT_POINTER_KIND
+  key: string
+  fields: Array<"content" | "data">
+  updatedAt: number
+}
+
+type PersistedWorkspaceArtifact = GeneratedArtifact & {
+  [WORKSPACE_ARTIFACT_PAYLOAD_POINTER_KEY]?: WorkspaceIndexedDbArtifactPayloadPointer
+}
+
+type PersistedWorkspaceChatSessionReference =
+  | PersistedWorkspaceChatSession
+  | WorkspaceIndexedDbChatPointer
+
+type WorkspaceIndexedDbChatRecord = {
+  key: string
+  workspaceId: string
+  session: PersistedWorkspaceChatSession
+  updatedAt: number
+}
+
+type WorkspaceIndexedDbArtifactPayloadRecord = {
+  key: string
+  workspaceId: string
+  artifactId: string
+  payload: {
+    content?: string
+    data?: Record<string, unknown>
+  }
+  updatedAt: number
+}
+
+type WorkspaceIndexedDbAdapter = {
+  isAvailable: () => boolean
+  putChatRecord: (record: WorkspaceIndexedDbChatRecord) => Promise<boolean>
+  getChatRecord: (key: string) => Promise<WorkspaceIndexedDbChatRecord | null>
+  deleteChatRecord: (key: string) => Promise<boolean>
+  putArtifactPayloadRecord: (
+    record: WorkspaceIndexedDbArtifactPayloadRecord
+  ) => Promise<boolean>
+  getArtifactPayloadRecord: (
+    key: string
+  ) => Promise<WorkspaceIndexedDbArtifactPayloadRecord | null>
+  deleteArtifactPayloadRecord: (key: string) => Promise<boolean>
+}
 
 type WorkspaceSplitIndexState = {
   workspaceId: string
@@ -134,7 +217,7 @@ type WorkspaceSplitIndexState = {
   archivedWorkspaces: SavedWorkspace[]
   workspaceIds: string[]
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
-  workspaceChatSessions: Record<string, PersistedWorkspaceChatSession>
+  workspaceChatSessions: Record<string, PersistedWorkspaceChatSessionReference>
 }
 
 type WorkspaceSplitIndexEnvelope = {
@@ -142,6 +225,322 @@ type WorkspaceSplitIndexEnvelope = {
   splitVersion: number
   version: number
   state: WorkspaceSplitIndexState
+}
+
+let workspaceIndexedDbConnectionPromise: Promise<IDBDatabase> | null = null
+let workspaceIndexedDbAdapterSingleton: WorkspaceIndexedDbAdapter | null = null
+
+const isWorkspaceIndexedDbRuntimeAvailable = (): boolean =>
+  typeof window !== "undefined" && typeof indexedDB !== "undefined"
+
+const openWorkspaceIndexedDbConnection = async (): Promise<IDBDatabase> => {
+  if (!isWorkspaceIndexedDbRuntimeAvailable()) {
+    throw new Error("IndexedDB is not available in this runtime.")
+  }
+
+  if (workspaceIndexedDbConnectionPromise) {
+    return workspaceIndexedDbConnectionPromise
+  }
+
+  workspaceIndexedDbConnectionPromise = new Promise<IDBDatabase>(
+    (resolve, reject) => {
+      const request = indexedDB.open(
+        WORKSPACE_INDEXEDDB_NAME,
+        WORKSPACE_INDEXEDDB_VERSION
+      )
+
+      request.onupgradeneeded = () => {
+        const database = request.result
+        if (!database.objectStoreNames.contains(WORKSPACE_INDEXEDDB_CHAT_STORE)) {
+          database.createObjectStore(WORKSPACE_INDEXEDDB_CHAT_STORE, {
+            keyPath: "key"
+          })
+        }
+        if (
+          !database.objectStoreNames.contains(WORKSPACE_INDEXEDDB_ARTIFACT_STORE)
+        ) {
+          database.createObjectStore(WORKSPACE_INDEXEDDB_ARTIFACT_STORE, {
+            keyPath: "key"
+          })
+        }
+      }
+
+      request.onsuccess = () => {
+        const database = request.result
+        database.onversionchange = () => {
+          database.close()
+          workspaceIndexedDbConnectionPromise = null
+        }
+        resolve(database)
+      }
+      request.onerror = () =>
+        reject(request.error || new Error("Failed to open workspace IndexedDB."))
+      request.onblocked = () =>
+        reject(new Error("Workspace IndexedDB upgrade is blocked."))
+    }
+  ).catch((error) => {
+    workspaceIndexedDbConnectionPromise = null
+    throw error
+  })
+
+  return workspaceIndexedDbConnectionPromise
+}
+
+const withWorkspaceIndexedDbStore = async <TResult>(
+  storeName:
+    | typeof WORKSPACE_INDEXEDDB_CHAT_STORE
+    | typeof WORKSPACE_INDEXEDDB_ARTIFACT_STORE,
+  mode: IDBTransactionMode,
+  operation: (store: IDBObjectStore) => IDBRequest<TResult>
+): Promise<TResult | null> => {
+  const database = await openWorkspaceIndexedDbConnection()
+  return new Promise<TResult | null>((resolve, reject) => {
+    const transaction = database.transaction(storeName, mode)
+    const store = transaction.objectStore(storeName)
+
+    let settled = false
+    const settleResolve = (value: TResult | null) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    const settleReject = (error: unknown) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    const request = operation(store)
+    request.onsuccess = () => settleResolve(request.result ?? null)
+    request.onerror = () =>
+      settleReject(request.error || new Error("Workspace IndexedDB request failed."))
+    transaction.onabort = () =>
+      settleReject(
+        transaction.error || new Error("Workspace IndexedDB transaction aborted.")
+      )
+    transaction.onerror = () =>
+      settleReject(
+        transaction.error || new Error("Workspace IndexedDB transaction failed.")
+      )
+  })
+}
+
+const createWorkspaceIndexedDbAdapter = (): WorkspaceIndexedDbAdapter => {
+  let disabled = false
+  const disableAdapter = () => {
+    disabled = true
+  }
+
+  const run = async <T>(
+    operation: () => Promise<T>,
+    fallbackValue: T
+  ): Promise<T> => {
+    if (disabled || !isWorkspaceIndexedDbRuntimeAvailable()) {
+      return fallbackValue
+    }
+    try {
+      return await operation()
+    } catch {
+      disableAdapter()
+      return fallbackValue
+    }
+  }
+
+  return {
+    isAvailable: () => !disabled && isWorkspaceIndexedDbRuntimeAvailable(),
+    putChatRecord: (record) =>
+      run(
+        async () => {
+          await withWorkspaceIndexedDbStore<IDBValidKey>(
+            WORKSPACE_INDEXEDDB_CHAT_STORE,
+            "readwrite",
+            (store) => store.put(record)
+          )
+          return true
+        },
+        false
+      ),
+    getChatRecord: (key) =>
+      run(
+        () =>
+          withWorkspaceIndexedDbStore<WorkspaceIndexedDbChatRecord>(
+            WORKSPACE_INDEXEDDB_CHAT_STORE,
+            "readonly",
+            (store) => store.get(key)
+          ),
+        null
+      ),
+    deleteChatRecord: (key) =>
+      run(
+        async () => {
+          await withWorkspaceIndexedDbStore<undefined>(
+            WORKSPACE_INDEXEDDB_CHAT_STORE,
+            "readwrite",
+            (store) => store.delete(key)
+          )
+          return true
+        },
+        false
+      ),
+    putArtifactPayloadRecord: (record) =>
+      run(
+        async () => {
+          await withWorkspaceIndexedDbStore<IDBValidKey>(
+            WORKSPACE_INDEXEDDB_ARTIFACT_STORE,
+            "readwrite",
+            (store) => store.put(record)
+          )
+          return true
+        },
+        false
+      ),
+    getArtifactPayloadRecord: (key) =>
+      run(
+        () =>
+          withWorkspaceIndexedDbStore<WorkspaceIndexedDbArtifactPayloadRecord>(
+            WORKSPACE_INDEXEDDB_ARTIFACT_STORE,
+            "readonly",
+            (store) => store.get(key)
+          ),
+        null
+      ),
+    deleteArtifactPayloadRecord: (key) =>
+      run(
+        async () => {
+          await withWorkspaceIndexedDbStore<undefined>(
+            WORKSPACE_INDEXEDDB_ARTIFACT_STORE,
+            "readwrite",
+            (store) => store.delete(key)
+          )
+          return true
+        },
+        false
+      )
+  }
+}
+
+const createNoopWorkspaceIndexedDbAdapter = (): WorkspaceIndexedDbAdapter => ({
+  isAvailable: () => false,
+  putChatRecord: async () => false,
+  getChatRecord: async () => null,
+  deleteChatRecord: async () => false,
+  putArtifactPayloadRecord: async () => false,
+  getArtifactPayloadRecord: async () => null,
+  deleteArtifactPayloadRecord: async () => false
+})
+
+const noopWorkspaceIndexedDbAdapter = createNoopWorkspaceIndexedDbAdapter()
+
+const getWorkspaceIndexedDbAdapter = (): WorkspaceIndexedDbAdapter => {
+  if (!workspaceIndexedDbAdapterSingleton) {
+    workspaceIndexedDbAdapterSingleton = createWorkspaceIndexedDbAdapter()
+  }
+  return workspaceIndexedDbAdapterSingleton
+}
+
+const isWorkspaceIndexedDbChatPointer = (
+  candidate: unknown
+): candidate is WorkspaceIndexedDbChatPointer => {
+  if (!isRecord(candidate)) return false
+  if (candidate.offloadType !== WORKSPACE_CHAT_POINTER_KIND) return false
+  if (typeof candidate.key !== "string") return false
+  const historyId = candidate.historyId
+  if (historyId !== null && typeof historyId !== "string") return false
+  const serverChatId = candidate.serverChatId
+  if (serverChatId !== null && typeof serverChatId !== "string") return false
+  return typeof candidate.updatedAt === "number"
+}
+
+const parseWorkspaceIndexedDbArtifactPayloadPointer = (
+  candidate: unknown
+): WorkspaceIndexedDbArtifactPayloadPointer | null => {
+  if (!isRecord(candidate)) return null
+  if (candidate.offloadType !== WORKSPACE_ARTIFACT_POINTER_KIND) return null
+  if (typeof candidate.key !== "string") return null
+  if (!Array.isArray(candidate.fields)) return null
+
+  const fields = candidate.fields.filter(
+    (field): field is "content" | "data" =>
+      field === "content" || field === "data"
+  )
+  if (fields.length === 0) return null
+
+  return {
+    offloadType: WORKSPACE_ARTIFACT_POINTER_KIND,
+    key: candidate.key,
+    fields,
+    updatedAt:
+      typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt)
+        ? candidate.updatedAt
+        : Date.now()
+  }
+}
+
+const getWorkspaceArtifactPayloadPointer = (
+  artifact: unknown
+): WorkspaceIndexedDbArtifactPayloadPointer | null => {
+  if (!isRecord(artifact)) return null
+  return parseWorkspaceIndexedDbArtifactPayloadPointer(
+    artifact[WORKSPACE_ARTIFACT_PAYLOAD_POINTER_KEY]
+  )
+}
+
+const hasWorkspaceArtifactPayloadPointers = (snapshot: unknown): boolean => {
+  if (!isRecord(snapshot) || !Array.isArray(snapshot.generatedArtifacts)) {
+    return false
+  }
+  return snapshot.generatedArtifacts.some(
+    (artifact) => getWorkspaceArtifactPayloadPointer(artifact) !== null
+  )
+}
+
+const buildWorkspaceIndexedDbChatRecordKey = (workspaceId: string): string =>
+  `workspace:${encodeURIComponent(workspaceId)}:chat`
+
+const buildWorkspaceIndexedDbArtifactRecordKey = (
+  workspaceId: string,
+  artifactId: string
+): string =>
+  `workspace:${encodeURIComponent(workspaceId)}:artifact:${encodeURIComponent(
+    artifactId
+  )}`
+
+const collectWorkspaceArtifactIdsFromSnapshot = (snapshot: unknown): string[] => {
+  if (!isRecord(snapshot) || !Array.isArray(snapshot.generatedArtifacts)) {
+    return []
+  }
+
+  const ids = new Set<string>()
+  for (const artifact of snapshot.generatedArtifacts) {
+    if (!isRecord(artifact) || typeof artifact.id !== "string") continue
+    ids.add(artifact.id)
+  }
+  return Array.from(ids)
+}
+
+const collectWorkspaceArtifactPointerKeysFromSnapshot = (
+  snapshot: unknown
+): string[] => {
+  if (!isRecord(snapshot) || !Array.isArray(snapshot.generatedArtifacts)) {
+    return []
+  }
+
+  const keys = new Set<string>()
+  for (const artifact of snapshot.generatedArtifacts) {
+    const pointer = getWorkspaceArtifactPayloadPointer(artifact)
+    if (pointer?.key) {
+      keys.add(pointer.key)
+    }
+  }
+  return Array.from(keys)
+}
+
+const readWorkspaceSnapshotFromStorage = (
+  workspaceId: string
+): WorkspaceSnapshot | null => {
+  const raw = localStorage.getItem(buildWorkspaceSnapshotStorageKey(workspaceId))
+  const parsed = safeParseJson(raw)
+  return isRecord(parsed) ? (parsed as WorkspaceSnapshot) : null
 }
 
 const parseWorkspaceTimestamp = (value: unknown): number => {
@@ -357,6 +756,279 @@ const safeParseJson = (raw: string | null | undefined): unknown => {
   }
 }
 
+const parseWorkspaceFeatureFlagCandidate = (
+  candidate: unknown
+): boolean | null => {
+  if (typeof candidate === "boolean") return candidate
+  if (typeof candidate === "number") {
+    if (!Number.isFinite(candidate)) return null
+    if (candidate === 1) return true
+    if (candidate === 0) return false
+    return null
+  }
+  if (typeof candidate !== "string") return null
+
+  const normalized = candidate.trim().toLowerCase()
+  if (!normalized) return null
+  if (["1", "true", "on", "yes", "enabled"].includes(normalized)) return true
+  if (["0", "false", "off", "no", "disabled"].includes(normalized)) return false
+  return null
+}
+
+const readWorkspaceLocalStorageValue = (key: string): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const resolveWorkspaceStorageFeatureFlag = ({
+  localStorageKey,
+  viteEnvKey,
+  nextEnvKey,
+  defaultEnabled
+}: {
+  localStorageKey: string
+  viteEnvKey: string
+  nextEnvKey: string
+  defaultEnabled: boolean
+}): boolean => {
+  const persistedValue = readWorkspaceLocalStorageValue(localStorageKey)
+  const persistedDecision = parseWorkspaceFeatureFlagCandidate(persistedValue)
+  if (persistedDecision != null) return persistedDecision
+
+  const viteEnv = (import.meta as unknown as { env?: Record<string, unknown> }).env
+  const viteDecision = parseWorkspaceFeatureFlagCandidate(viteEnv?.[viteEnvKey])
+  if (viteDecision != null) return viteDecision
+
+  const nextCandidate =
+    typeof process !== "undefined"
+      ? (process as { env?: Record<string, string | undefined> }).env?.[
+          nextEnvKey
+        ]
+      : undefined
+  const nextDecision = parseWorkspaceFeatureFlagCandidate(nextCandidate)
+  if (nextDecision != null) return nextDecision
+
+  return defaultEnabled
+}
+
+const isWorkspaceSplitKeyStorageEnabled = (): boolean =>
+  resolveWorkspaceStorageFeatureFlag({
+    localStorageKey: WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY,
+    viteEnvKey: WORKSPACE_STORAGE_SPLIT_KEY_FLAG_VITE_ENV,
+    nextEnvKey: WORKSPACE_STORAGE_SPLIT_KEY_FLAG_NEXT_ENV,
+    defaultEnabled: WORKSPACE_STORAGE_SPLIT_KEY_DEFAULT_ENABLED
+  })
+
+const isWorkspaceIndexedDbOffloadEnabled = (): boolean =>
+  resolveWorkspaceStorageFeatureFlag({
+    localStorageKey: WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY,
+    viteEnvKey: WORKSPACE_STORAGE_INDEXEDDB_FLAG_VITE_ENV,
+    nextEnvKey: WORKSPACE_STORAGE_INDEXEDDB_FLAG_NEXT_ENV,
+    defaultEnabled: WORKSPACE_STORAGE_INDEXEDDB_DEFAULT_ENABLED
+  })
+
+const isPromiseLike = <T>(candidate: T | Promise<T>): candidate is Promise<T> =>
+  Boolean(candidate) && typeof (candidate as Promise<T>).then === "function"
+
+const buildIndexedDbArtifactPayload = (
+  artifact: GeneratedArtifact
+): {
+  payload: WorkspaceIndexedDbArtifactPayloadRecord["payload"]
+  fields: Array<"content" | "data">
+} => {
+  const payload: WorkspaceIndexedDbArtifactPayloadRecord["payload"] = {}
+  const fields: Array<"content" | "data"> = []
+
+  if (typeof artifact.content === "string") {
+    payload.content = artifact.content
+    fields.push("content")
+  }
+
+  if (isRecord(artifact.data)) {
+    payload.data = cloneWorkspaceValue(artifact.data as Record<string, unknown>)
+    fields.push("data")
+  }
+
+  return { payload, fields }
+}
+
+const offloadWorkspaceSnapshotArtifacts = async (
+  workspaceId: string,
+  snapshot: WorkspaceSnapshot,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): Promise<{
+  snapshot: WorkspaceSnapshot
+  offloadedArtifactIds: Set<string>
+}> => {
+  if (!indexedDbAdapter.isAvailable()) {
+    return { snapshot, offloadedArtifactIds: new Set<string>() }
+  }
+
+  const persistedArtifacts: PersistedWorkspaceArtifact[] = []
+  const offloadedArtifactIds = new Set<string>()
+  const updatedAt = Date.now()
+
+  for (const artifact of snapshot.generatedArtifacts || []) {
+    if (!artifact || typeof artifact.id !== "string") {
+      persistedArtifacts.push({ ...artifact })
+      continue
+    }
+
+    const { payload, fields } = buildIndexedDbArtifactPayload(artifact)
+    if (
+      fields.length === 0 ||
+      estimateSerializedByteLength(payload) < WORKSPACE_ARTIFACT_OFFLOAD_MIN_BYTES
+    ) {
+      persistedArtifacts.push({ ...artifact })
+      continue
+    }
+
+    const key = buildWorkspaceIndexedDbArtifactRecordKey(workspaceId, artifact.id)
+    const didPersist = await indexedDbAdapter.putArtifactPayloadRecord({
+      key,
+      workspaceId,
+      artifactId: artifact.id,
+      payload,
+      updatedAt
+    })
+
+    if (!didPersist) {
+      persistedArtifacts.push({ ...artifact })
+      continue
+    }
+
+    const nextArtifact: PersistedWorkspaceArtifact = {
+      ...artifact,
+      [WORKSPACE_ARTIFACT_PAYLOAD_POINTER_KEY]: {
+        offloadType: WORKSPACE_ARTIFACT_POINTER_KIND,
+        key,
+        fields,
+        updatedAt
+      }
+    }
+    if (fields.includes("content")) {
+      delete nextArtifact.content
+    }
+    if (fields.includes("data")) {
+      delete nextArtifact.data
+    }
+
+    persistedArtifacts.push(nextArtifact)
+    offloadedArtifactIds.add(artifact.id)
+  }
+
+  return {
+    snapshot: {
+      ...snapshot,
+      generatedArtifacts: persistedArtifacts as GeneratedArtifact[]
+    },
+    offloadedArtifactIds
+  }
+}
+
+const rehydrateWorkspaceSnapshotArtifacts = async (
+  snapshot: WorkspaceSnapshot,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): Promise<WorkspaceSnapshot> => {
+  if (!Array.isArray(snapshot.generatedArtifacts)) {
+    return snapshot
+  }
+
+  const hydratedArtifacts: GeneratedArtifact[] = []
+  for (const artifact of snapshot.generatedArtifacts) {
+    const clonedArtifact: PersistedWorkspaceArtifact = { ...artifact }
+    const pointer = getWorkspaceArtifactPayloadPointer(clonedArtifact)
+
+    if (pointer && indexedDbAdapter.isAvailable()) {
+      const payloadRecord = await indexedDbAdapter.getArtifactPayloadRecord(
+        pointer.key
+      )
+      if (payloadRecord?.payload) {
+        if (
+          pointer.fields.includes("content") &&
+          typeof payloadRecord.payload.content === "string"
+        ) {
+          clonedArtifact.content = payloadRecord.payload.content
+        }
+        if (
+          pointer.fields.includes("data") &&
+          isRecord(payloadRecord.payload.data)
+        ) {
+          clonedArtifact.data = cloneWorkspaceValue(payloadRecord.payload.data)
+        }
+      }
+    }
+
+    if (WORKSPACE_ARTIFACT_PAYLOAD_POINTER_KEY in clonedArtifact) {
+      delete clonedArtifact[WORKSPACE_ARTIFACT_PAYLOAD_POINTER_KEY]
+    }
+    hydratedArtifacts.push(clonedArtifact)
+  }
+
+  return {
+    ...snapshot,
+    generatedArtifacts: hydratedArtifacts
+  }
+}
+
+const rehydrateWorkspaceChatSessionReference = async (
+  reference: PersistedWorkspaceChatSessionReference,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): Promise<PersistedWorkspaceChatSession | null> => {
+  if (isWorkspaceIndexedDbChatPointer(reference)) {
+    if (!indexedDbAdapter.isAvailable()) {
+      return {
+        messages: [],
+        historyId: reference.historyId,
+        serverChatId: reference.serverChatId
+      }
+    }
+    const chatRecord = await indexedDbAdapter.getChatRecord(reference.key)
+    if (chatRecord?.session && isRecord(chatRecord.session)) {
+      return chatRecord.session as PersistedWorkspaceChatSession
+    }
+    return {
+      messages: [],
+      historyId: reference.historyId,
+      serverChatId: reference.serverChatId
+    }
+  }
+
+  if (!isRecord(reference)) return null
+  return reference as PersistedWorkspaceChatSession
+}
+
+const cleanupWorkspaceIndexedDbRecords = async (
+  workspaceId: string,
+  snapshot: unknown,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): Promise<void> => {
+  if (!indexedDbAdapter.isAvailable()) return
+
+  const artifactIds = collectWorkspaceArtifactIdsFromSnapshot(snapshot)
+  const artifactPointerKeys = collectWorkspaceArtifactPointerKeysFromSnapshot(snapshot)
+  const artifactKeys = new Set<string>()
+  for (const artifactId of artifactIds) {
+    artifactKeys.add(buildWorkspaceIndexedDbArtifactRecordKey(workspaceId, artifactId))
+  }
+  for (const key of artifactPointerKeys) {
+    artifactKeys.add(key)
+  }
+
+  await indexedDbAdapter.deleteChatRecord(
+    buildWorkspaceIndexedDbChatRecordKey(workspaceId)
+  )
+  await Promise.all(
+    Array.from(artifactKeys, (key) =>
+      indexedDbAdapter.deleteArtifactPayloadRecord(key)
+    )
+  )
+}
+
 const parsePersistedWorkspaceEnvelope = (
   serializedValue: string
 ): { state: Record<string, unknown>; version: number } | null => {
@@ -432,24 +1104,29 @@ const getWorkspaceIdsFromStoredValue = (raw: string | null): string[] => {
 
 const buildWorkspaceSplitIndexEnvelope = (
   persistedState: PersistedWorkspaceState,
-  version: number
+  version: number,
+  options?: {
+    workspaceSnapshots?: Record<string, WorkspaceSnapshot>
+    workspaceChatSessions?: Record<string, PersistedWorkspaceChatSessionReference>
+  }
 ): WorkspaceSplitIndexEnvelope => {
+  const workspaceSnapshots =
+    options?.workspaceSnapshots || persistedState.workspaceSnapshots
+  const workspaceChatSessions =
+    options?.workspaceChatSessions || persistedState.workspaceChatSessions
   const workspaceIds = normalizeWorkspaceStorageIds(
-    ...Object.keys(persistedState.workspaceSnapshots || {}),
-    ...Object.keys(persistedState.workspaceChatSessions || {}),
+    ...Object.keys(workspaceSnapshots || {}),
+    ...Object.keys(workspaceChatSessions || {}),
     persistedState.workspaceId
   )
   const activeWorkspaceId = persistedState.workspaceId
   const activeSnapshot =
-    activeWorkspaceId && persistedState.workspaceSnapshots[activeWorkspaceId]
-      ? { [activeWorkspaceId]: persistedState.workspaceSnapshots[activeWorkspaceId] }
+    activeWorkspaceId && workspaceSnapshots[activeWorkspaceId]
+      ? { [activeWorkspaceId]: workspaceSnapshots[activeWorkspaceId] }
       : {}
   const activeChatSession =
-    activeWorkspaceId && persistedState.workspaceChatSessions[activeWorkspaceId]
-      ? {
-          [activeWorkspaceId]:
-            persistedState.workspaceChatSessions[activeWorkspaceId]
-        }
+    activeWorkspaceId && workspaceChatSessions[activeWorkspaceId]
+      ? { [activeWorkspaceId]: workspaceChatSessions[activeWorkspaceId] }
       : {}
 
   return {
@@ -468,8 +1145,9 @@ const buildWorkspaceSplitIndexEnvelope = (
 }
 
 const reconstructPersistedWorkspaceStateFromSplitIndex = (
-  envelope: WorkspaceSplitIndexEnvelope
-): PersistedWorkspaceState => {
+  envelope: WorkspaceSplitIndexEnvelope,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): PersistedWorkspaceState | Promise<PersistedWorkspaceState> => {
   const stateCandidate = envelope.state
   const workspaceId =
     typeof stateCandidate.workspaceId === "string"
@@ -489,7 +1167,11 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     : []
 
   const snapshots: Record<string, WorkspaceSnapshot> = {}
-  const chatSessions: Record<string, PersistedWorkspaceChatSession> = {}
+  const chatSessionReferences: Record<
+    string,
+    PersistedWorkspaceChatSessionReference
+  > = {}
+  let requiresIndexedDbHydration = false
 
   for (const workspaceStorageId of workspaceIds) {
     const snapshotRaw = localStorage.getItem(
@@ -498,6 +1180,9 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     const parsedSnapshot = safeParseJson(snapshotRaw)
     if (isRecord(parsedSnapshot)) {
       snapshots[workspaceStorageId] = parsedSnapshot as WorkspaceSnapshot
+      if (hasWorkspaceArtifactPayloadPointers(parsedSnapshot)) {
+        requiresIndexedDbHydration = true
+      }
     }
 
     const chatRaw = localStorage.getItem(
@@ -505,8 +1190,11 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     )
     const parsedChat = safeParseJson(chatRaw)
     if (isRecord(parsedChat)) {
-      chatSessions[workspaceStorageId] =
-        parsedChat as PersistedWorkspaceChatSession
+      if (isWorkspaceIndexedDbChatPointer(parsedChat)) {
+        requiresIndexedDbHydration = true
+      }
+      chatSessionReferences[workspaceStorageId] =
+        parsedChat as PersistedWorkspaceChatSessionReference
     }
   }
 
@@ -518,33 +1206,86 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   ) {
     snapshots[workspaceId] =
       stateCandidate.workspaceSnapshots[workspaceId] as WorkspaceSnapshot
+    if (hasWorkspaceArtifactPayloadPointers(snapshots[workspaceId])) {
+      requiresIndexedDbHydration = true
+    }
   }
 
   if (
     workspaceId &&
-    !chatSessions[workspaceId] &&
+    !chatSessionReferences[workspaceId] &&
     isRecord(stateCandidate.workspaceChatSessions) &&
     isRecord(stateCandidate.workspaceChatSessions[workspaceId])
   ) {
-    chatSessions[workspaceId] =
+    const reference = stateCandidate.workspaceChatSessions[
+      workspaceId
+    ] as PersistedWorkspaceChatSessionReference
+    if (isWorkspaceIndexedDbChatPointer(reference)) {
+      requiresIndexedDbHydration = true
+    }
+    chatSessionReferences[workspaceId] =
       stateCandidate.workspaceChatSessions[
         workspaceId
-      ] as PersistedWorkspaceChatSession
+      ] as PersistedWorkspaceChatSessionReference
   }
 
-  return {
+  const baseState = {
     workspaceId,
     savedWorkspaces: savedWorkspaces as SavedWorkspace[],
-    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[],
-    workspaceSnapshots: snapshots,
-    workspaceChatSessions: chatSessions
+    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[]
   }
+
+  if (!requiresIndexedDbHydration) {
+    const chatSessions: Record<string, PersistedWorkspaceChatSession> = {}
+    for (const [workspaceStorageId, reference] of Object.entries(
+      chatSessionReferences
+    )) {
+      if (isWorkspaceIndexedDbChatPointer(reference)) continue
+      if (!isRecord(reference)) continue
+      chatSessions[workspaceStorageId] = reference as PersistedWorkspaceChatSession
+    }
+    return {
+      ...baseState,
+      workspaceSnapshots: snapshots,
+      workspaceChatSessions: chatSessions
+    }
+  }
+
+  return (async () => {
+    const hydratedSnapshots: Record<string, WorkspaceSnapshot> = {}
+    for (const [workspaceStorageId, snapshot] of Object.entries(snapshots)) {
+      hydratedSnapshots[workspaceStorageId] = await rehydrateWorkspaceSnapshotArtifacts(
+        snapshot,
+        indexedDbAdapter
+      )
+    }
+
+    const hydratedChatSessions: Record<string, PersistedWorkspaceChatSession> = {}
+    for (const [workspaceStorageId, reference] of Object.entries(
+      chatSessionReferences
+    )) {
+      const hydratedSession = await rehydrateWorkspaceChatSessionReference(
+        reference,
+        indexedDbAdapter
+      )
+      if (hydratedSession) {
+        hydratedChatSessions[workspaceStorageId] = hydratedSession
+      }
+    }
+
+    return {
+      ...baseState,
+      workspaceSnapshots: hydratedSnapshots,
+      workspaceChatSessions: hydratedChatSessions
+    }
+  })()
 }
 
-const writeSplitWorkspacePersistence = (
+const writeSplitWorkspacePersistence = async (
   name: string,
-  serializedValue: string
-): boolean => {
+  serializedValue: string,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): Promise<boolean> => {
   if (name !== WORKSPACE_STORAGE_KEY) return false
 
   const envelope = parsePersistedWorkspaceEnvelope(serializedValue)
@@ -563,38 +1304,178 @@ const writeSplitWorkspacePersistence = (
   const existingWorkspaceIds = getWorkspaceIdsFromStoredValue(
     localStorage.getItem(name)
   )
+  const persistedSnapshotsForIndex: Record<string, WorkspaceSnapshot> = {}
+  const persistedChatReferencesForIndex: Record<
+    string,
+    PersistedWorkspaceChatSessionReference
+  > = {}
 
   for (const workspaceStorageId of nextWorkspaceIds) {
     const snapshotKey = buildWorkspaceSnapshotStorageKey(workspaceStorageId)
+    const previousSnapshot = readWorkspaceSnapshotFromStorage(workspaceStorageId)
+    const previousArtifactIds = collectWorkspaceArtifactIdsFromSnapshot(
+      previousSnapshot
+    )
+    const previousArtifactPointerKeys = collectWorkspaceArtifactPointerKeysFromSnapshot(
+      previousSnapshot
+    )
+
     const snapshot = migrated.workspaceSnapshots[workspaceStorageId]
+    const nextArtifactIds = snapshot
+      ? collectWorkspaceArtifactIdsFromSnapshot(snapshot)
+      : []
+    const retainedArtifactKeys = new Set<string>()
+
     if (snapshot) {
-      const nextSnapshotValue = JSON.stringify(snapshot)
+      let snapshotForStorage = snapshot
+      let offloadedArtifactIds = new Set<string>()
+      if (indexedDbAdapter.isAvailable()) {
+        const offloadResult = await offloadWorkspaceSnapshotArtifacts(
+          workspaceStorageId,
+          snapshot,
+          indexedDbAdapter
+        )
+        snapshotForStorage = offloadResult.snapshot
+        offloadedArtifactIds = offloadResult.offloadedArtifactIds
+        for (const artifactId of offloadedArtifactIds) {
+          retainedArtifactKeys.add(
+            buildWorkspaceIndexedDbArtifactRecordKey(workspaceStorageId, artifactId)
+          )
+        }
+      }
+
+      const nextSnapshotValue = JSON.stringify(snapshotForStorage)
       if (localStorage.getItem(snapshotKey) !== nextSnapshotValue) {
         localStorage.setItem(snapshotKey, nextSnapshotValue)
       }
+      persistedSnapshotsForIndex[workspaceStorageId] = snapshotForStorage
     } else if (localStorage.getItem(snapshotKey) !== null) {
       localStorage.removeItem(snapshotKey)
     }
 
+    if (indexedDbAdapter.isAvailable()) {
+      const artifactPayloadKeysToDelete = new Set<string>(previousArtifactPointerKeys)
+      for (const artifactId of previousArtifactIds) {
+        const payloadKey = buildWorkspaceIndexedDbArtifactRecordKey(
+          workspaceStorageId,
+          artifactId
+        )
+        if (!nextArtifactIds.includes(artifactId)) {
+          artifactPayloadKeysToDelete.add(payloadKey)
+          continue
+        }
+        if (!retainedArtifactKeys.has(payloadKey)) {
+          artifactPayloadKeysToDelete.add(payloadKey)
+        }
+      }
+      for (const key of retainedArtifactKeys) {
+        artifactPayloadKeysToDelete.delete(key)
+      }
+      await Promise.all(
+        Array.from(artifactPayloadKeysToDelete, (key) =>
+          indexedDbAdapter.deleteArtifactPayloadRecord(key)
+        )
+      )
+    }
+
     const chatKey = buildWorkspaceChatStorageKey(workspaceStorageId)
+    const previousChatCandidate = safeParseJson(localStorage.getItem(chatKey))
+    const previousChatPointerKey = isWorkspaceIndexedDbChatPointer(
+      previousChatCandidate
+    )
+      ? previousChatCandidate.key
+      : null
     const chatSession = migrated.workspaceChatSessions[workspaceStorageId]
+    let retainedChatRecordKey: string | null = null
+
     if (chatSession) {
-      const nextChatValue = JSON.stringify(chatSession)
+      let chatReference: PersistedWorkspaceChatSessionReference = chatSession
+      if (
+        indexedDbAdapter.isAvailable() &&
+        estimateSerializedByteLength(chatSession) >= WORKSPACE_CHAT_OFFLOAD_MIN_BYTES
+      ) {
+        const chatRecordKey = buildWorkspaceIndexedDbChatRecordKey(workspaceStorageId)
+        const updatedAt = Date.now()
+        const didPersist = await indexedDbAdapter.putChatRecord({
+          key: chatRecordKey,
+          workspaceId: workspaceStorageId,
+          session: chatSession,
+          updatedAt
+        })
+        if (didPersist) {
+          retainedChatRecordKey = chatRecordKey
+          chatReference = {
+            offloadType: WORKSPACE_CHAT_POINTER_KIND,
+            key: chatRecordKey,
+            historyId: chatSession.historyId,
+            serverChatId: chatSession.serverChatId,
+            updatedAt
+          }
+        }
+      }
+
+      const nextChatValue = JSON.stringify(chatReference)
       if (localStorage.getItem(chatKey) !== nextChatValue) {
         localStorage.setItem(chatKey, nextChatValue)
       }
+      persistedChatReferencesForIndex[workspaceStorageId] = chatReference
     } else if (localStorage.getItem(chatKey) !== null) {
       localStorage.removeItem(chatKey)
+    }
+
+    if (indexedDbAdapter.isAvailable()) {
+      const chatKeysToDelete = new Set<string>()
+      chatKeysToDelete.add(buildWorkspaceIndexedDbChatRecordKey(workspaceStorageId))
+      if (previousChatPointerKey) {
+        chatKeysToDelete.add(previousChatPointerKey)
+      }
+      if (retainedChatRecordKey) {
+        chatKeysToDelete.delete(retainedChatRecordKey)
+      }
+      await Promise.all(
+        Array.from(chatKeysToDelete, (key) =>
+          indexedDbAdapter.deleteChatRecord(key)
+        )
+      )
     }
   }
 
   for (const staleWorkspaceId of existingWorkspaceIds) {
     if (nextWorkspaceIds.includes(staleWorkspaceId)) continue
+
+    const staleSnapshot = readWorkspaceSnapshotFromStorage(staleWorkspaceId)
+    const staleChatRaw = safeParseJson(
+      localStorage.getItem(buildWorkspaceChatStorageKey(staleWorkspaceId))
+    )
+    const staleChatPointerKey = isWorkspaceIndexedDbChatPointer(staleChatRaw)
+      ? staleChatRaw.key
+      : null
+
     localStorage.removeItem(buildWorkspaceSnapshotStorageKey(staleWorkspaceId))
     localStorage.removeItem(buildWorkspaceChatStorageKey(staleWorkspaceId))
+
+    if (indexedDbAdapter.isAvailable()) {
+      await cleanupWorkspaceIndexedDbRecords(
+        staleWorkspaceId,
+        staleSnapshot,
+        indexedDbAdapter
+      )
+      if (staleChatPointerKey) {
+        await indexedDbAdapter.deleteChatRecord(staleChatPointerKey)
+      }
+    }
   }
 
-  const splitIndex = buildWorkspaceSplitIndexEnvelope(migrated, version)
+  const splitIndex = buildWorkspaceSplitIndexEnvelope(migrated, version, {
+    workspaceSnapshots: {
+      ...migrated.workspaceSnapshots,
+      ...persistedSnapshotsForIndex
+    },
+    workspaceChatSessions: {
+      ...migrated.workspaceChatSessions,
+      ...persistedChatReferencesForIndex
+    }
+  })
   const indexValue = JSON.stringify(splitIndex)
   if (localStorage.getItem(name) !== indexValue) {
     localStorage.setItem(name, indexValue)
@@ -604,8 +1485,9 @@ const writeSplitWorkspacePersistence = (
 }
 
 const rebuildWorkspaceEnvelopeFromStorage = (
-  name: string
-): string | null => {
+  name: string,
+  indexedDbAdapter: WorkspaceIndexedDbAdapter
+): string | null | Promise<string | null> => {
   const raw = localStorage.getItem(name)
   if (raw === null) return null
 
@@ -621,15 +1503,29 @@ const rebuildWorkspaceEnvelopeFromStorage = (
       version: envelope.version
     })
     // Best-effort migration to split-key storage on first read.
-    try {
-      writeSplitWorkspacePersistence(name, migratedEnvelope)
-    } catch {
+    void writeSplitWorkspacePersistence(
+      name,
+      migratedEnvelope,
+      indexedDbAdapter
+    ).catch(() => {
       // Ignore migration failures and continue with in-memory rehydrate value.
-    }
+    })
     return migratedEnvelope
   }
 
-  const reconstructed = reconstructPersistedWorkspaceStateFromSplitIndex(parsed)
+  const reconstructed = reconstructPersistedWorkspaceStateFromSplitIndex(
+    parsed,
+    indexedDbAdapter
+  )
+  if (isPromiseLike(reconstructed)) {
+    return reconstructed.then((state) =>
+      JSON.stringify({
+        state,
+        version: parsed.version
+      })
+    )
+  }
+
   return JSON.stringify({
     state: reconstructed,
     version: parsed.version
@@ -682,21 +1578,39 @@ const createMemoryStorage = (): StateStorage => ({
  * Custom storage adapter for localStorage with SSR-safe fallback.
  * Date revival is handled in `onRehydrateStorage`.
  */
-export const createWorkspaceStorage = (): StateStorage => {
+type WorkspaceStorageOptions = {
+  indexedDbAdapter?: WorkspaceIndexedDbAdapter
+}
+
+export const createWorkspaceStorage = (
+  options: WorkspaceStorageOptions = {}
+): StateStorage => {
   if (typeof window === "undefined") {
     return createMemoryStorage()
   }
 
+  const splitStorageEnabled = isWorkspaceSplitKeyStorageEnabled()
+  const indexedDbOffloadEnabled =
+    splitStorageEnabled && isWorkspaceIndexedDbOffloadEnabled()
+  const indexedDbAdapter = indexedDbOffloadEnabled
+    ? options.indexedDbAdapter || getWorkspaceIndexedDbAdapter()
+    : noopWorkspaceIndexedDbAdapter
+
   return {
-    getItem: (name: string): string | null => {
+    getItem: (name: string): string | null | Promise<string | null> => {
       if (name === WORKSPACE_STORAGE_KEY) {
-        return rebuildWorkspaceEnvelopeFromStorage(name)
+        if (!splitStorageEnabled) {
+          return localStorage.getItem(name)
+        }
+        return rebuildWorkspaceEnvelopeFromStorage(name, indexedDbAdapter)
       }
       return localStorage.getItem(name)
     },
-    setItem: (name: string, value: string): void => {
+    setItem: async (name: string, value: string): Promise<void> => {
       try {
-        const handledBySplitStorage = writeSplitWorkspacePersistence(name, value)
+        const handledBySplitStorage = splitStorageEnabled
+          ? await writeSplitWorkspacePersistence(name, value, indexedDbAdapter)
+          : false
         if (!handledBySplitStorage) {
           localStorage.setItem(name, value)
         }
@@ -732,10 +1646,13 @@ export const createWorkspaceStorage = (): StateStorage => {
           }
 
           try {
-            const handledBySplitStorage = writeSplitWorkspacePersistence(
-              name,
-              recoveryAttempt.value
-            )
+            const handledBySplitStorage = splitStorageEnabled
+              ? await writeSplitWorkspacePersistence(
+                  name,
+                  recoveryAttempt.value,
+                  indexedDbAdapter
+                )
+              : false
             if (!handledBySplitStorage) {
               localStorage.setItem(name, recoveryAttempt.value)
             }
@@ -772,18 +1689,37 @@ export const createWorkspaceStorage = (): StateStorage => {
         throw error
       }
     },
-    removeItem: (name: string): void => {
+    removeItem: async (name: string): Promise<void> => {
       if (name === WORKSPACE_STORAGE_KEY) {
         const workspaceIds = getWorkspaceIdsFromStoredValue(
           localStorage.getItem(name)
         )
         for (const workspaceStorageId of workspaceIds) {
+          const snapshot = readWorkspaceSnapshotFromStorage(workspaceStorageId)
+          const chatCandidate = safeParseJson(
+            localStorage.getItem(buildWorkspaceChatStorageKey(workspaceStorageId))
+          )
+          const chatPointerKey = isWorkspaceIndexedDbChatPointer(chatCandidate)
+            ? chatCandidate.key
+            : null
+
           localStorage.removeItem(
             buildWorkspaceSnapshotStorageKey(workspaceStorageId)
           )
           localStorage.removeItem(
             buildWorkspaceChatStorageKey(workspaceStorageId)
           )
+
+          if (indexedDbAdapter.isAvailable()) {
+            await cleanupWorkspaceIndexedDbRecords(
+              workspaceStorageId,
+              snapshot,
+              indexedDbAdapter
+            )
+            if (chatPointerKey) {
+              await indexedDbAdapter.deleteChatRecord(chatPointerKey)
+            }
+          }
         }
       }
       localStorage.removeItem(name)
@@ -1327,13 +2263,92 @@ const recordWorkspacePersistenceDiagnostics = (
   }
 }
 
-const sanitizeArtifactsForPersistence = (
-  artifacts: GeneratedArtifact[]
-): GeneratedArtifact[] =>
-  artifacts.map((artifact) => ({
+const truncateTextForPersistence = (
+  text: string,
+  maxBytes: number,
+  suffix: string
+): string => {
+  if (!text || maxBytes <= 0) return ""
+  const originalBytes = estimateUtf8ByteLength(text)
+  if (originalBytes <= maxBytes) return text
+
+  const suffixBytes = estimateUtf8ByteLength(suffix)
+  if (suffixBytes >= maxBytes) {
+    return suffix.slice(0, Math.max(0, Math.floor(maxBytes / 2)))
+  }
+
+  const targetBytes = maxBytes - suffixBytes
+
+  if (typeof TextEncoder !== "undefined" && typeof TextDecoder !== "undefined") {
+    const encoder = new TextEncoder()
+    const decoder = new TextDecoder()
+    const encoded = encoder.encode(text).slice(0, targetBytes)
+    let decoded = decoder.decode(encoded).replace(/\uFFFD+$/g, "").trimEnd()
+    while (
+      decoded.length > 0 &&
+      estimateUtf8ByteLength(decoded) > targetBytes
+    ) {
+      decoded = decoded.slice(0, -1)
+    }
+    if (decoded.length === 0) return suffix.trim()
+    return `${decoded}${suffix}`
+  }
+
+  let end = text.length
+  let truncated = text.slice(0, end)
+  while (
+    end > 0 &&
+    estimateUtf8ByteLength(truncated) > targetBytes
+  ) {
+    end -= 1
+    truncated = text.slice(0, end)
+  }
+  truncated = truncated.trimEnd()
+  if (!truncated) return suffix.trim()
+  return `${truncated}${suffix}`
+}
+
+const sanitizeArtifactForPersistence = (
+  artifact: GeneratedArtifact
+): GeneratedArtifact => {
+  const sanitizedArtifact: GeneratedArtifact = {
     ...artifact,
     audioUrl: undefined
-  }))
+  }
+
+  const hasServerBackedPayload =
+    sanitizedArtifact.serverId !== null &&
+    sanitizedArtifact.serverId !== undefined
+  if (!hasServerBackedPayload) {
+    return sanitizedArtifact
+  }
+
+  if (
+    typeof sanitizedArtifact.content === "string" &&
+    estimateUtf8ByteLength(sanitizedArtifact.content) >
+      WORKSPACE_PERSIST_SERVER_ARTIFACT_CONTENT_MAX_BYTES
+  ) {
+    sanitizedArtifact.content = truncateTextForPersistence(
+      sanitizedArtifact.content,
+      WORKSPACE_PERSIST_SERVER_ARTIFACT_CONTENT_MAX_BYTES,
+      WORKSPACE_PERSIST_TRUNCATION_SUFFIX
+    )
+  }
+
+  if (
+    isRecord(sanitizedArtifact.data) &&
+    estimateSerializedByteLength(sanitizedArtifact.data) >
+      WORKSPACE_PERSIST_SERVER_ARTIFACT_DATA_MAX_BYTES
+  ) {
+    sanitizedArtifact.data = undefined
+  }
+
+  return sanitizedArtifact
+}
+
+const sanitizeArtifactsForPersistence = (
+  artifacts: GeneratedArtifact[]
+): GeneratedArtifact[] => artifacts.map((artifact) => sanitizeArtifactForPersistence(artifact))
 
 const reviveDateOrNull = (value: Date | string | null | undefined): Date | null => {
   if (!value) return null
@@ -1938,11 +2953,18 @@ const cloneWorkspaceChatSession = (
 
 const buildPersistedWorkspaceChatSession = (
   session: WorkspaceChatSession
-): PersistedWorkspaceChatSession => ({
-  messages: session.messages.map((message) => ({ ...message })),
-  historyId: session.historyId,
-  serverChatId: session.serverChatId
-})
+): PersistedWorkspaceChatSession => {
+  const boundedMessages =
+    session.messages.length > WORKSPACE_PERSIST_MAX_CHAT_MESSAGES_PER_SESSION
+      ? session.messages.slice(-WORKSPACE_PERSIST_MAX_CHAT_MESSAGES_PER_SESSION)
+      : session.messages
+
+  return {
+    messages: boundedMessages.map((message) => ({ ...message })),
+    historyId: session.historyId,
+    serverChatId: session.serverChatId
+  }
+}
 
 const buildPersistedWorkspaceChatSessions = (
   sessions: Record<string, WorkspaceChatSession>

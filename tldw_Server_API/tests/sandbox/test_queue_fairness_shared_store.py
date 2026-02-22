@@ -30,13 +30,21 @@ def _configure_sqlite_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     clear_config_cache()
 
 
-def _spec(*, command: str, persona_id: str | None = None) -> RunSpec:
+def _spec(
+    *,
+    command: str,
+    persona_id: str | None = None,
+    workspace_id: str | None = None,
+    workspace_group_id: str | None = None,
+) -> RunSpec:
     return RunSpec(
         session_id=None,
         runtime=RuntimeType.docker,
         base_image="python:3.11-slim",
         command=["echo", command],
         persona_id=persona_id,
+        workspace_id=workspace_id,
+        workspace_group_id=workspace_group_id,
     )
 
 
@@ -116,6 +124,88 @@ def test_queue_per_persona_quota_enforced_across_orchestrators(monkeypatch: pyte
     orch_b.enqueue_run(
         user_id="user-2",
         spec=_spec(command="b-2", persona_id="persona-other"),
+        spec_version="1.0",
+        idem_key=None,
+        body={"command": ["echo", "b-2"]},
+    )
+
+
+def test_queue_per_workspace_quota_enforced_across_orchestrators(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _configure_sqlite_store(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_LENGTH", "10")
+    monkeypatch.setenv("SANDBOX_QUEUE_TTL_SEC", "120")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_USER", "0")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_PERSONA", "0")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_WORKSPACE", "1")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP", "0")
+
+    orch_a = SandboxOrchestrator()
+    orch_b = SandboxOrchestrator()
+
+    orch_a.enqueue_run(
+        user_id="user-1",
+        spec=_spec(command="a-1", workspace_id="workspace-shared"),
+        spec_version="1.0",
+        idem_key=None,
+        body={"command": ["echo", "a-1"]},
+    )
+
+    with pytest.raises(QueueFull) as exc:
+        orch_b.enqueue_run(
+            user_id="user-2",
+            spec=_spec(command="b-1", workspace_id="workspace-shared"),
+            spec_version="1.0",
+            idem_key=None,
+            body={"command": ["echo", "b-1"]},
+        )
+
+    assert exc.value.reason == "workspace_queue_quota_exceeded"
+    assert exc.value.quota_scope == "workspace_id"
+
+    orch_b.enqueue_run(
+        user_id="user-2",
+        spec=_spec(command="b-2", workspace_id="workspace-other"),
+        spec_version="1.0",
+        idem_key=None,
+        body={"command": ["echo", "b-2"]},
+    )
+
+
+def test_queue_per_workspace_group_quota_enforced_across_orchestrators(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _configure_sqlite_store(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_LENGTH", "10")
+    monkeypatch.setenv("SANDBOX_QUEUE_TTL_SEC", "120")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_USER", "0")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_PERSONA", "0")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_WORKSPACE", "0")
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP", "1")
+
+    orch_a = SandboxOrchestrator()
+    orch_b = SandboxOrchestrator()
+
+    orch_a.enqueue_run(
+        user_id="user-1",
+        spec=_spec(command="a-1", workspace_group_id="wg-shared"),
+        spec_version="1.0",
+        idem_key=None,
+        body={"command": ["echo", "a-1"]},
+    )
+
+    with pytest.raises(QueueFull) as exc:
+        orch_b.enqueue_run(
+            user_id="user-2",
+            spec=_spec(command="b-1", workspace_group_id="wg-shared"),
+            spec_version="1.0",
+            idem_key=None,
+            body={"command": ["echo", "b-1"]},
+        )
+
+    assert exc.value.reason == "workspace_group_queue_quota_exceeded"
+    assert exc.value.quota_scope == "workspace_group_id"
+
+    orch_b.enqueue_run(
+        user_id="user-2",
+        spec=_spec(command="b-2", workspace_group_id="wg-other"),
         spec_version="1.0",
         idem_key=None,
         body={"command": ["echo", "b-2"]},

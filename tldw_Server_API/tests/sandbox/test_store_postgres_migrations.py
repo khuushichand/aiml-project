@@ -97,6 +97,8 @@ def test_postgres_store_adds_missing_columns(monkeypatch):
             assert "workspace_id" in cols
             assert "workspace_group_id" in cols
             assert "scope_snapshot_id" in cols
+            assert "claim_owner" in cols
+            assert "claim_expires_at" in cols
 
             cur.execute(
                 """

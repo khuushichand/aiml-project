@@ -1004,6 +1004,7 @@ def load_settings():
     SANDBOX_QUEUE_MAX_PER_PERSONA = _sbx_int("SANDBOX_QUEUE_MAX_PER_PERSONA", "queue_max_per_persona", 0)
     SANDBOX_QUEUE_MAX_PER_WORKSPACE = _sbx_int("SANDBOX_QUEUE_MAX_PER_WORKSPACE", "queue_max_per_workspace", 0)
     SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP = _sbx_int("SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP", "queue_max_per_workspace_group", 0)
+    SANDBOX_RUN_CLAIM_LEASE_SEC = _sbx_int("SANDBOX_RUN_CLAIM_LEASE_SEC", "run_claim_lease_sec", 30)
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
@@ -1189,6 +1190,7 @@ def load_settings():
         "SANDBOX_DOCKER_APPARMOR_PROFILE": SANDBOX_DOCKER_APPARMOR_PROFILE,
         "SANDBOX_STORE_BACKEND": SANDBOX_STORE_BACKEND,
         "SANDBOX_STORE_DB_PATH": SANDBOX_STORE_DB_PATH,
+        "SANDBOX_RUN_CLAIM_LEASE_SEC": SANDBOX_RUN_CLAIM_LEASE_SEC,
         # Email ingestion/search rollout controls
         "EMAIL_NATIVE_PERSIST_ENABLED": is_truthy(
             os.getenv("EMAIL_NATIVE_PERSIST_ENABLED", "true")

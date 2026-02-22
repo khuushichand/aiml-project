@@ -9,6 +9,10 @@ import {
 import { createWorkspaceStorage } from "../workspace"
 
 const STORAGE_KEY = WORKSPACE_STORAGE_KEY
+const snapshotKey = (workspaceId: string) =>
+  `${STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:snapshot`
+const chatKey = (workspaceId: string) =>
+  `${STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:chat`
 
 const buildQuotaError = () =>
   typeof DOMException !== "undefined"
@@ -36,11 +40,10 @@ describe("workspace storage quota eviction recovery", () => {
     Storage.prototype.setItem = originalSetItem
   })
 
-  it("evicts least-recently-used archived workspace data before retrying", () => {
+  it("evicts least-recently-used archived workspace data before retrying", async () => {
     const storage = createWorkspaceStorage()
     const quotaEvents: Array<CustomEvent<WorkspaceStorageQuotaEventDetail>> = []
     const recoveryEvents: Array<CustomEvent<WorkspaceStorageRecoveryEventDetail>> = []
-    const writes: string[] = []
     let callCount = 0
 
     const onQuota = (event: Event) =>
@@ -55,7 +58,6 @@ describe("workspace storage quota eviction recovery", () => {
 
     Storage.prototype.setItem = ((name: string, value: string) => {
       callCount += 1
-      writes.push(value)
       if (callCount === 1) {
         throw buildQuotaError()
       }
@@ -127,9 +129,9 @@ describe("workspace storage quota eviction recovery", () => {
       }
     })
 
-    storage.setItem(STORAGE_KEY, payload)
+    await storage.setItem(STORAGE_KEY, payload)
 
-    expect(callCount).toBe(2)
+    expect(callCount).toBeGreaterThanOrEqual(2)
     expect(quotaEvents).toHaveLength(0)
     expect(
       recoveryEvents.some(
@@ -140,16 +142,14 @@ describe("workspace storage quota eviction recovery", () => {
       recoveryEvents.some((event) => event.detail.action === "retry_success")
     ).toBe(true)
 
-    const recoveredPayload = JSON.parse(writes[1] || "{}")
-    const recoveredState = recoveredPayload.state as Record<string, any>
-    const archivedIds = Array.isArray(recoveredState.archivedWorkspaces)
-      ? recoveredState.archivedWorkspaces.map((workspace: { id?: string }) => workspace.id)
+    const recoveredIndexRaw = localStorage.getItem(STORAGE_KEY)
+    const recoveredIndex = recoveredIndexRaw ? JSON.parse(recoveredIndexRaw) : null
+    const recoveredWorkspaceIds = Array.isArray(recoveredIndex?.state?.workspaceIds)
+      ? recoveredIndex.state.workspaceIds
       : []
-    expect(archivedIds).not.toContain("workspace-archived-old")
-    expect(recoveredState.workspaceSnapshots?.["workspace-archived-old"]).toBeUndefined()
-    expect(
-      recoveredState.workspaceChatSessions?.["workspace-archived-old"]
-    ).toBeUndefined()
+    expect(recoveredWorkspaceIds).not.toContain("workspace-archived-old")
+    expect(localStorage.getItem(snapshotKey("workspace-archived-old"))).toBeNull()
+    expect(localStorage.getItem(chatKey("workspace-archived-old"))).toBeNull()
 
     window.removeEventListener(
       WORKSPACE_STORAGE_QUOTA_EVENT,
@@ -161,10 +161,9 @@ describe("workspace storage quota eviction recovery", () => {
     )
   })
 
-  it("evicts oldest non-active chat sessions and oversized artifacts", () => {
+  it("evicts oldest non-active chat sessions and oversized artifacts", async () => {
     const storage = createWorkspaceStorage()
     const recoveryEvents: Array<CustomEvent<WorkspaceStorageRecoveryEventDetail>> = []
-    const writes: string[] = []
     let callCount = 0
 
     const onRecovery = (event: Event) =>
@@ -176,7 +175,6 @@ describe("workspace storage quota eviction recovery", () => {
 
     Storage.prototype.setItem = ((name: string, value: string) => {
       callCount += 1
-      writes.push(value)
       if (callCount === 1) {
         throw buildQuotaError()
       }
@@ -249,9 +247,9 @@ describe("workspace storage quota eviction recovery", () => {
       }
     })
 
-    storage.setItem(STORAGE_KEY, payload)
+    await storage.setItem(STORAGE_KEY, payload)
 
-    expect(callCount).toBe(2)
+    expect(callCount).toBeGreaterThanOrEqual(2)
     expect(
       recoveryEvents.some((event) => event.detail.action === "chat_session_removed")
     ).toBe(true)
@@ -262,13 +260,16 @@ describe("workspace storage quota eviction recovery", () => {
       recoveryEvents.some((event) => event.detail.action === "retry_success")
     ).toBe(true)
 
-    const recoveredPayload = JSON.parse(writes[1] || "{}")
-    const recoveredState = recoveredPayload.state as Record<string, any>
-    expect(recoveredState.workspaceChatSessions?.["workspace-old"]).toBeUndefined()
-    expect(
-      recoveredState.workspaceSnapshots?.["workspace-old"]?.generatedArtifacts
-        ?.length
-    ).toBeLessThan(2)
+    expect(localStorage.getItem(chatKey("workspace-old"))).toBeNull()
+    const workspaceOldSnapshotRaw = localStorage.getItem(snapshotKey("workspace-old"))
+    const workspaceOldSnapshot = workspaceOldSnapshotRaw
+      ? JSON.parse(workspaceOldSnapshotRaw)
+      : null
+    if (workspaceOldSnapshot) {
+      expect(workspaceOldSnapshot?.generatedArtifacts?.length || 0).toBeLessThan(2)
+    } else {
+      expect(workspaceOldSnapshotRaw).toBeNull()
+    }
 
     window.removeEventListener(
       WORKSPACE_STORAGE_RECOVERY_EVENT,
@@ -276,7 +277,7 @@ describe("workspace storage quota eviction recovery", () => {
     )
   })
 
-  it("emits quota warning if retry still fails after recovery", () => {
+  it("emits quota warning if retry still fails after recovery", async () => {
     const storage = createWorkspaceStorage()
     const quotaEvents: Array<CustomEvent<WorkspaceStorageQuotaEventDetail>> = []
     const recoveryEvents: Array<CustomEvent<WorkspaceStorageRecoveryEventDetail>> = []
@@ -316,9 +317,7 @@ describe("workspace storage quota eviction recovery", () => {
       workspaceChatSessions: {}
     })
 
-    expect(() => {
-      storage.setItem(STORAGE_KEY, payload)
-    }).not.toThrow()
+    await expect(storage.setItem(STORAGE_KEY, payload)).resolves.toBeUndefined()
 
     expect(callCount).toBe(2)
     expect(quotaEvents).toHaveLength(1)

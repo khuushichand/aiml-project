@@ -97,7 +97,8 @@ export default async function globalSetup() {
 }
 
 function applyTestHostPermissions(projectRoot: string) {
-  const rawUrl = process.env.TLDW_E2E_SERVER_URL
+  const rawUrl =
+    process.env.TLDW_E2E_SERVER_URL || process.env.LDW_E2E_SERVER_URL
   if (!rawUrl) return
   let originPattern = ''
   try {

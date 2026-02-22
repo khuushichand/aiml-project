@@ -54,6 +54,13 @@ class IdempotencyConflict(Exception):
         self.prior_created_at = prior_created_at
 
 
+class SessionActiveRunsConflict(Exception):
+    def __init__(self, session_id: str, active_runs: int, message: str = "session_has_active_runs") -> None:
+        super().__init__(message)
+        self.session_id = str(session_id)
+        self.active_runs = max(0, int(active_runs))
+
+
 def _fingerprint_body(body: dict[str, Any]) -> str:
     try:
         canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
@@ -643,6 +650,46 @@ class SandboxOrchestrator:
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
             pass
 
+    def try_claim_run(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> RunStatus | None:
+        try:
+            return self._store.try_claim_run(str(run_id), worker_id=str(worker_id), lease_seconds=int(lease_seconds))
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"store.try_claim_run failed: {e}")
+            return None
+
+    def renew_run_claim(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> bool:
+        try:
+            return bool(self._store.renew_run_claim(str(run_id), worker_id=str(worker_id), lease_seconds=int(lease_seconds)))
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"store.renew_run_claim failed: {e}")
+            return False
+
+    def release_run_claim(self, run_id: str, *, worker_id: str) -> bool:
+        try:
+            return bool(self._store.release_run_claim(str(run_id), worker_id=str(worker_id)))
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"store.release_run_claim failed: {e}")
+            return False
+
+    def try_admit_run_start(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        max_active_runs: int,
+        lease_seconds: int = 30,
+    ) -> RunStatus | None:
+        try:
+            return self._store.try_admit_run_start(
+                str(run_id),
+                worker_id=str(worker_id),
+                max_active_runs=int(max_active_runs),
+                lease_seconds=int(lease_seconds),
+            )
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"store.try_admit_run_start failed: {e}")
+            return None
+
     def get_run_owner(self, run_id: str) -> str | None:
         try:
             return self._store.get_run_owner(run_id)
@@ -667,6 +714,8 @@ class SandboxOrchestrator:
         for sid in expired:
             try:
                 self.destroy_session(sid)
+            except SessionActiveRunsConflict:
+                continue
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 continue
 
@@ -674,6 +723,13 @@ class SandboxOrchestrator:
         sid = str(session_id or "").strip()
         if not sid:
             return False
+        active_runs = (
+            self.count_runs(session_id=sid, phase=RunPhase.queued.value)
+            + self.count_runs(session_id=sid, phase=RunPhase.starting.value)
+            + self.count_runs(session_id=sid, phase=RunPhase.running.value)
+        )
+        if active_runs > 0:
+            raise SessionActiveRunsConflict(session_id=sid, active_runs=active_runs)
         ws_path = None
         removed = False
         store_row = None
@@ -905,6 +961,7 @@ class SandboxOrchestrator:
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -920,6 +977,7 @@ class SandboxOrchestrator:
             return self._store.list_runs(
                 image_digest=image_digest,
                 user_id=user_id,
+                session_id=session_id,
                 persona_id=persona_id,
                 workspace_id=workspace_id,
                 workspace_group_id=workspace_group_id,
@@ -940,6 +998,7 @@ class SandboxOrchestrator:
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -952,6 +1011,7 @@ class SandboxOrchestrator:
             return int(self._store.count_runs(
                 image_digest=image_digest,
                 user_id=user_id,
+                session_id=session_id,
                 persona_id=persona_id,
                 workspace_id=workspace_id,
                 workspace_group_id=workspace_group_id,

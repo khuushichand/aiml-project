@@ -4,10 +4,15 @@
 
 import type {
   ACPAgentListResponse,
+  ACPSessionDetailResponse,
+  ACPSessionForkRequest,
+  ACPSessionForkResponse,
+  ACPSessionListResponse,
   ACPSessionNewRequest,
   ACPSessionNewResponse,
   ACPSessionPromptRequest,
   ACPSessionPromptResponse,
+  ACPSessionUsageResponse,
   ACPWSClientMessage,
   ACPWSServerMessage,
 } from "./types"
@@ -28,6 +33,23 @@ export interface ACPClientConfig {
 
 export class ACPRestClient {
   constructor(private config: ACPClientConfig) {}
+
+  private buildQuery(params?: Record<string, string | number | boolean | null | undefined>): string {
+    if (!params) {
+      return ""
+    }
+
+    const searchParams = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === "") {
+        continue
+      }
+      searchParams.set(key, String(value))
+    }
+
+    const query = searchParams.toString()
+    return query ? `?${query}` : ""
+  }
 
   private async request<T>(
     path: string,
@@ -98,6 +120,53 @@ export class ACPRestClient {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     })
+  }
+
+  /**
+   * List ACP sessions for the authenticated user
+   */
+  async listSessions(params?: {
+    status?: string
+    agent_type?: string
+    limit?: number
+    offset?: number
+  }): Promise<ACPSessionListResponse> {
+    const query = this.buildQuery(params)
+    return this.request<ACPSessionListResponse>(`/api/v1/acp/sessions${query}`)
+  }
+
+  /**
+   * Get ACP session detail including message history
+   */
+  async getSessionDetail(sessionId: string): Promise<ACPSessionDetailResponse> {
+    return this.request<ACPSessionDetailResponse>(
+      `/api/v1/acp/sessions/${encodeURIComponent(sessionId)}/detail`
+    )
+  }
+
+  /**
+   * Get ACP session usage totals
+   */
+  async getSessionUsage(sessionId: string): Promise<ACPSessionUsageResponse> {
+    return this.request<ACPSessionUsageResponse>(
+      `/api/v1/acp/sessions/${encodeURIComponent(sessionId)}/usage`
+    )
+  }
+
+  /**
+   * Fork an existing ACP session
+   */
+  async forkSession(
+    sessionId: string,
+    request: ACPSessionForkRequest
+  ): Promise<ACPSessionForkResponse> {
+    return this.request<ACPSessionForkResponse>(
+      `/api/v1/acp/sessions/${encodeURIComponent(sessionId)}/fork`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      }
+    )
   }
 
   /**

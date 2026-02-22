@@ -244,11 +244,12 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     }
 
     const workspaceShortLabel = `${roundedUsed.toFixed(1)}/${quotaLabel} MB`
+    const workspaceShortSegment = `Payload ${workspaceShortLabel}`
     const shortLabel = accountUsageShortLabel
-      ? `WS ${workspaceShortLabel} | Account ${accountUsageShortLabel}`
+      ? `${workspaceShortSegment} | Account ${accountUsageShortLabel}`
       : profileUsageShortLabel
-        ? `WS ${workspaceShortLabel} | Profile ${profileUsageShortLabel}`
-        : `WS ${workspaceShortLabel}`
+        ? `${workspaceShortSegment} | Browser ${profileUsageShortLabel}`
+        : workspaceShortSegment
 
     const longLabel = accountUsageShortLabel
       ? profileUsageShortLabel
@@ -1280,7 +1281,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
                   data-testid="workspace-storage-usage-indicator"
                   className={`inline-flex items-center rounded border px-2 py-1 text-xs font-medium ${formattedStorageUsage.toneClass}`}
                 >
-                  {t("playground:workspace.storage", "Storage")}{" "}
+                  {t("playground:workspace.capacity", "Capacity")}{" "}
                   {formattedStorageUsage.shortLabel}
                 </span>
               </Tooltip>

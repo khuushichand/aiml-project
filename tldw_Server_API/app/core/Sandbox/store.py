@@ -6,7 +6,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _coerce_optional_iso_datetime(value: Any) -> str | None:
+    """Serialize datetime-like values to ISO text without leaking 'None' strings."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "none":
+        return None
+    return text
+
+
+def _parse_optional_iso_datetime(value: Any) -> datetime | None:
+    """Parse ISO datetime text defensively; return None on empty/invalid input."""
+    text = _coerce_optional_iso_datetime(value)
+    if text is None:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
 class IdempotencyConflict(Exception):
     def __init__(self, original_id: str, key: str | None = None, created_at: float | None = None, message: str = "Idempotency conflict") -> None:
         super().__init__(message)
@@ -70,6 +93,27 @@ class SandboxStore:
         raise NotImplementedError
 
     def update_run(self, st: RunStatus) -> None:
+        raise NotImplementedError
+
+    # Durable claim fencing helpers for run execution dispatch.
+    def try_claim_run(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> RunStatus | None:
+        raise NotImplementedError
+
+    def renew_run_claim(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> bool:
+        raise NotImplementedError
+
+    def release_run_claim(self, run_id: str, *, worker_id: str) -> bool:
+        raise NotImplementedError
+
+    # Atomically transition a claimed queued run to starting if active-run limit allows.
+    def try_admit_run_start(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        max_active_runs: int,
+        lease_seconds: int = 30,
+    ) -> RunStatus | None:
         raise NotImplementedError
 
     def get_run_owner(self, run_id: str) -> str | None:
@@ -138,6 +182,7 @@ class SandboxStore:
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -162,6 +207,7 @@ class SandboxStore:
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -296,8 +342,104 @@ class InMemoryStore(SandboxStore):
             return self._runs.get(run_id)
 
     def update_run(self, st: RunStatus) -> None:
+        if st.phase in (RunPhase.completed, RunPhase.failed, RunPhase.killed, RunPhase.timed_out):
+            st.claim_owner = None
+            st.claim_expires_at = None
         with self._lock:
             self._runs[st.id] = st
+
+    def try_claim_run(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> RunStatus | None:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return None
+        ttl = max(1, int(lease_seconds or 0))
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(seconds=ttl)
+        with self._lock:
+            st = self._runs.get(str(run_id))
+            if st is None or st.phase != RunPhase.queued:
+                return None
+            owner = str(getattr(st, "claim_owner", "") or "").strip()
+            exp = getattr(st, "claim_expires_at", None)
+            if owner and owner != wid and isinstance(exp, datetime) and exp > now:
+                return None
+            st.claim_owner = wid
+            st.claim_expires_at = expires
+            self._runs[st.id] = st
+            return st
+
+    def renew_run_claim(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> bool:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return False
+        ttl = max(1, int(lease_seconds or 0))
+        with self._lock:
+            st = self._runs.get(str(run_id))
+            if st is None:
+                return False
+            owner = str(getattr(st, "claim_owner", "") or "").strip()
+            if owner != wid:
+                return False
+            st.claim_expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+            self._runs[st.id] = st
+            return True
+
+    def release_run_claim(self, run_id: str, *, worker_id: str) -> bool:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return False
+        with self._lock:
+            st = self._runs.get(str(run_id))
+            if st is None:
+                return False
+            owner = str(getattr(st, "claim_owner", "") or "").strip()
+            if owner != wid:
+                return False
+            st.claim_owner = None
+            st.claim_expires_at = None
+            self._runs[st.id] = st
+            return True
+
+    def try_admit_run_start(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        max_active_runs: int,
+        lease_seconds: int = 30,
+    ) -> RunStatus | None:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return None
+        limit = max(1, int(max_active_runs or 0))
+        ttl = max(1, int(lease_seconds or 0))
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            st = self._runs.get(str(run_id))
+            if st is None or st.phase != RunPhase.queued:
+                return None
+            owner = str(getattr(st, "claim_owner", "") or "").strip()
+            if owner != wid:
+                return None
+            exp = getattr(st, "claim_expires_at", None)
+            if isinstance(exp, datetime) and exp <= now:
+                return None
+            active = 0
+            for rs in self._runs.values():
+                if rs.phase == RunPhase.running:
+                    active += 1
+                    continue
+                if rs.phase == RunPhase.starting and getattr(rs, "started_at", None) is not None:
+                    active += 1
+            if active >= limit:
+                return None
+            st.phase = RunPhase.starting
+            st.started_at = now
+            st.finished_at = None
+            st.exit_code = None
+            st.claim_expires_at = now + timedelta(seconds=ttl)
+            self._runs[st.id] = st
+            return st
 
     def get_run_owner(self, run_id: str) -> str | None:
         with self._lock:
@@ -407,6 +549,7 @@ class InMemoryStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -425,6 +568,8 @@ class InMemoryStore(SandboxStore):
                 if image_digest and (st.image_digest or None) != image_digest:
                     continue
                 if user_id and self._owners.get(st.id) != user_id:
+                    continue
+                if session_id and (getattr(st, "session_id", None) != session_id):
                     continue
                 if persona_id and (getattr(st, "persona_id", None) != persona_id):
                     continue
@@ -481,6 +626,7 @@ class InMemoryStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -492,6 +638,7 @@ class InMemoryStore(SandboxStore):
         return len(self.list_runs(
             image_digest=image_digest,
             user_id=user_id,
+            session_id=session_id,
             persona_id=persona_id,
             workspace_id=workspace_id,
             workspace_group_id=workspace_group_id,
@@ -657,6 +804,8 @@ class SQLiteStore(SandboxStore):
                     workspace_id TEXT,
                     workspace_group_id TEXT,
                     scope_snapshot_id TEXT,
+                    claim_owner TEXT,
+                    claim_expires_at TEXT,
                     phase TEXT,
                     exit_code INTEGER,
                     started_at TEXT,
@@ -743,6 +892,8 @@ class SQLiteStore(SandboxStore):
             _ensure_sqlite_column("sandbox_runs", "workspace_id", "TEXT")
             _ensure_sqlite_column("sandbox_runs", "workspace_group_id", "TEXT")
             _ensure_sqlite_column("sandbox_runs", "scope_snapshot_id", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "claim_owner", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "claim_expires_at", "TEXT")
             _ensure_sqlite_column("sandbox_sessions", "persona_id", "TEXT")
             _ensure_sqlite_column("sandbox_sessions", "workspace_id", "TEXT")
             _ensure_sqlite_column("sandbox_sessions", "workspace_group_id", "TEXT")
@@ -885,8 +1036,9 @@ class SQLiteStore(SandboxStore):
                     "REPLACE INTO sandbox_runs("
                     "id,user_id,spec_version,runtime,runtime_version,base_image,"
                     "session_id,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "claim_owner,claim_expires_at,"
                     "phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 ),
                 (
                     st.id,
@@ -900,6 +1052,8 @@ class SQLiteStore(SandboxStore):
                     (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
                     (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
                     (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
+                    (str(st.claim_owner) if getattr(st, "claim_owner", None) is not None else None),
+                    _coerce_optional_iso_datetime(getattr(st, "claim_expires_at", None)),
                     st.phase.value,
                     st.exit_code,
                     (st.started_at.isoformat() if st.started_at else None),
@@ -951,18 +1105,26 @@ class SQLiteStore(SandboxStore):
                     workspace_id=row_dict.get("workspace_id"),
                     workspace_group_id=row_dict.get("workspace_group_id"),
                     scope_snapshot_id=row_dict.get("scope_snapshot_id"),
+                    claim_owner=row_dict.get("claim_owner"),
+                    claim_expires_at=_parse_optional_iso_datetime(row_dict.get("claim_expires_at")),
                 )
                 return st
             except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return None
 
     def update_run(self, st: RunStatus) -> None:
+        claim_owner = (str(st.claim_owner) if getattr(st, "claim_owner", None) is not None else None)
+        claim_expires_at = _coerce_optional_iso_datetime(getattr(st, "claim_expires_at", None))
+        if st.phase in (RunPhase.completed, RunPhase.failed, RunPhase.killed, RunPhase.timed_out):
+            claim_owner = None
+            claim_expires_at = None
         with self._lock, self._conn() as con:
             cur = con.execute(
                 (
                     "UPDATE sandbox_runs SET "
                     "spec_version=?, runtime=?, runtime_version=?, base_image=?, phase=?, exit_code=?, "
                     "session_id=?, persona_id=?, workspace_id=?, workspace_group_id=?, scope_snapshot_id=?, "
+                    "claim_owner=?, claim_expires_at=?, "
                     "started_at=?, finished_at=?, message=?, image_digest=?, policy_hash=?, resource_usage=? "
                     "WHERE id=?"
                 ),
@@ -978,6 +1140,8 @@ class SQLiteStore(SandboxStore):
                     (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
                     (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
                     (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
+                    claim_owner,
+                    claim_expires_at,
                     (st.started_at.isoformat() if st.started_at else None),
                     (st.finished_at.isoformat() if st.finished_at else None),
                     st.message,
@@ -993,6 +1157,127 @@ class SQLiteStore(SandboxStore):
                 updated = 0
             if updated <= 0:
                 logger.debug("SQLiteStore.update_run skipped missing run_id={}", st.id)
+
+    def try_claim_run(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> RunStatus | None:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return None
+        ttl = max(1, int(lease_seconds or 0))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                (
+                    "UPDATE sandbox_runs SET claim_owner=?, claim_expires_at=? "
+                    "WHERE id=? AND phase=? AND "
+                    "(claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ? OR claim_owner = ?)"
+                ),
+                (
+                    wid,
+                    exp_iso,
+                    str(run_id),
+                    RunPhase.queued.value,
+                    now_iso,
+                    wid,
+                ),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+        if updated <= 0:
+            return None
+        return self.get_run(str(run_id))
+
+    def renew_run_claim(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> bool:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return False
+        ttl = max(1, int(lease_seconds or 0))
+        exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                "UPDATE sandbox_runs SET claim_expires_at=? WHERE id=? AND claim_owner=?",
+                (exp_iso, str(run_id), wid),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+        return updated > 0
+
+    def release_run_claim(self, run_id: str, *, worker_id: str) -> bool:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return False
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                "UPDATE sandbox_runs SET claim_owner=NULL, claim_expires_at=NULL WHERE id=? AND claim_owner=?",
+                (str(run_id), wid),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+        return updated > 0
+
+    def try_admit_run_start(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        max_active_runs: int,
+        lease_seconds: int = 30,
+    ) -> RunStatus | None:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return None
+        limit = max(1, int(max_active_runs or 0))
+        ttl = max(1, int(lease_seconds or 0))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        with self._lock, self._conn() as con:
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                cur_active = con.execute(
+                    (
+                        "SELECT COUNT(*) AS c FROM sandbox_runs "
+                        "WHERE phase=? OR (phase=? AND started_at IS NOT NULL)"
+                    ),
+                    (RunPhase.running.value, RunPhase.starting.value),
+                )
+                row = cur_active.fetchone()
+                active = int(row["c"]) if row and row["c"] is not None else 0
+                if active >= limit:
+                    con.rollback()
+                    return None
+                cur = con.execute(
+                    (
+                        "UPDATE sandbox_runs SET phase=?, started_at=?, finished_at=NULL, exit_code=NULL, "
+                        "claim_expires_at=? "
+                        "WHERE id=? AND phase=? AND claim_owner=? "
+                        "AND (claim_expires_at IS NULL OR claim_expires_at > ?)"
+                    ),
+                    (
+                        RunPhase.starting.value,
+                        now_iso,
+                        exp_iso,
+                        str(run_id),
+                        RunPhase.queued.value,
+                        wid,
+                        now_iso,
+                    ),
+                )
+                updated = int(getattr(cur, "rowcount", 0) or 0)
+                if updated <= 0:
+                    con.rollback()
+                    return None
+                con.commit()
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                with contextlib.suppress(_SANDBOX_STORE_NONCRITICAL_EXCEPTIONS):
+                    con.rollback()
+                return None
+        return self.get_run(str(run_id))
 
     def get_run_owner(self, run_id: str) -> str | None:
         with self._lock, self._conn() as con:
@@ -1195,6 +1480,7 @@ class SQLiteStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -1215,6 +1501,9 @@ class SQLiteStore(SandboxStore):
         if user_id:
             where.append("user_id = ?")
             params.append(user_id)
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
         if persona_id:
             where.append("persona_id = ?")
             params.append(persona_id)
@@ -1273,6 +1562,7 @@ class SQLiteStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -1289,6 +1579,9 @@ class SQLiteStore(SandboxStore):
         if user_id:
             where.append("user_id = ?")
             params.append(user_id)
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
         if persona_id:
             where.append("persona_id = ?")
             params.append(persona_id)
@@ -1499,6 +1792,8 @@ class PostgresStore(SandboxStore):
                         workspace_id TEXT,
                         workspace_group_id TEXT,
                         scope_snapshot_id TEXT,
+                        claim_owner TEXT,
+                        claim_expires_at TEXT,
                         phase TEXT,
                         exit_code INTEGER,
                         started_at TEXT,
@@ -1593,6 +1888,8 @@ class PostgresStore(SandboxStore):
             _ensure_column("sandbox_runs", "workspace_id", "TEXT")
             _ensure_column("sandbox_runs", "workspace_group_id", "TEXT")
             _ensure_column("sandbox_runs", "scope_snapshot_id", "TEXT")
+            _ensure_column("sandbox_runs", "claim_owner", "TEXT")
+            _ensure_column("sandbox_runs", "claim_expires_at", "TEXT")
             _ensure_column("sandbox_sessions", "persona_id", "TEXT")
             _ensure_column("sandbox_sessions", "workspace_id", "TEXT")
             _ensure_column("sandbox_sessions", "workspace_group_id", "TEXT")
@@ -1692,9 +1989,10 @@ class PostgresStore(SandboxStore):
                     INSERT INTO sandbox_runs (
                         id,user_id,spec_version,runtime,runtime_version,base_image,
                         session_id,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,
+                        claim_owner,claim_expires_at,
                         phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage
                     )
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (id) DO UPDATE SET
                         user_id=EXCLUDED.user_id,
                         spec_version=EXCLUDED.spec_version,
@@ -1706,6 +2004,8 @@ class PostgresStore(SandboxStore):
                         workspace_id=EXCLUDED.workspace_id,
                         workspace_group_id=EXCLUDED.workspace_group_id,
                         scope_snapshot_id=EXCLUDED.scope_snapshot_id,
+                        claim_owner=EXCLUDED.claim_owner,
+                        claim_expires_at=EXCLUDED.claim_expires_at,
                         phase=EXCLUDED.phase,
                         exit_code=EXCLUDED.exit_code,
                         started_at=EXCLUDED.started_at,
@@ -1727,6 +2027,8 @@ class PostgresStore(SandboxStore):
                         (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
                         (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
                         (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
+                        (str(st.claim_owner) if getattr(st, "claim_owner", None) is not None else None),
+                        _coerce_optional_iso_datetime(getattr(st, "claim_expires_at", None)),
                         st.phase.value,
                         st.exit_code,
                         (st.started_at.isoformat() if st.started_at else None),
@@ -1769,6 +2071,8 @@ class PostgresStore(SandboxStore):
                     workspace_id=row.get("workspace_id"),
                     workspace_group_id=row.get("workspace_group_id"),
                     scope_snapshot_id=row.get("scope_snapshot_id"),
+                    claim_owner=row.get("claim_owner"),
+                    claim_expires_at=_parse_optional_iso_datetime(row.get("claim_expires_at")),
                 )
                 st.message = row.get("message")
                 st.resource_usage = ru if isinstance(ru, dict) else None
@@ -1778,6 +2082,11 @@ class PostgresStore(SandboxStore):
                 return None
 
     def update_run(self, st: RunStatus) -> None:
+        claim_owner = (str(st.claim_owner) if getattr(st, "claim_owner", None) is not None else None)
+        claim_expires_at = _coerce_optional_iso_datetime(getattr(st, "claim_expires_at", None))
+        if st.phase in (RunPhase.completed, RunPhase.failed, RunPhase.killed, RunPhase.timed_out):
+            claim_owner = None
+            claim_expires_at = None
         with self._lock, self._conn() as con:
             with con.cursor() as cur:
                 cur.execute(
@@ -1792,6 +2101,8 @@ class PostgresStore(SandboxStore):
                         workspace_id=%s,
                         workspace_group_id=%s,
                         scope_snapshot_id=%s,
+                        claim_owner=%s,
+                        claim_expires_at=%s,
                         phase=%s,
                         exit_code=%s,
                         started_at=%s,
@@ -1812,6 +2123,8 @@ class PostgresStore(SandboxStore):
                         (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
                         (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
                         (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
+                        claim_owner,
+                        claim_expires_at,
                         st.phase.value,
                         st.exit_code,
                         (st.started_at.isoformat() if st.started_at else None),
@@ -1829,6 +2142,142 @@ class PostgresStore(SandboxStore):
                     updated = 0
                 if updated <= 0:
                     logger.debug("PostgresStore.update_run skipped missing run_id={}", st.id)
+
+    def try_claim_run(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> RunStatus | None:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return None
+        ttl = max(1, int(lease_seconds or 0))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sandbox_runs
+                SET claim_owner=%s, claim_expires_at=%s
+                WHERE id=%s
+                  AND phase=%s
+                  AND (
+                    claim_owner IS NULL
+                    OR claim_expires_at IS NULL
+                    OR claim_expires_at::timestamptz <= %s::timestamptz
+                    OR claim_owner = %s
+                  )
+                """,
+                (
+                    wid,
+                    exp_iso,
+                    str(run_id),
+                    RunPhase.queued.value,
+                    now_iso,
+                    wid,
+                ),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+        if updated <= 0:
+            return None
+        return self.get_run(str(run_id))
+
+    def renew_run_claim(self, run_id: str, *, worker_id: str, lease_seconds: int = 30) -> bool:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return False
+        ttl = max(1, int(lease_seconds or 0))
+        exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE sandbox_runs SET claim_expires_at=%s WHERE id=%s AND claim_owner=%s",
+                (exp_iso, str(run_id), wid),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+        return updated > 0
+
+    def release_run_claim(self, run_id: str, *, worker_id: str) -> bool:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return False
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE sandbox_runs SET claim_owner=NULL, claim_expires_at=NULL WHERE id=%s AND claim_owner=%s",
+                (str(run_id), wid),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+        return updated > 0
+
+    def try_admit_run_start(
+        self,
+        run_id: str,
+        *,
+        worker_id: str,
+        max_active_runs: int,
+        lease_seconds: int = 30,
+    ) -> RunStatus | None:
+        wid = str(worker_id or "").strip()
+        if not wid:
+            return None
+        limit = max(1, int(max_active_runs or 0))
+        ttl = max(1, int(lease_seconds or 0))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            try:
+                cur.execute("BEGIN")
+                # Serialize active-slot admission across nodes in cluster mode.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("sandbox_active_run_slot_admission",))
+                cur.execute(
+                    (
+                        "SELECT COUNT(*) AS c FROM sandbox_runs "
+                        "WHERE phase=%s OR (phase=%s AND started_at IS NOT NULL)"
+                    ),
+                    (RunPhase.running.value, RunPhase.starting.value),
+                )
+                row = cur.fetchone() or {}
+                active = int(row.get("c") or 0)
+                if active >= limit:
+                    cur.execute("ROLLBACK")
+                    return None
+                cur.execute(
+                    """
+                    UPDATE sandbox_runs
+                    SET phase=%s,
+                        started_at=%s,
+                        finished_at=NULL,
+                        exit_code=NULL,
+                        claim_expires_at=%s
+                    WHERE id=%s
+                      AND phase=%s
+                      AND claim_owner=%s
+                      AND (claim_expires_at IS NULL OR claim_expires_at::timestamptz > %s::timestamptz)
+                    """,
+                    (
+                        RunPhase.starting.value,
+                        now_iso,
+                        exp_iso,
+                        str(run_id),
+                        RunPhase.queued.value,
+                        wid,
+                        now_iso,
+                    ),
+                )
+                updated = int(getattr(cur, "rowcount", 0) or 0)
+                if updated <= 0:
+                    cur.execute("ROLLBACK")
+                    return None
+                cur.execute("COMMIT")
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                with contextlib.suppress(_SANDBOX_STORE_NONCRITICAL_EXCEPTIONS):
+                    cur.execute("ROLLBACK")
+                return None
+        return self.get_run(str(run_id))
 
     def get_run_owner(self, run_id: str) -> str | None:
         with self._lock, self._conn() as con, con.cursor() as cur:
@@ -2029,6 +2478,7 @@ class PostgresStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -2049,6 +2499,9 @@ class PostgresStore(SandboxStore):
         if user_id:
             where.append("user_id = %s")
             params.append(user_id)
+        if session_id:
+            where.append("session_id = %s")
+            params.append(session_id)
         if persona_id:
             where.append("persona_id = %s")
             params.append(persona_id)
@@ -2106,6 +2559,7 @@ class PostgresStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         persona_id: str | None = None,
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
@@ -2122,6 +2576,9 @@ class PostgresStore(SandboxStore):
         if user_id:
             where.append("user_id = %s")
             params.append(user_id)
+        if session_id:
+            where.append("session_id = %s")
+            params.append(session_id)
         if persona_id:
             where.append("persona_id = %s")
             params.append(persona_id)

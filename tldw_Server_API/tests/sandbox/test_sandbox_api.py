@@ -94,3 +94,50 @@ def test_start_run_scaffold_returns_completed_with_metadata(monkeypatch) -> None
         body2 = {**body, "timeout_sec": 6}
         r3 = client.post("/api/v1/sandbox/runs", json=body2, headers={"Idempotency-Key": "idem-run-1"})
         assert r3.status_code == 409
+
+
+def test_delete_session_conflicts_when_active_runs_exist(monkeypatch) -> None:
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "0")
+
+    with _client(monkeypatch) as client:
+        session_resp = client.post(
+            "/api/v1/sandbox/sessions",
+            json={
+                "spec_version": "1.0",
+                "runtime": "docker",
+                "base_image": "python:3.11-slim",
+            },
+        )
+        assert session_resp.status_code == 200
+        session_id = str(session_resp.json()["id"])
+
+        run_resp = client.post(
+            "/api/v1/sandbox/runs",
+            json={
+                "spec_version": "1.0",
+                "runtime": "docker",
+                "base_image": "python:3.11-slim",
+                "session_id": session_id,
+                "command": ["python", "-c", "print('queued')"],
+                "timeout_sec": 15,
+            },
+        )
+        assert run_resp.status_code == 200
+        run_id = str(run_resp.json()["id"])
+        assert run_resp.json()["phase"] == "queued"
+
+        delete_resp = client.delete(f"/api/v1/sandbox/sessions/{session_id}")
+        assert delete_resp.status_code == 409
+        detail = delete_resp.json().get("detail")
+        assert isinstance(detail, dict)
+        assert detail.get("error") == "session_has_active_runs"
+        assert int(detail.get("active_runs") or 0) >= 1
+        assert detail.get("session_id") == session_id
+
+        cancel_resp = client.post(f"/api/v1/sandbox/runs/{run_id}/cancel")
+        assert cancel_resp.status_code == 200
+        assert bool(cancel_resp.json().get("cancelled")) is True
+
+        delete_after_cancel = client.delete(f"/api/v1/sandbox/sessions/{session_id}")
+        assert delete_after_cancel.status_code == 200
+        assert delete_after_cancel.json().get("ok") is True

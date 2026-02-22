@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   DEFAULT_AUDIO_SETTINGS,
   DEFAULT_WORKSPACE_NOTE
@@ -11,13 +11,23 @@ import {
 import {
   createWorkspaceStorage,
   estimateWorkspacePersistenceMetrics,
+  WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY,
+  WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY,
   useWorkspaceStore
 } from "../workspace"
 
 const STORAGE_KEY = WORKSPACE_STORAGE_KEY
+const STORAGE_SPLIT_FLAG_KEY = WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY
+const STORAGE_INDEXEDDB_FLAG_KEY = WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY
+const snapshotKey = (workspaceId: string) =>
+  `${STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:snapshot`
+const chatKey = (workspaceId: string) =>
+  `${STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:chat`
 
 const resetWorkspaceStore = () => {
   localStorage.removeItem(STORAGE_KEY)
+  localStorage.removeItem(STORAGE_SPLIT_FLAG_KEY)
+  localStorage.removeItem(STORAGE_INDEXEDDB_FLAG_KEY)
   delete window.__tldwWorkspacePersistenceMetrics
   useWorkspaceStore.setState({
     workspaceId: "",
@@ -377,16 +387,76 @@ describe("workspace store snapshot persistence", () => {
     ).toBe("failed")
   })
 
-  it("uses a raw localStorage adapter without parse/stringify in getItem", () => {
+  it("uses a raw localStorage adapter without parse/stringify in getItem", async () => {
     const storage = createWorkspaceStorage()
     const testKey = "workspace-storage-adapter-test"
     const rawPayload = '{"state":{"workspaceCreatedAt":"2026-02-01T00:00:00.000Z"}}'
 
-    storage.setItem(testKey, rawPayload)
-    expect(storage.getItem(testKey)).toBe(rawPayload)
+    await storage.setItem(testKey, rawPayload)
+    expect(await Promise.resolve(storage.getItem(testKey))).toBe(rawPayload)
 
-    storage.removeItem(testKey)
-    expect(storage.getItem(testKey)).toBeNull()
+    await storage.removeItem(testKey)
+    expect(await Promise.resolve(storage.getItem(testKey))).toBeNull()
+  })
+
+  it("skips IndexedDB offload when the rollout flag is disabled", async () => {
+    localStorage.setItem(STORAGE_SPLIT_FLAG_KEY, "1")
+    localStorage.setItem(STORAGE_INDEXEDDB_FLAG_KEY, "0")
+
+    const indexedDbAdapter = {
+      isAvailable: () => true,
+      putChatRecord: vi.fn(async () => true),
+      getChatRecord: vi.fn(async () => null),
+      deleteChatRecord: vi.fn(async () => true),
+      putArtifactPayloadRecord: vi.fn(async () => true),
+      getArtifactPayloadRecord: vi.fn(async () => null),
+      deleteArtifactPayloadRecord: vi.fn(async () => true)
+    }
+    const storage = createWorkspaceStorage({ indexedDbAdapter })
+    const payload = JSON.stringify({
+      state: {
+        workspaceId: "workspace-indexeddb-flag-disabled",
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-indexeddb-flag-disabled": {
+            workspaceId: "workspace-indexeddb-flag-disabled",
+            workspaceName: "No Offload Workspace",
+            workspaceTag: "workspace:no-offload",
+            workspaceCreatedAt: "2026-02-22T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-indexeddb-flag-disabled",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-indexeddb-flag-disabled": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "M".repeat(10 * 1024),
+                sources: []
+              }
+            ],
+            historyId: "no-offload-history",
+            serverChatId: "no-offload-chat"
+          }
+        }
+      },
+      version: 1
+    })
+
+    await storage.setItem(STORAGE_KEY, payload)
+
+    expect(indexedDbAdapter.putChatRecord).not.toHaveBeenCalled()
+    expect(indexedDbAdapter.putArtifactPayloadRecord).not.toHaveBeenCalled()
   })
 
   it("estimates persistence payload section sizes", () => {
@@ -588,7 +658,7 @@ describe("workspace store snapshot persistence", () => {
     ).toBeUndefined()
   })
 
-  it("persists snapshot-first schema with messages-only chat sessions", () => {
+  it("persists snapshot-first schema with messages-only chat sessions", async () => {
     useWorkspaceStore.getState().initializeWorkspace("Snapshot Canonical Workspace")
     const workspaceId = useWorkspaceStore.getState().workspaceId
 
@@ -641,7 +711,9 @@ describe("workspace store snapshot persistence", () => {
     expect(splitIndex?.state?.currentNote).toBeUndefined()
     expect(splitIndex?.state?.audioSettings).toBeUndefined()
 
-    const reconstructedRaw = createWorkspaceStorage().getItem(STORAGE_KEY)
+    const reconstructedRaw = await Promise.resolve(
+      createWorkspaceStorage().getItem(STORAGE_KEY)
+    )
     const reconstructed = reconstructedRaw ? JSON.parse(reconstructedRaw) : null
     const persistedState = reconstructed?.state as Record<string, unknown>
     expect(persistedState.workspaceId).toBe(workspaceId)
@@ -808,7 +880,7 @@ describe("workspace store snapshot persistence", () => {
     ).toBe("Legacy session message")
   })
 
-  it("dispatches a quota warning event when localStorage is full", () => {
+  it("dispatches a quota warning event when localStorage is full", async () => {
     const storage = createWorkspaceStorage()
     const originalSetItem = Storage.prototype.setItem
     const quotaError =
@@ -834,9 +906,9 @@ describe("workspace store snapshot persistence", () => {
       onQuotaExceeded as EventListener
     )
 
-    expect(() => {
+    await expect(
       storage.setItem(STORAGE_KEY, '{"state":{"workspaceName":"Overflow"}}')
-    }).not.toThrow()
+    ).resolves.toBeUndefined()
 
     expect(quotaEvents).toHaveLength(1)
     expect(quotaEvents[0]?.detail.key).toBe(STORAGE_KEY)
@@ -1015,6 +1087,76 @@ describe("workspace store snapshot persistence", () => {
     expect(useWorkspaceStore.getState().getWorkspaceChatSession(workspaceBId)?.historyId).toBe(
       "history-b"
     )
+  })
+
+  it("persists only the most recent chat messages for each workspace session", async () => {
+    useWorkspaceStore.getState().initializeWorkspace("Chat Retention Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+
+    const messages = Array.from({ length: 300 }, (_, index) => ({
+      isBot: index % 2 === 0,
+      name: index % 2 === 0 ? "Assistant" : "You",
+      message: `Message ${index + 1}`,
+      sources: []
+    }))
+
+    useWorkspaceStore.getState().saveWorkspaceChatSession(workspaceId, {
+      messages,
+      history: messages.map((message) => ({
+        role: message.isBot ? "assistant" : "user",
+        content: message.message
+      })),
+      historyId: "history-retention",
+      serverChatId: "server-chat-retention"
+    })
+
+    expect(
+      useWorkspaceStore.getState().getWorkspaceChatSession(workspaceId)?.messages
+    ).toHaveLength(300)
+
+    const persistedRaw = await Promise.resolve(
+      createWorkspaceStorage().getItem(STORAGE_KEY)
+    )
+    const persisted = persistedRaw ? JSON.parse(persistedRaw) : null
+    const persistedSession =
+      persisted?.state?.workspaceChatSessions?.[workspaceId]
+
+    expect(Array.isArray(persistedSession?.messages)).toBe(true)
+    expect(persistedSession?.messages).toHaveLength(250)
+    expect(persistedSession?.messages?.[0]?.message).toBe("Message 51")
+    expect(persistedSession?.messages?.[249]?.message).toBe("Message 300")
+  })
+
+  it("truncates oversized server-backed artifact payloads in persisted snapshots", async () => {
+    useWorkspaceStore.getState().initializeWorkspace("Artifact Persistence Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+    const oversizedContent = "A".repeat(40 * 1024)
+    const oversizedData = {
+      payload: "B".repeat(20 * 1024)
+    }
+
+    useWorkspaceStore.getState().addArtifact({
+      type: "summary",
+      title: "Server-backed artifact",
+      status: "completed",
+      serverId: "server-output-42",
+      content: oversizedContent,
+      data: oversizedData
+    })
+
+    const persistedRaw = await Promise.resolve(
+      createWorkspaceStorage().getItem(STORAGE_KEY)
+    )
+    const persisted = persistedRaw ? JSON.parse(persistedRaw) : null
+    const persistedArtifact =
+      persisted?.state?.workspaceSnapshots?.[workspaceId]?.generatedArtifacts?.[0]
+
+    expect(typeof persistedArtifact?.content).toBe("string")
+    expect(persistedArtifact?.content.length).toBeLessThan(oversizedContent.length)
+    expect(persistedArtifact?.content).toContain(
+      "[Truncated in local persistence cache; open the server output for full content.]"
+    )
+    expect(persistedArtifact?.data).toBeUndefined()
   })
 
   it("focuses sources by media id and source id for cross-pane navigation", () => {

@@ -15,17 +15,21 @@ import { launchWithBuiltExtension } from "./extension-build"
  * Required env vars:
  * - TLDW_E2E_SERVER_URL  (e.g. http://127.0.0.1:3001)
  * - TLDW_E2E_API_KEY     (API key accepted by that server)
+ *
+ * Backward-compatible alias support:
+ * - LDW_E2E_SERVER_URL (legacy typo alias, preferred is TLDW_E2E_SERVER_URL)
  */
 export const requireRealServerConfig = (
   test: TestType<any, any>
 ): { serverUrl: string; apiKey: string } => {
-  const serverUrl = process.env.TLDW_E2E_SERVER_URL
+  const serverUrl =
+    process.env.TLDW_E2E_SERVER_URL || process.env.LDW_E2E_SERVER_URL
   const apiKey = process.env.TLDW_E2E_API_KEY
 
   if (!serverUrl || !apiKey) {
     test.skip(
       true,
-      "Set TLDW_E2E_SERVER_URL and TLDW_E2E_API_KEY to run real-server E2E tests."
+      "Set TLDW_E2E_SERVER_URL (or LDW_E2E_SERVER_URL alias) and TLDW_E2E_API_KEY to run real-server E2E tests."
     )
     return { serverUrl: "", apiKey: "" }
   }

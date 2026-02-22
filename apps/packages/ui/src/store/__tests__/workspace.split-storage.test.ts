@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { WORKSPACE_STORAGE_KEY } from "@/store/workspace-events"
-import { createWorkspaceStorage } from "../workspace"
+import {
+  createWorkspaceStorage,
+  WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY
+} from "../workspace"
 
 const STORAGE_KEY = WORKSPACE_STORAGE_KEY
 
@@ -28,7 +31,7 @@ describe("workspace split-key persistence storage adapter", () => {
     localStorage.clear()
   })
 
-  it("writes split index and only updates changed workspace keys", () => {
+  it("writes split index and only updates changed workspace keys", async () => {
     const storage = createWorkspaceStorage()
     const writes: string[] = []
 
@@ -130,7 +133,7 @@ describe("workspace split-key persistence storage adapter", () => {
       }
     }
 
-    storage.setItem(STORAGE_KEY, buildEnvelope(baseState))
+    await storage.setItem(STORAGE_KEY, buildEnvelope(baseState))
 
     expect(localStorage.getItem(snapshotKey("workspace-a"))).toBeTruthy()
     expect(localStorage.getItem(snapshotKey("workspace-b"))).toBeTruthy()
@@ -148,7 +151,7 @@ describe("workspace split-key persistence storage adapter", () => {
         }
       }
     }
-    storage.setItem(STORAGE_KEY, buildEnvelope(nextState))
+    await storage.setItem(STORAGE_KEY, buildEnvelope(nextState))
 
     expect(writes).toContain(STORAGE_KEY)
     expect(writes).toContain(snapshotKey("workspace-a"))
@@ -157,7 +160,7 @@ describe("workspace split-key persistence storage adapter", () => {
     expect(writes).not.toContain(chatKey("workspace-b"))
   })
 
-  it("reconstructs full persisted state from split keys on getItem", () => {
+  it("reconstructs full persisted state from split keys on getItem", async () => {
     const storage = createWorkspaceStorage()
     const indexPayload = {
       schema: "workspace_split_v1",
@@ -245,7 +248,7 @@ describe("workspace split-key persistence storage adapter", () => {
       })
     )
 
-    const raw = storage.getItem(STORAGE_KEY)
+    const raw = await Promise.resolve(storage.getItem(STORAGE_KEY))
     expect(raw).toBeTruthy()
 
     const parsed = raw ? JSON.parse(raw) : null
@@ -262,7 +265,7 @@ describe("workspace split-key persistence storage adapter", () => {
     )
   })
 
-  it("migrates legacy monolithic payload to split keys on first read", () => {
+  it("migrates legacy monolithic payload to split keys on first read", async () => {
     const storage = createWorkspaceStorage()
     const legacyPayload = buildEnvelope(
       {
@@ -319,7 +322,7 @@ describe("workspace split-key persistence storage adapter", () => {
 
     localStorage.setItem(STORAGE_KEY, legacyPayload)
 
-    const raw = storage.getItem(STORAGE_KEY)
+    const raw = await Promise.resolve(storage.getItem(STORAGE_KEY))
     expect(raw).toBeTruthy()
     const migratedIndexRaw = localStorage.getItem(STORAGE_KEY)
     const migratedIndex = migratedIndexRaw ? JSON.parse(migratedIndexRaw) : null
@@ -328,7 +331,7 @@ describe("workspace split-key persistence storage adapter", () => {
     expect(localStorage.getItem(chatKey("workspace-legacy"))).toBeTruthy()
   })
 
-  it("cleans up split workspace keys when index key is removed", () => {
+  it("cleans up split workspace keys when index key is removed", async () => {
     const storage = createWorkspaceStorage()
     localStorage.setItem(
       STORAGE_KEY,
@@ -351,12 +354,77 @@ describe("workspace split-key persistence storage adapter", () => {
     localStorage.setItem(snapshotKey("workspace-b"), JSON.stringify({ id: "b" }))
     localStorage.setItem(chatKey("workspace-b"), JSON.stringify({ id: "b" }))
 
-    storage.removeItem(STORAGE_KEY)
+    await storage.removeItem(STORAGE_KEY)
 
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
     expect(localStorage.getItem(snapshotKey("workspace-a"))).toBeNull()
     expect(localStorage.getItem(chatKey("workspace-a"))).toBeNull()
     expect(localStorage.getItem(snapshotKey("workspace-b"))).toBeNull()
     expect(localStorage.getItem(chatKey("workspace-b"))).toBeNull()
+  })
+
+  it("falls back to monolithic persistence when split-key rollout flag is disabled", async () => {
+    localStorage.setItem(WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY, "0")
+    const storage = createWorkspaceStorage()
+    const payload = buildEnvelope(
+      {
+        workspaceId: "workspace-rollout-disabled",
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-rollout-disabled": {
+            workspaceId: "workspace-rollout-disabled",
+            workspaceName: "Rollback Workspace",
+            workspaceTag: "workspace:rollback",
+            workspaceCreatedAt: "2026-02-22T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-rollout-disabled",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: {
+              title: "",
+              content: "",
+              keywords: [],
+              isDirty: false
+            },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: {
+              provider: "openai",
+              model: "gpt-4o-mini-tts",
+              voice: "alloy",
+              speed: 1,
+              format: "mp3"
+            }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-rollout-disabled": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "Fallback chat",
+                sources: []
+              }
+            ],
+            historyId: "fallback-history",
+            serverChatId: "fallback-chat"
+          }
+        }
+      },
+      1
+    )
+
+    await storage.setItem(STORAGE_KEY, payload)
+
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(payload)
+    expect(
+      localStorage.getItem(snapshotKey("workspace-rollout-disabled"))
+    ).toBeNull()
+    expect(localStorage.getItem(chatKey("workspace-rollout-disabled"))).toBeNull()
+    const raw = await Promise.resolve(storage.getItem(STORAGE_KEY))
+    expect(raw).toBe(payload)
   })
 })

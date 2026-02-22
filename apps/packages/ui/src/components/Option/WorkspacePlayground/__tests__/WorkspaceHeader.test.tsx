@@ -764,7 +764,7 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Storage WS 2.1/5 MB")
+    expect(indicator).toHaveTextContent("Capacity Payload 2.1/5 MB")
     expect(indicator.className).toContain("text-text-muted")
   })
 
@@ -783,7 +783,9 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Storage WS 2.1/5 MB | Profile 120.0/1000 MB")
+    expect(indicator).toHaveTextContent(
+      "Capacity Payload 2.1/5 MB | Browser 120.0/1000 MB"
+    )
   })
 
   it("includes account storage usage when provided", () => {
@@ -801,7 +803,9 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Storage WS 2.1/5 MB | Account 300.0/1000 MB")
+    expect(indicator).toHaveTextContent(
+      "Capacity Payload 2.1/5 MB | Account 300.0/1000 MB"
+    )
   })
 
   it("shows connection status indicator tone for healthy, degraded, and disconnected states", () => {

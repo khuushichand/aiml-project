@@ -1,9 +1,10 @@
 import React, { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Empty, Input, Popconfirm, Tooltip, Tag } from "antd"
-import { Plus, Folder, Trash2, X, ChevronRight, Bot, Copy, GitFork } from "lucide-react"
+import { Plus, Folder, Trash2, X, ChevronRight, Bot, Copy, GitFork, RefreshCw } from "lucide-react"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import { useStorage } from "@plasmohq/storage/hook"
+import { ACPRestClient } from "@/services/acp/client"
 import type { ACPSession, ACPAgentType, ACPSessionState } from "@/services/acp/types"
 import { AGENT_TYPE_INFO } from "@/services/acp/constants"
 import { ACPSessionCreateModal } from "./ACPSessionCreateModal"
@@ -11,11 +12,17 @@ import { getSessionMessageCount, getSessionTokenUsage } from "./sessionMetrics"
 
 interface ACPSessionPanelProps {
   onHide?: () => void
+  onRefreshSessions?: () => Promise<void> | void
+  isRefreshing?: boolean
 }
 
 type SessionSortKey = "recent" | "oldest" | "name_asc" | "name_desc"
 
-export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
+export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({
+  onHide,
+  onRefreshSessions,
+  isRefreshing = false,
+}) => {
   const { t } = useTranslation(["playground", "option", "common"])
 
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -28,6 +35,20 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
   const [authMode] = useStorage("authMode", "single-user")
   const [apiKey] = useStorage("apiKey", "")
   const [accessToken] = useStorage("accessToken", "")
+  const [isRefreshingLocal, setIsRefreshingLocal] = useState(false)
+
+  const restClient = React.useMemo(
+    () =>
+      new ACPRestClient({
+        serverUrl,
+        getAuthHeaders: async () => getAuthHeaders(authMode, apiKey, accessToken),
+        getAuthParams: async () => ({
+          token: authMode === "multi-user" && accessToken ? accessToken : undefined,
+          api_key: authMode === "single-user" && apiKey ? apiKey : undefined,
+        }),
+      }),
+    [serverUrl, authMode, apiKey, accessToken]
+  )
 
   // Store
   const sessionsById = useACPSessionsStore((s) => s.sessions)
@@ -77,7 +98,10 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
   const closeSession = useACPSessionsStore((s) => s.closeSession)
   const createSession = useACPSessionsStore((s) => s.createSession)
   const replaceSessionId = useACPSessionsStore((s) => s.replaceSessionId)
+  const applySessionDetail = useACPSessionsStore((s) => s.applySessionDetail)
+  const applySessionUsage = useACPSessionsStore((s) => s.applySessionUsage)
   const hasActiveFilters = searchQuery.trim().length > 0 || stateFilter !== "all" || sortKey !== "recent"
+  const refreshLoading = isRefreshing || isRefreshingLocal
 
   const handleCreateSession = () => {
     setShowCreateModal(true)
@@ -94,14 +118,8 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
 
   const handleCloseSession = async (sessionId: string) => {
     try {
-      const headers = getAuthHeaders(authMode, apiKey, accessToken)
-
-      await fetch(`${serverUrl}/api/v1/acp/sessions/close`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ session_id: sessionId }),
-      }).catch(() => {
-        // Ignore errors - session may already be closed
+      await restClient.closeSession(sessionId).catch(() => {
+        // Ignore server close failures - session may already be closed
       })
 
       // Remove from local store
@@ -171,32 +189,36 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
       return
     }
 
+    const fallbackName = `${sourceSession.name || sourceSession.cwd.split("/").filter(Boolean).pop() || "Session"} (fork)`
+
     try {
-      const headers = getAuthHeaders(authMode, apiKey, accessToken)
-      const response = await fetch(`${serverUrl}/api/v1/acp/sessions/${sessionId}/fork`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({}),
+      let messageIndex = resolveForkMessageIndex(sourceSession)
+
+      try {
+        const detail = await restClient.getSessionDetail(sessionId)
+        applySessionDetail(detail)
+        if (Array.isArray(detail.messages) && detail.messages.length > 0) {
+          messageIndex = detail.messages.length - 1
+        }
+      } catch {
+        // Ignore detail fetch failure and keep local fallback index.
+      }
+
+      if (messageIndex < 0) {
+        createLocalFork(sourceSession)
+        return
+      }
+
+      const payload = await restClient.forkSession(sessionId, {
+        message_index: messageIndex,
+        name: fallbackName,
       })
 
-      if (!response.ok) {
-        throw new Error(`Fork endpoint unavailable (${response.status})`)
-      }
-
-      const payload = await response.json().catch(() => null) as Record<string, unknown> | null
-      const serverSessionId = typeof payload?.session_id === "string"
-        ? payload.session_id
-        : typeof payload?.id === "string"
-          ? payload.id
-          : null
-
-      if (!serverSessionId) {
-        throw new Error("Fork endpoint did not return a session id")
-      }
+      const serverSessionId = payload.session_id
 
       const localForkSessionId = createSession({
         cwd: sourceSession.cwd,
-        name: typeof payload?.name === "string" ? payload.name : `${sourceSession.name || "Session"} (fork)`,
+        name: payload.name || fallbackName,
         agentType: sourceSession.agentType,
         tags: sourceSession.tags ? [...sourceSession.tags] : undefined,
         mcpServers: sourceSession.mcpServers?.map((server) => ({
@@ -207,13 +229,13 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
       })
 
       replaceSessionId(localForkSessionId, serverSessionId, {
-        name: typeof payload?.name === "string" ? payload.name : undefined,
+        name: payload.name || undefined,
         forkParentSessionId: resolveForkParentSessionId(payload, sourceSession.id),
-        sandboxSessionId: typeof payload?.sandbox_session_id === "string" ? payload.sandbox_session_id : null,
-        sandboxRunId: typeof payload?.sandbox_run_id === "string" ? payload.sandbox_run_id : null,
-        sshWsUrl: typeof payload?.ssh_ws_url === "string" ? payload.ssh_ws_url : null,
-        sshUser: typeof payload?.ssh_user === "string" ? payload.ssh_user : null,
       })
+
+      void restClient.getSessionUsage(serverSessionId)
+        .then((usage) => applySessionUsage(usage))
+        .catch(() => undefined)
 
       setActiveSession(serverSessionId)
     } catch (_error) {
@@ -257,6 +279,19 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
     setSortKey("recent")
   }
 
+  const handleRefreshSessions = async () => {
+    if (!onRefreshSessions) {
+      return
+    }
+
+    setIsRefreshingLocal(true)
+    try {
+      await onRefreshSessions()
+    } finally {
+      setIsRefreshingLocal(false)
+    }
+  }
+
   const getStateFilterLabel = (state: ACPSessionState | "all") => {
     switch (state) {
       case "connected":
@@ -285,6 +320,17 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
           {t("playground:acp.sessions", "Sessions")}
         </h2>
         <div className="flex items-center gap-1">
+          {onRefreshSessions && (
+            <Tooltip title={t("playground:acp.refreshSessions", "Refresh sessions")}>
+              <Button
+                type="text"
+                size="small"
+                icon={<RefreshCw className={`h-4 w-4 ${refreshLoading ? "animate-spin" : ""}`} />}
+                onClick={handleRefreshSessions}
+                disabled={refreshLoading}
+              />
+            </Tooltip>
+          )}
           <Tooltip title={t("playground:acp.newSession", "New Session")}>
             <Button
               type="text"
@@ -463,7 +509,7 @@ const SessionItem: React.FC<SessionItemProps> = ({
   const { t } = useTranslation(["playground", "common"])
 
   // Get the last part of the path for display
-  const displayPath = session.cwd.split("/").filter(Boolean).slice(-2).join("/")
+  const displayPath = session.cwd.split("/").filter(Boolean).slice(-2).join("/") || session.cwd || "/"
   const displayName = session.name || displayPath || session.cwd
 
   return (
@@ -604,13 +650,24 @@ const getAuthHeaders = (
   return headers
 }
 
+const resolveForkMessageIndex = (sourceSession: ACPSession): number => {
+  const inferredMessageCount = getSessionMessageCount(sourceSession)
+  return inferredMessageCount > 0 ? inferredMessageCount - 1 : -1
+}
+
 const resolveForkParentSessionId = (
-  payload: Record<string, unknown> | null,
+  payload: {
+    fork_parent_session_id?: unknown
+    parent_session_id?: unknown
+    forked_from_session_id?: unknown
+    forked_from?: unknown
+  } | null,
   sourceSessionId: string
 ): string => {
   const candidate = payload?.fork_parent_session_id
     ?? payload?.parent_session_id
     ?? payload?.forked_from_session_id
+    ?? payload?.forked_from
   return typeof candidate === "string" && candidate.length > 0
     ? candidate
     : sourceSessionId

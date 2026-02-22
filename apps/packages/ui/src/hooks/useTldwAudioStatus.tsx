@@ -34,6 +34,8 @@ type AudioHealthResponse = {
   status?: number
   data?: {
     available?: boolean
+    usable?: boolean
+    provider?: string
   }
 }
 
@@ -115,7 +117,14 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     // Fail-open on probe transport errors; let real transcription attempts decide.
     sttHealthState = "unknown"
   } else if (sttHealthQuery.data?.ok) {
-    if (sttHealthQuery.data?.data?.available === false) {
+    const sttPayload = sttHealthQuery.data?.data
+    const provider = String(sttPayload?.provider ?? "")
+      .trim()
+      .toLowerCase()
+    const explicitlyUsable = sttPayload?.usable === true
+    const failOpenForNonWhisper =
+      sttPayload?.available === false && provider.length > 0 && provider !== "whisper"
+    if (sttPayload?.available === false && !explicitlyUsable && !failOpenForNonWhisper) {
       sttHealthState = "unhealthy"
     } else {
       sttHealthState = "healthy"

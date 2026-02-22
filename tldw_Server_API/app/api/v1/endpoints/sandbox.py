@@ -70,7 +70,11 @@ from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogra
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec
 from tldw_Server_API.app.core.Sandbox.models import RuntimeType as CoreRuntimeType
 from tldw_Server_API.app.core.Sandbox.models import TrustLevel as CoreTrustLevel
-from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
+from tldw_Server_API.app.core.Sandbox.orchestrator import (
+    IdempotencyConflict,
+    QueueFull,
+    SessionActiveRunsConflict,
+)
 from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
@@ -675,7 +679,17 @@ async def delete_session(
     current_user: User = Depends(get_request_user),
 ) -> dict:
     _require_session_owner(session_id, current_user)
-    ok = _service.destroy_session(session_id)
+    try:
+        ok = _service.destroy_session(session_id)
+    except SessionActiveRunsConflict as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "session_has_active_runs",
+                "active_runs": int(getattr(e, "active_runs", 0) or 0),
+                "session_id": str(session_id),
+            },
+        ) from e
     if not ok:
         raise HTTPException(status_code=404, detail="session_not_found")
     return {"ok": True}

@@ -119,3 +119,6 @@ class RunStatus:
     workspace_id: str | None = None
     workspace_group_id: str | None = None
     scope_snapshot_id: str | None = None
+    # Optional execution-claim metadata for durable claim fencing.
+    claim_owner: str | None = None
+    claim_expires_at: datetime | None = None
