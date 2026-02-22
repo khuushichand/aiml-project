@@ -28,6 +28,8 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaProfileCreate,
     PersonaProfileResponse,
     PersonaProfileUpdate,
+    PersonaStateHistoryResponse,
+    PersonaStateRestoreRequest,
     PersonaStateResponse,
     PersonaStateUpdateRequest,
     PersonaSessionDetail,
@@ -202,6 +204,16 @@ def _get_persona_state_doc_max_chars() -> int:
     except Exception:
         value = 50_000
     return max(256, min(value, 1_000_000))
+
+
+def _get_persona_state_history_max_entries() -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = int(_app_settings.get("PERSONA_STATE_HISTORY_MAX_ENTRIES", 200))
+    except Exception:
+        value = 200
+    return max(1, min(value, 2000))
 
 
 def _get_persona_allowed_audio_formats() -> set[str]:
@@ -804,6 +816,35 @@ def _persona_state_response_from_rows(
     return PersonaStateResponse(**payload)
 
 
+def _persona_state_history_response_from_rows(
+    *,
+    persona_id: str,
+    rows: list[dict[str, Any]] | None,
+) -> PersonaStateHistoryResponse:
+    entries: list[dict[str, Any]] = []
+    for row in (rows or []):
+        memory_type = str(row.get("memory_type") or "").strip()
+        field_name = _PERSONA_STATE_MEMORY_TYPE_TO_FIELD.get(memory_type)
+        if not field_name:
+            continue
+        entry_id = str(row.get("id") or "").strip()
+        if not entry_id:
+            continue
+        is_archived = _coerce_bool(row.get("archived"), default=False)
+        entries.append(
+            {
+                "entry_id": entry_id,
+                "field": field_name,
+                "content": str(row.get("content") or ""),
+                "is_active": not is_archived,
+                "created_at": str(row.get("created_at") or "").strip() or None,
+                "last_modified": str(row.get("last_modified") or "").strip() or None,
+                "version": int(row.get("version") or 1),
+            }
+        )
+    return PersonaStateHistoryResponse(persona_id=str(persona_id or ""), entries=entries)
+
+
 def _get_persona_state_rows(
     db: CharactersRAGDB,
     *,
@@ -918,12 +959,25 @@ def _build_persona_state_identity_answer(state_hints: dict[str, str]) -> str:
     return _normalize_persona_state_hint_text(answer, max_chars=_get_persona_state_hint_max_chars())
 
 
+def _build_persona_state_hint_lines(state_hints: dict[str, str]) -> list[str]:
+    if not isinstance(state_hints, dict):
+        return []
+    lines: list[str] = []
+    for field_name in ("identity", "soul", "heartbeat"):
+        value = str(state_hints.get(field_name) or "").strip()
+        if not value:
+            continue
+        label = field_name.capitalize()
+        lines.append(f"- {label}: {value}")
+    return lines
+
+
 def _replace_persona_state_docs(
     db: CharactersRAGDB,
     *,
     user_id: str,
     persona_id: str,
-    updates: dict[str, str],
+    updates: dict[str, str | None],
 ) -> None:
     now = _utc_now_iso()
     for field_name, value in updates.items():
@@ -950,6 +1004,8 @@ def _replace_persona_state_docs(
                     persona_id=persona_id,
                     archived=True,
                 )
+        if value is None:
+            continue
         _ = db.add_persona_memory_entry(
             {
                 "persona_id": persona_id,
@@ -964,10 +1020,17 @@ def _replace_persona_state_docs(
 
 
 def _increment_persona_state_metric(*, action: str, result: str) -> None:
-    action_value = _bounded_label(action, allowed={"read", "write"}, fallback="read")
+    action_value = _bounded_label(action, allowed={"read", "write", "history", "restore"}, fallback="read")
     result_value = _bounded_label(
         result,
-        allowed={"success", "error", "not_found", "rejected_empty", "rejected_too_large"},
+        allowed={
+            "success",
+            "error",
+            "not_found",
+            "entry_not_found",
+            "rejected_empty",
+            "rejected_too_large",
+        },
         fallback="error",
     )
     _increment_persona_metric(
@@ -1571,16 +1634,18 @@ async def replace_persona_profile_state(
         raise HTTPException(status_code=404, detail="Persona disabled")
     user_id = _require_current_user_id(_current_user)
     updates_raw = payload.model_dump(exclude_unset=True)
-    updates: dict[str, str] = {
-        key: str(value)
+    updates: dict[str, str | None] = {
+        key: (None if value is None else str(value))
         for key, value in updates_raw.items()
-        if key in _PERSONA_STATE_FIELD_TO_MEMORY_TYPE and value is not None
+        if key in _PERSONA_STATE_FIELD_TO_MEMORY_TYPE
     }
     if not updates:
         _increment_persona_state_metric(action="write", result="rejected_empty")
         raise HTTPException(status_code=400, detail="No state document fields provided for update")
     max_chars = _get_persona_state_doc_max_chars()
     for field_name, value in updates.items():
+        if value is None:
+            continue
         if len(value) > max_chars:
             _increment_persona_state_metric(action="write", result="rejected_too_large")
             raise HTTPException(
@@ -1606,6 +1671,141 @@ async def replace_persona_profile_state(
     except (InputError, ConflictError, CharactersRAGDBError) as exc:
         _increment_persona_state_metric(action="write", result="error")
         raise _to_http_exception(exc, action="replace persona profile state") from exc
+
+
+@router.get(
+    "/profiles/{persona_id}/state/history",
+    response_model=PersonaStateHistoryResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def list_persona_profile_state_history(
+    persona_id: str,
+    field: str | None = Query(default=None),
+    include_archived: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=2000),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaStateHistoryResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+
+    memory_type: str | None = None
+    if field is not None:
+        normalized_field = str(field).strip().lower()
+        if normalized_field not in _PERSONA_STATE_FIELD_TO_MEMORY_TYPE:
+            raise HTTPException(status_code=400, detail="Invalid state field filter")
+        memory_type = _PERSONA_STATE_FIELD_TO_MEMORY_TYPE[normalized_field]
+
+    bounded_limit = min(int(limit), _get_persona_state_history_max_entries())
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            _increment_persona_state_metric(action="history", result="not_found")
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+        rows = db.list_persona_memory_entries(
+            user_id=user_id,
+            persona_id=persona_id,
+            memory_type=memory_type,
+            include_archived=bool(include_archived),
+            include_deleted=False,
+            limit=bounded_limit,
+            offset=0,
+        )
+        _increment_persona_state_metric(action="history", result="success")
+        return _persona_state_history_response_from_rows(persona_id=persona_id, rows=rows)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        _increment_persona_state_metric(action="history", result="error")
+        raise _to_http_exception(exc, action="list persona profile state history") from exc
+
+
+@router.post(
+    "/profiles/{persona_id}/state/restore",
+    response_model=PersonaStateResponse,
+    tags=["persona"],
+    status_code=status.HTTP_200_OK,
+)
+async def restore_persona_profile_state_entry(
+    persona_id: str,
+    payload: PersonaStateRestoreRequest = Body(...),
+    _current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> PersonaStateResponse:
+    if not is_persona_enabled():
+        raise HTTPException(status_code=404, detail="Persona disabled")
+    user_id = _require_current_user_id(_current_user)
+    target_entry_id = str(payload.entry_id or "").strip()
+    if not target_entry_id:
+        raise HTTPException(status_code=400, detail="entry_id is required")
+
+    try:
+        profile = db.get_persona_profile(persona_id, user_id=user_id, include_deleted=False)
+        if profile is None:
+            _increment_persona_state_metric(action="restore", result="not_found")
+            raise HTTPException(status_code=404, detail="Persona profile not found")
+
+        rows = db.list_persona_memory_entries(
+            user_id=user_id,
+            persona_id=persona_id,
+            include_archived=True,
+            include_deleted=False,
+            limit=_get_persona_state_history_max_entries(),
+            offset=0,
+        )
+        target_row: dict[str, Any] | None = None
+        for row in rows:
+            row_id = str(row.get("id") or "").strip()
+            if row_id != target_entry_id:
+                continue
+            if str(row.get("memory_type") or "").strip() not in _PERSONA_STATE_MEMORY_TYPES:
+                continue
+            target_row = row
+            break
+        if target_row is None:
+            _increment_persona_state_metric(action="restore", result="entry_not_found")
+            raise HTTPException(status_code=404, detail="State history entry not found")
+
+        target_memory_type = str(target_row.get("memory_type") or "").strip()
+        for row in rows:
+            if str(row.get("memory_type") or "").strip() != target_memory_type:
+                continue
+            row_id = str(row.get("id") or "").strip()
+            if not row_id:
+                continue
+            if row_id == target_entry_id:
+                continue
+            if _coerce_bool(row.get("archived"), default=False):
+                continue
+            with contextlib.suppress(Exception):
+                db.set_persona_memory_archived(
+                    entry_id=row_id,
+                    user_id=user_id,
+                    persona_id=persona_id,
+                    archived=True,
+                )
+
+        if _coerce_bool(target_row.get("archived"), default=False):
+            restored = db.set_persona_memory_archived(
+                entry_id=target_entry_id,
+                user_id=user_id,
+                persona_id=persona_id,
+                archived=False,
+            )
+            if not restored:
+                _increment_persona_state_metric(action="restore", result="entry_not_found")
+                raise HTTPException(status_code=404, detail="State history entry not found")
+
+        current_rows = _get_persona_state_rows(db, user_id=user_id, persona_id=persona_id)
+        _increment_persona_state_metric(action="restore", result="success")
+        return _persona_state_response_from_rows(persona_id=persona_id, rows=current_rows)
+    except HTTPException:
+        raise
+    except (InputError, ConflictError, CharactersRAGDBError) as exc:
+        _increment_persona_state_metric(action="restore", result="error")
+        raise _to_http_exception(exc, action="restore persona profile state entry") from exc
 
 
 @router.get(
@@ -2503,9 +2703,23 @@ async def persona_stream(
             else:
                 query_text = text
                 compact_memories = [m.strip() for m in (memory_context or []) if str(m or "").strip()]
+                compact_state_lines = _build_persona_state_hint_lines(compact_state_hints)
+                if compact_state_lines:
+                    query_text = f"{query_text}\n\nPersistent persona state hints:\n" + "\n".join(compact_state_lines)
                 if compact_memories:
                     memory_lines = "\n".join(f"- {m}" for m in compact_memories[: _get_persona_memory_top_k()])
-                    query_text = f"{text}\n\nPersona memory hints:\n{memory_lines}"
+                    query_text = f"{query_text}\n\nPersona memory hints:\n{memory_lines}"
+                if compact_memories and compact_state_lines:
+                    why_text = (
+                        "Input appears to be a knowledge query with applied persistent persona state and "
+                        "personalization memories."
+                    )
+                elif compact_state_lines:
+                    why_text = "Input appears to be a knowledge query with applied persistent persona state."
+                elif compact_memories:
+                    why_text = "Input appears to be a knowledge query with applied personalization memories."
+                else:
+                    why_text = "Input appears to be a knowledge query."
                 steps.append(
                     {
                         "idx": 0,
@@ -2513,11 +2727,7 @@ async def persona_stream(
                         "tool": "rag_search",
                         "args": {"query": query_text},
                         "description": "Search your knowledge base",
-                        "why": (
-                            "Input appears to be a knowledge query with applied personalization memories."
-                            if compact_memories
-                            else "Input appears to be a knowledge query."
-                        ),
+                        "why": why_text,
                     }
                 )
             return {"steps": steps}
@@ -2592,12 +2802,25 @@ async def persona_stream(
                     default=default_use_memory,
                 )
                 use_memory_context = requested_use_memory_context
+                default_use_persona_state_context = _coerce_bool(
+                    existing_preferences.get("use_persona_state_context"),
+                    default=True,
+                )
+                requested_use_persona_state_context = _coerce_bool(
+                    msg.get("use_persona_state_context"),
+                    default=default_use_persona_state_context,
+                )
+                state_context_override = "use_persona_state_context" in msg
+                use_persona_state_context = requested_use_persona_state_context
                 memory_allowed_by_mode = _memory_mode_allows_personalization_retrieval(
                     runtime_mode,
                     session_exists=session_exists,
                 )
                 if not memory_allowed_by_mode:
                     use_memory_context = False
+                state_context_allowed_by_mode = runtime_mode == "persistent_scoped"
+                if not state_context_allowed_by_mode:
+                    use_persona_state_context = False
                 pref_top_k_raw = existing_preferences.get("memory_top_k", configured_top_k)
                 try:
                     pref_top_k = int(pref_top_k_raw)
@@ -2615,6 +2838,7 @@ async def persona_stream(
                     session_policy_rules = _session_policy_rules_from_preferences(existing_preferences)
                 preferences_patch: dict[str, Any] = {
                     "use_memory_context": use_memory_context,
+                    "use_persona_state_context": use_persona_state_context,
                     "memory_top_k": memory_top_k,
                 }
                 if "session_policy_rules" in msg:
@@ -2633,6 +2857,7 @@ async def persona_stream(
                     metadata={
                         "source": "ws",
                         "use_memory_context": use_memory_context,
+                        "use_persona_state_context": use_persona_state_context,
                         "memory_top_k": memory_top_k,
                         "session_policy_rule_count": len(session_policy_rules),
                         "runtime_mode": runtime_mode,
@@ -2655,12 +2880,14 @@ async def persona_stream(
                         session_id=session_id,
                     )
                     memory_context = [m.content for m in memories]
-                persona_state_hints = _load_persona_state_hints_for_runtime(
-                    persona_scope_db,
-                    user_id=authenticated_user_id,
-                    persona_id=runtime_persona_id,
-                    runtime_mode=runtime_mode,
-                )
+                persona_state_hints: dict[str, str] = {}
+                if use_persona_state_context and state_context_allowed_by_mode:
+                    persona_state_hints = _load_persona_state_hints_for_runtime(
+                        persona_scope_db,
+                        user_id=authenticated_user_id,
+                        persona_id=runtime_persona_id,
+                        runtime_mode=runtime_mode,
+                    )
                 persona_state_fields = sorted(persona_state_hints.keys())
                 memory_usage = {
                     "enabled": use_memory_context,
@@ -2668,6 +2895,9 @@ async def persona_stream(
                     "requested_top_k": memory_top_k,
                     "applied_count": len(memory_context),
                     "runtime_mode": runtime_mode,
+                    "persona_state_enabled": use_persona_state_context,
+                    "persona_state_requested_enabled": requested_use_persona_state_context,
+                    "persona_state_mode_allowed": state_context_allowed_by_mode,
                     "persona_state_applied_count": len(persona_state_fields),
                     "persona_state_fields": persona_state_fields,
                 }
@@ -2698,6 +2928,20 @@ async def persona_stream(
                         level="info",
                         reason_code="PERSONA_STATE_HINTS_APPLIED",
                         message=f"Applied {len(persona_state_fields)} persona state docs",
+                    )
+                elif state_context_override and requested_use_persona_state_context and not state_context_allowed_by_mode:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="PERSONA_STATE_MODE_DISABLED",
+                        message="Persona state context is disabled for session_scoped personas.",
+                    )
+                elif state_context_override and not use_persona_state_context:
+                    await _emit_notice(
+                        session_id=session_id,
+                        level="info",
+                        reason_code="PERSONA_STATE_DISABLED",
+                        message="Persona state context disabled for this message",
                     )
                 plan = await _propose_plan(
                     text,

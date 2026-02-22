@@ -84,7 +84,7 @@ Good fit for:
 
 ## Current Status
 
-Latest release: 0.1.20 (2026-02-07). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
+Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
 
 <details>
 <summary>Current focus and migration notes</summary>

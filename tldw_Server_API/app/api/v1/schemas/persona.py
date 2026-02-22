@@ -140,3 +140,25 @@ class PersonaStateResponse(BaseModel):
     identity_md: str | None = None
     heartbeat_md: str | None = None
     last_modified: str | None = None
+
+
+PersonaStateField = Literal["soul_md", "identity_md", "heartbeat_md"]
+
+
+class PersonaStateHistoryItem(BaseModel):
+    entry_id: str
+    field: PersonaStateField
+    content: str
+    is_active: bool = True
+    created_at: str | None = None
+    last_modified: str | None = None
+    version: int = 1
+
+
+class PersonaStateHistoryResponse(BaseModel):
+    persona_id: str
+    entries: list[PersonaStateHistoryItem] = Field(default_factory=list)
+
+
+class PersonaStateRestoreRequest(BaseModel):
+    entry_id: str = Field(..., min_length=1, max_length=200)

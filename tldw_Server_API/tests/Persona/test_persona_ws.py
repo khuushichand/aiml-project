@@ -1990,6 +1990,101 @@ def test_persona_session_scoped_identity_query_does_not_use_state_docs(tmp_path,
     assert list(memory_payload.get("persona_state_fields") or []) == []
 
 
+def test_persona_persistent_scoped_non_identity_query_applies_state_docs(tmp_path, monkeypatch):
+    identity_marker = "Persistent identity hint for general retrieval"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_state_general_persistent",
+        mode="persistent_scoped",
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md=identity_marker,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_state_general_persistent",
+                        "text": "find notes about pytest fixtures",
+                    }
+                )
+            )
+            _ = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "PERSONA_STATE_HINTS_APPLIED",
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_step = plan["steps"][0]
+    assert first_step["step_type"] == "rag_query"
+    query_text = str((first_step.get("args") or {}).get("query") or "")
+    assert identity_marker in query_text
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("persona_state_enabled") is True
+    assert memory_payload.get("persona_state_requested_enabled") is True
+    assert memory_payload.get("persona_state_mode_allowed") is True
+    assert memory_payload.get("persona_state_applied_count", 0) >= 1
+
+
+def test_persona_state_context_can_be_disabled_per_message(tmp_path, monkeypatch):
+    identity_marker = "State hint should not be present when disabled per message"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_state_disabled_msg",
+        mode="persistent_scoped",
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md=identity_marker,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_state_disabled_msg",
+                        "text": "find notes about pytest fixtures",
+                        "use_persona_state_context": False,
+                    }
+                )
+            )
+            disabled_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "PERSONA_STATE_DISABLED",
+            )
+            assert "disabled" in str(disabled_notice.get("message")).lower()
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_step = plan["steps"][0]
+    assert first_step["step_type"] == "rag_query"
+    query_text = str((first_step.get("args") or {}).get("query") or "")
+    assert identity_marker not in query_text
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("persona_state_enabled") is False
+    assert memory_payload.get("persona_state_requested_enabled") is False
+    assert memory_payload.get("persona_state_applied_count") == 0
+
+
 @pytest.mark.parametrize(
     ("mode", "session_id", "expected_summary_memory"),
     [
