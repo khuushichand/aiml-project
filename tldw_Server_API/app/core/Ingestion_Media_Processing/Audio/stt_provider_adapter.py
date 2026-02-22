@@ -471,9 +471,10 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             cancel_check=cancel_check,
         )
         text = " ".join(
-            str(seg.get("Text") or seg.get("text") or "").strip()
+            str(seg.get("text") or "").strip()
             for seg in segments_list
             if isinstance(seg, dict)
+        )
         )
         return {
             "text": text,
