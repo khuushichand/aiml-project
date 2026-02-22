@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Button, Input, message, Popconfirm, Dropdown, Modal } from "antd"
+import { Button, Input, message, Popconfirm, Dropdown, Modal, Select } from "antd"
 import type { MenuProps } from "antd"
 import {
   Plus,
@@ -8,7 +8,13 @@ import {
   Trash2,
   Calendar,
   GripVertical,
-  Edit2
+  Edit2,
+  CheckSquare,
+  MessageCircle,
+  FileText,
+  Archive,
+  Zap,
+  Search
 } from "lucide-react"
 import { DragDropProvider, DragOverlay, type DragDropEvents } from "@dnd-kit/react"
 import { useSortable } from "@dnd-kit/react/sortable"
@@ -19,10 +25,15 @@ import {
   createList,
   createCard,
   updateBoard,
+  updateList,
   deleteList,
   updateCard,
   deleteCard,
   moveCard,
+  archiveList,
+  unarchiveList,
+  archiveCard,
+  unarchiveCard,
   reorderLists,
   reorderCards,
   generateClientId,
@@ -34,7 +45,8 @@ import type {
   BoardWithLists,
   ListWithCards,
   Card,
-  CardUpdate
+  CardUpdate,
+  ListUpdate
 } from "@/types/kanban"
 
 import { CardDetailPanel } from "./CardDetailPanel"
@@ -43,12 +55,32 @@ interface BoardViewProps {
   board: BoardWithLists
   onRefresh: () => void
   onDelete: () => void
+  onArchive?: () => void
+  onQuickSetup?: () => void
+  /** Expose triggers so the parent can start add-card / add-list from keyboard shortcuts */
+  shortcutHandlersRef?: React.RefObject<{
+    startAddCard: () => void
+    startAddList: () => void
+  } | null>
 }
 
 type DragStartEvent = Parameters<DragDropEvents["dragstart"]>[0]
 type DragEndEvent = Parameters<DragDropEvents["dragend"]>[0]
 
-export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
+interface UndoAction {
+  type: "archive-card" | "archive-list"
+  entityId: number
+  label: string
+}
+
+export const BoardView = ({
+  board,
+  onRefresh,
+  onDelete,
+  onArchive,
+  onQuickSetup,
+  shortcutHandlersRef
+}: BoardViewProps) => {
   const queryClient = useQueryClient()
 
   // Drag state
@@ -63,17 +95,93 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
   const [renameModalOpen, setRenameModalOpen] = useState(false)
   const [renameValue, setRenameValue] = useState(board.name)
 
+  // Filter state
+  const [filterLabelIds, setFilterLabelIds] = useState<number[]>([])
+  const [filterPriorities, setFilterPriorities] = useState<string[]>([])
+  const [searchQuery, setSearchQuery] = useState("")
+  const hasFilters = filterLabelIds.length > 0 || filterPriorities.length > 0 || searchQuery.length > 0
+
   // Add list state
   const [addingList, setAddingList] = useState(false)
   const [newListName, setNewListName] = useState("")
 
   // Add card state - tracks which list is in "add card" mode
   const [addingCardListId, setAddingCardListId] = useState<number | null>(null)
-  const [newCardTitle, setNewCardTitle] = useState("")
+
+  // Expose add-card / add-list triggers to parent via ref
+  useEffect(() => {
+    if (shortcutHandlersRef) {
+      shortcutHandlersRef.current = {
+        startAddCard: () => {
+          // Open add-card on the first list
+          const firstList = board.lists[0]
+          if (firstList) setAddingCardListId(firstList.id)
+        },
+        startAddList: () => {
+          setAddingList(true)
+        }
+      }
+    }
+    return () => {
+      if (shortcutHandlersRef) shortcutHandlersRef.current = null
+    }
+  }, [shortcutHandlersRef, board.lists])
+
+  // Undo state
+  const undoRef = useRef<UndoAction | null>(null)
 
   useEffect(() => {
     setRenameValue(board.name)
   }, [board.id, board.name])
+
+  // Show undo toast after archive
+  const showUndoToast = useCallback(
+    (action: UndoAction) => {
+      undoRef.current = action
+      message.open({
+        type: "success",
+        content: `"${action.label}" archived`,
+        duration: 10,
+        btn: (
+          <Button
+            type="link"
+            size="small"
+            onClick={() => {
+              const a = undoRef.current
+              if (!a) return
+              undoRef.current = null
+              if (a.type === "archive-card") {
+                unarchiveCard(a.entityId)
+                  .then(() => {
+                    queryClient.invalidateQueries({
+                      queryKey: ["kanban-board", board.id]
+                    })
+                    message.success("Card restored")
+                  })
+                  .catch(() => {
+                    message.error("Failed to restore card. Please try again.")
+                  })
+              } else if (a.type === "archive-list") {
+                unarchiveList(a.entityId)
+                  .then(() => {
+                    queryClient.invalidateQueries({
+                      queryKey: ["kanban-board", board.id]
+                    })
+                    message.success("List restored")
+                  })
+                  .catch(() => {
+                    message.error("Failed to restore list. Please try again.")
+                  })
+              }
+            }}
+          >
+            Undo
+          </Button>
+        )
+      })
+    },
+    [board.id, queryClient]
+  )
 
   // Mutations
   const createListMutation = useMutation({
@@ -85,8 +193,8 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
       setAddingList(false)
       setNewListName("")
     },
-    onError: (err) => {
-      message.error(`Failed to create list: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create list. Please try again.")
     }
   })
 
@@ -98,10 +206,20 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
       setRenameModalOpen(false)
     },
-    onError: (err) => {
-      message.error(
-        `Failed to rename board: ${err instanceof Error ? err.message : "Unknown error"}`
-      )
+    onError: () => {
+      message.error("Failed to rename board. Please try again.")
+    }
+  })
+
+  const updateListMutation = useMutation({
+    mutationFn: ({ listId, data }: { listId: number; data: ListUpdate }) =>
+      updateList(listId, data),
+    onSuccess: () => {
+      message.success("List renamed")
+      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
+    },
+    onError: () => {
+      message.error("Failed to rename list. Please try again.")
     }
   })
 
@@ -111,8 +229,43 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
       message.success("List deleted")
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to delete list: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete list. Please try again.")
+    }
+  })
+
+  const archiveListMutation = useMutation({
+    mutationFn: ({ listId, listName }: { listId: number; listName: string }) =>
+      archiveList(listId),
+    onSuccess: (_data, { listId, listName }) => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
+      showUndoToast({ type: "archive-list", entityId: listId, label: listName })
+    },
+    onError: () => {
+      message.error("Failed to archive list. Please try again.")
+    }
+  })
+
+  const archiveCardMutation = useMutation({
+    mutationFn: ({
+      cardId,
+      cardTitle
+    }: {
+      cardId: number
+      cardTitle: string
+    }) => archiveCard(cardId),
+    onSuccess: (_data, { cardId, cardTitle }) => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
+      setDetailPanelOpen(false)
+      setSelectedCard(null)
+      showUndoToast({
+        type: "archive-card",
+        entityId: cardId,
+        label: cardTitle
+      })
+    },
+    onError: () => {
+      message.error("Failed to archive card. Please try again.")
     }
   })
 
@@ -122,10 +275,9 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
       setAddingCardListId(null)
-      setNewCardTitle("")
     },
-    onError: (err) => {
-      message.error(`Failed to create card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create card. Please try again.")
     }
   })
 
@@ -135,8 +287,8 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to update card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to update card. Please try again.")
     }
   })
 
@@ -148,8 +300,8 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
       setDetailPanelOpen(false)
       setSelectedCard(null)
     },
-    onError: (err) => {
-      message.error(`Failed to delete card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete card. Please try again.")
     }
   })
 
@@ -166,29 +318,67 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     },
-    onError: (err) => {
-      message.error(`Failed to move card: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to move card. Please try again.")
     }
   })
 
   const reorderListsMutation = useMutation({
     mutationFn: (listIds: number[]) => reorderLists(board.id, listIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
+    onMutate: async (listIds) => {
+      await queryClient.cancelQueries({ queryKey: ["kanban-board", board.id] })
+      const previous = queryClient.getQueryData<BoardWithLists>(["kanban-board", board.id])
+      if (previous) {
+        const reordered = listIds
+          .map((id) => previous.lists.find((l) => l.id === id))
+          .filter(Boolean) as ListWithCards[]
+        queryClient.setQueryData<BoardWithLists>(["kanban-board", board.id], {
+          ...previous,
+          lists: reordered
+        })
+      }
+      return { previous }
     },
-    onError: (err) => {
-      message.error(`Failed to reorder lists: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["kanban-board", board.id], context.previous)
+      }
+      message.error("Failed to reorder lists. Please try again.")
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     }
   })
 
   const reorderCardsMutation = useMutation({
     mutationFn: ({ listId, cardIds }: { listId: number; cardIds: number[] }) =>
       reorderCards(listId, cardIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
+    onMutate: async ({ listId, cardIds }) => {
+      await queryClient.cancelQueries({ queryKey: ["kanban-board", board.id] })
+      const previous = queryClient.getQueryData<BoardWithLists>(["kanban-board", board.id])
+      if (previous) {
+        const updated = {
+          ...previous,
+          lists: previous.lists.map((l) => {
+            if (l.id !== listId) return l
+            const reordered = cardIds
+              .map((id) => l.cards.find((c) => c.id === id))
+              .filter(Boolean) as Card[]
+            return { ...l, cards: reordered }
+          })
+        }
+        queryClient.setQueryData<BoardWithLists>(["kanban-board", board.id], updated)
+      }
+      return { previous }
     },
-    onError: (err) => {
-      message.error(`Failed to reorder cards: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["kanban-board", board.id], context.previous)
+      }
+      message.error("Failed to reorder cards. Please try again.")
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-board", board.id] })
     }
   })
 
@@ -197,15 +387,6 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
     if (!newListName.trim()) return
     createListMutation.mutate(newListName.trim())
   }, [newListName, createListMutation])
-
-  // Handle adding new card
-  const handleAddCard = useCallback(
-    (listId: number) => {
-      if (!newCardTitle.trim()) return
-      createCardMutation.mutate({ listId, title: newCardTitle.trim() })
-    },
-    [newCardTitle, createCardMutation]
-  )
 
   // Open card detail panel
   const handleCardClick = useCallback((card: Card) => {
@@ -227,6 +408,30 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
       deleteCardMutation.mutate(cardId)
     },
     [deleteCardMutation]
+  )
+
+  // Rename list
+  const handleRenameList = useCallback(
+    (listId: number, name: string) => {
+      updateListMutation.mutate({ listId, data: { name } })
+    },
+    [updateListMutation]
+  )
+
+  // Archive list
+  const handleArchiveList = useCallback(
+    (listId: number, listName: string) => {
+      archiveListMutation.mutate({ listId, listName })
+    },
+    [archiveListMutation]
+  )
+
+  // Archive card
+  const handleArchiveCard = useCallback(
+    (cardId: number, cardTitle: string) => {
+      archiveCardMutation.mutate({ cardId, cardTitle })
+    },
+    [archiveCardMutation]
   )
 
   // Drag handlers
@@ -382,6 +587,51 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
     return board.lists.find((l) => l.id === listId) || null
   }
 
+  // Collect all unique labels from cards for filter options
+  const allLabels = useMemo(() => {
+    const map = new Map<number, { id: number; name: string; color: string }>()
+    for (const list of board.lists) {
+      for (const card of list.cards) {
+        for (const label of card.labels ?? []) {
+          map.set(label.id, { id: label.id, name: label.name, color: label.color })
+        }
+      }
+    }
+    return Array.from(map.values())
+  }, [board.lists])
+
+  const handleClearFilters = useCallback(() => {
+    setFilterLabelIds([])
+    setFilterPriorities([])
+    setSearchQuery("")
+  }, [])
+
+  // Check if card matches current filters
+  const cardMatchesFilters = useCallback(
+    (card: Card) => {
+      if (!hasFilters) return true
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase()
+        const matchesTitle = card.title.toLowerCase().includes(q)
+        const matchesDesc = (card.description ?? "").toLowerCase().includes(q)
+        if (!matchesTitle && !matchesDesc) return false
+      }
+      if (filterPriorities.length > 0) {
+        if (!card.priority || !filterPriorities.includes(card.priority)) {
+          return false
+        }
+      }
+      if (filterLabelIds.length > 0) {
+        const cardLabelIds = (card.labels ?? []).map((l) => l.id)
+        if (!filterLabelIds.some((id) => cardLabelIds.includes(id))) {
+          return false
+        }
+      }
+      return true
+    },
+    [hasFilters, searchQuery, filterPriorities, filterLabelIds]
+  )
+
   return (
     <div className="board-view">
       {/* Board header with name and actions */}
@@ -403,19 +653,101 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
           <span className="text-sm text-text-muted">
             {board.lists.length} lists, {board.total_cards} cards
           </span>
+          {onQuickSetup && (
+            <Button
+              size="small"
+              icon={<Zap className="w-4 h-4" />}
+              onClick={onQuickSetup}
+            >
+              Quick Setup
+            </Button>
+          )}
+          {onArchive && (
+            <Button
+              size="small"
+              icon={<Archive className="w-4 h-4" />}
+              onClick={onArchive}
+            >
+              Archive Board
+            </Button>
+          )}
           <Popconfirm
             title="Delete this board?"
-            description="All lists and cards will be deleted."
+            description="All lists and cards will be removed. This cannot be undone."
             onConfirm={onDelete}
             okText="Delete"
             okType="danger"
           >
-            <Button danger icon={<Trash2 className="w-4 h-4" />} size="small">
-              Delete Board
+            <Button danger type="text" icon={<Trash2 className="w-4 h-4" />} size="small">
+              Delete
             </Button>
           </Popconfirm>
         </div>
       </div>
+
+      {/* Filter bar */}
+      {(allLabels.length > 0 || board.total_cards > 0) && (
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <Input
+            placeholder="Search cards..."
+            prefix={<Search className="w-3.5 h-3.5 text-text-muted" />}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            allowClear
+            size="small"
+            style={{ width: 180 }}
+          />
+          {allLabels.length > 0 && (
+            <Select
+              mode="multiple"
+              placeholder="Filter by label"
+              style={{ minWidth: 160 }}
+              value={filterLabelIds}
+              onChange={setFilterLabelIds}
+              maxTagCount={2}
+              allowClear
+              size="small"
+              options={allLabels.map((l) => ({
+                value: l.id,
+                label: (
+                  <div className="flex items-center gap-1">
+                    <span
+                      className="inline-block w-3 h-3 rounded-sm"
+                      style={{ backgroundColor: l.color }}
+                    />
+                    {l.name}
+                  </div>
+                )
+              }))}
+            />
+          )}
+          <Select
+            mode="multiple"
+            placeholder="Filter by priority"
+            style={{ minWidth: 150 }}
+            value={filterPriorities}
+            onChange={setFilterPriorities}
+            maxTagCount={2}
+            allowClear
+            size="small"
+            options={[
+              { value: "urgent", label: "Urgent" },
+              { value: "high", label: "High" },
+              { value: "medium", label: "Medium" },
+              { value: "low", label: "Low" }
+            ]}
+          />
+          {hasFilters && (
+            <Button
+              size="small"
+              type="link"
+              onClick={handleClearFilters}
+            >
+              Clear filters
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Kanban board with DnD */}
       <DragDropProvider onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -426,16 +758,19 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
               list={list}
               index={index}
               onDeleteList={() => deleteListMutation.mutate(list.id)}
+              onArchiveList={() =>
+                handleArchiveList(list.id, list.name)
+              }
+              onRenameList={(name) => handleRenameList(list.id, name)}
               onCardClick={handleCardClick}
               addingCard={addingCardListId === list.id}
               onStartAddCard={() => setAddingCardListId(list.id)}
-              onCancelAddCard={() => {
-                setAddingCardListId(null)
-                setNewCardTitle("")
-              }}
-              newCardTitle={newCardTitle}
-              onNewCardTitleChange={setNewCardTitle}
-              onAddCard={() => handleAddCard(list.id)}
+              onCancelAddCard={() => setAddingCardListId(null)}
+              onAddCard={(title) =>
+                createCardMutation.mutate({ listId: list.id, title })
+              }
+              createCardLoading={createCardMutation.isPending}
+              cardMatchesFilters={cardMatchesFilters}
             />
           ))}
 
@@ -502,6 +837,7 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
       {/* Card detail panel */}
       <CardDetailPanel
         card={selectedCard}
+        boardId={board.id}
         lists={board.lists}
         open={detailPanelOpen}
         onClose={() => {
@@ -510,9 +846,17 @@ export const BoardView = ({ board, onRefresh, onDelete }: BoardViewProps) => {
         }}
         onSave={handleSaveCard}
         onDelete={handleDeleteCard}
+        onArchive={(cardId, cardTitle) =>
+          handleArchiveCard(cardId, cardTitle)
+        }
         onMove={(cardId, targetListId) =>
           moveCardMutation.mutate({ cardId, targetListId })
         }
+        onCopied={() => {
+          queryClient.invalidateQueries({
+            queryKey: ["kanban-board", board.id]
+          })
+        }}
       />
 
       <Modal
@@ -547,26 +891,30 @@ interface SortableListProps {
   list: ListWithCards
   index: number
   onDeleteList: () => void
+  onArchiveList: () => void
+  onRenameList: (name: string) => void
   onCardClick: (card: Card) => void
   addingCard: boolean
   onStartAddCard: () => void
   onCancelAddCard: () => void
-  newCardTitle: string
-  onNewCardTitleChange: (value: string) => void
-  onAddCard: () => void
+  onAddCard: (title: string) => void
+  createCardLoading: boolean
+  cardMatchesFilters: (card: Card) => boolean
 }
 
 const SortableList = ({
   list,
   index,
   onDeleteList,
+  onArchiveList,
+  onRenameList,
   onCardClick,
   addingCard,
   onStartAddCard,
   onCancelAddCard,
-  newCardTitle,
-  onNewCardTitleChange,
-  onAddCard
+  onAddCard,
+  createCardLoading,
+  cardMatchesFilters
 }: SortableListProps) => {
   const {
     ref,
@@ -580,17 +928,70 @@ const SortableList = ({
     plugins: []
   })
 
+  // Local state for inline rename
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState(list.name)
+
+  // Local state for card title (fixes shared newCardTitle bug)
+  const [newCardTitle, setNewCardTitle] = useState("")
+
+  // Delete confirmation state
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+
   const style = {
     opacity: isDragging ? 0.5 : 1
   }
 
+  const handleStartRename = () => {
+    setRenameValue(list.name)
+    setIsRenaming(true)
+  }
+
+  const handleConfirmRename = () => {
+    const trimmed = renameValue.trim()
+    if (trimmed && trimmed !== list.name) {
+      onRenameList(trimmed)
+    }
+    setIsRenaming(false)
+  }
+
+  const handleCancelRename = () => {
+    setRenameValue(list.name)
+    setIsRenaming(false)
+  }
+
+  const handleAddCard = () => {
+    const trimmed = newCardTitle.trim()
+    if (!trimmed) return
+    onAddCard(trimmed)
+    setNewCardTitle("")
+  }
+
+  const handleCancelAddCard = () => {
+    setNewCardTitle("")
+    onCancelAddCard()
+  }
+
   const menuItems: MenuProps["items"] = [
+    {
+      key: "rename",
+      label: "Rename List",
+      icon: <Edit2 className="w-4 h-4" />,
+      onClick: handleStartRename
+    },
+    { type: "divider" },
+    {
+      key: "archive",
+      label: "Archive List",
+      icon: <Archive className="w-4 h-4" />,
+      onClick: onArchiveList
+    },
     {
       key: "delete",
       label: "Delete List",
       danger: true,
       icon: <Trash2 className="w-4 h-4" />,
-      onClick: onDeleteList
+      onClick: () => setDeleteConfirmOpen(true)
     }
   ]
 
@@ -605,13 +1006,49 @@ const SortableList = ({
         className="flex items-center justify-between p-3 cursor-grab"
         ref={handleRef}
       >
-        <div className="flex items-center gap-2">
-          <GripVertical className="w-4 h-4 text-text-subtle" />
-          <span className="font-medium">{list.name}</span>
-          <span className="text-xs text-text-muted bg-surface2 px-1.5 py-0.5 rounded">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <GripVertical className="w-4 h-4 text-text-subtle flex-shrink-0" />
+          {isRenaming ? (
+            <Input
+              size="small"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onPressEnter={handleConfirmRename}
+              onBlur={handleConfirmRename}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") handleCancelRename()
+              }}
+              autoFocus
+              className="flex-1"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span
+              className="font-medium truncate cursor-text"
+              onDoubleClick={handleStartRename}
+              title={list.name}
+            >
+              {list.name}
+            </span>
+          )}
+          <span className="text-xs text-text-muted bg-surface2 px-1.5 py-0.5 rounded flex-shrink-0">
             {list.cards.length}
           </span>
         </div>
+        <Popconfirm
+          title={`Delete list '${list.name}'?`}
+          description={`${list.cards.length} card${list.cards.length !== 1 ? "s" : ""} will be removed.`}
+          open={deleteConfirmOpen}
+          onConfirm={() => {
+            setDeleteConfirmOpen(false)
+            onDeleteList()
+          }}
+          onCancel={() => setDeleteConfirmOpen(false)}
+          okText="Delete"
+          okType="danger"
+        >
+          <span className="absolute w-0 h-0 overflow-hidden" />
+        </Popconfirm>
         <Dropdown menu={{ items: menuItems }} trigger={["click"]}>
           <Button
             type="text"
@@ -621,8 +1058,8 @@ const SortableList = ({
         </Dropdown>
       </div>
 
-      {/* Cards container */}
-      <div className="px-2 pb-2 max-h-[500px] overflow-y-auto">
+      {/* Cards container - dynamic max height */}
+      <div className="px-2 pb-2 max-h-[calc(100vh-250px)] overflow-y-auto">
         {list.cards.map((card, cardIndex) => (
           <SortableCard
             key={card.id}
@@ -630,6 +1067,7 @@ const SortableList = ({
             index={cardIndex}
             group={`cards-${list.id}`}
             onClick={() => onCardClick(card)}
+            dimmed={!cardMatchesFilters(card)}
           />
         ))}
 
@@ -639,24 +1077,29 @@ const SortableList = ({
             <Input.TextArea
               placeholder="Enter card title"
               value={newCardTitle}
-              onChange={(e) => onNewCardTitleChange(e.target.value)}
+              onChange={(e) => setNewCardTitle(e.target.value)}
               autoSize={{ minRows: 2, maxRows: 4 }}
               autoFocus
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault()
-                  onAddCard()
+                  handleAddCard()
                 }
                 if (e.key === "Escape") {
-                  onCancelAddCard()
+                  handleCancelAddCard()
                 }
               }}
             />
             <div className="flex gap-2 mt-2">
-              <Button type="primary" size="small" onClick={onAddCard}>
+              <Button
+                type="primary"
+                size="small"
+                onClick={handleAddCard}
+                loading={createCardLoading}
+              >
                 Add
               </Button>
-              <Button size="small" onClick={onCancelAddCard}>
+              <Button size="small" onClick={handleCancelAddCard}>
                 Cancel
               </Button>
             </div>
@@ -685,9 +1128,10 @@ interface SortableCardProps {
   index: number
   group: string
   onClick: () => void
+  dimmed?: boolean
 }
 
-const SortableCard = ({ card, index, group, onClick }: SortableCardProps) => {
+const SortableCard = ({ card, index, group, onClick, dimmed }: SortableCardProps) => {
   const {
     ref,
     isDragging
@@ -701,7 +1145,7 @@ const SortableCard = ({ card, index, group, onClick }: SortableCardProps) => {
   })
 
   const style = {
-    opacity: isDragging ? 0.5 : 1
+    opacity: isDragging ? 0.5 : dimmed ? 0.3 : 1
   }
 
   return (
@@ -709,9 +1153,22 @@ const SortableCard = ({ card, index, group, onClick }: SortableCardProps) => {
       ref={ref}
       style={style}
       onClick={onClick}
-      className="kanban-card bg-elevated rounded-md p-3 mb-2 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+      className={`kanban-card bg-elevated rounded-md mb-2 shadow-sm cursor-pointer hover:shadow-md transition-shadow overflow-hidden${
+        dimmed ? " pointer-events-none" : ""
+      }`}
     >
-      <KanbanCardPreview card={card} />
+      {/* Priority left border */}
+      <div className="flex">
+        {card.priority && (
+          <div
+            className="w-1 flex-shrink-0 rounded-l-md"
+            style={{ backgroundColor: getPriorityColor(card.priority) }}
+          />
+        )}
+        <div className="flex-1 p-3 min-w-0">
+          <KanbanCardPreview card={card} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -727,23 +1184,32 @@ interface KanbanCardPreviewProps {
 
 const KanbanCardPreview = ({ card, isDragging }: KanbanCardPreviewProps) => {
   const overdue = isCardOverdue(card)
+  const hasLabels = card.labels && card.labels.length > 0
+  const hasChecklist = (card.checklist_total ?? 0) > 0
+  const hasComments = (card.comment_count ?? 0) > 0
+  const hasDescription = !!card.description
 
   return (
     <div className={isDragging ? "bg-elevated rounded-md p-3 shadow-lg" : ""}>
+      {/* Label color bars */}
+      {hasLabels && (
+        <div className="flex items-center gap-1 flex-wrap mb-1.5">
+          {card.labels!.map((label) => (
+            <span
+              key={label.id}
+              className="inline-block w-8 h-1.5 rounded-sm"
+              style={{ backgroundColor: label.color }}
+              title={label.name}
+            />
+          ))}
+        </div>
+      )}
+
       {/* Title */}
       <div className="text-sm font-medium mb-1">{card.title}</div>
 
       {/* Badges row */}
       <div className="flex items-center gap-2 flex-wrap">
-        {/* Priority badge */}
-        {card.priority && (
-          <span
-            className="w-2 h-2 rounded-full"
-            style={{ backgroundColor: getPriorityColor(card.priority) }}
-            title={card.priority}
-          />
-        )}
-
         {/* Due date badge */}
         {card.due_date && (
           <span
@@ -757,6 +1223,39 @@ const KanbanCardPreview = ({ card, isDragging }: KanbanCardPreviewProps) => {
           >
             <Calendar className="w-3 h-3" />
             {formatDueDate(card.due_date)}
+          </span>
+        )}
+
+        {/* Description indicator */}
+        {hasDescription && (
+          <span className="text-text-muted" title="Has description">
+            <FileText className="w-3.5 h-3.5" />
+          </span>
+        )}
+
+        {/* Checklist progress */}
+        {hasChecklist && (
+          <span
+            className={`text-xs flex items-center gap-1 ${
+              card.checklist_complete === card.checklist_total
+                ? "text-success"
+                : "text-text-muted"
+            }`}
+            title="Checklist progress"
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            {card.checklist_complete}/{card.checklist_total}
+          </span>
+        )}
+
+        {/* Comment count */}
+        {hasComments && (
+          <span
+            className="text-xs flex items-center gap-1 text-text-muted"
+            title={`${card.comment_count} comment${card.comment_count !== 1 ? "s" : ""}`}
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            {card.comment_count}
           </span>
         )}
       </div>

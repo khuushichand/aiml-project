@@ -1,17 +1,25 @@
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
-  Tabs,
+  Dropdown,
   message,
   Spin,
-  Empty,
   Button,
   Select,
   Modal,
   Input,
   Badge
 } from "antd"
-import { Plus, Kanban, Upload, RefreshCw } from "lucide-react"
+import type { MenuProps } from "antd"
+import {
+  Plus,
+  Kanban,
+  Upload,
+  Download,
+  RefreshCw,
+  Archive,
+  MoreVertical
+} from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -19,18 +27,25 @@ import {
   getBoard,
   createBoard,
   deleteBoard,
+  archiveBoard,
+  exportBoard,
+  createList,
   generateClientId
 } from "@/services/kanban"
 import { BoardView } from "./BoardView"
 import { ImportPanel } from "./ImportPanel"
+import { ArchivedItemsDrawer } from "./ArchivedItemsDrawer"
+import { BoardGallery } from "./BoardGallery"
+import { useKanbanShortcuts } from "./useKanbanShortcuts"
 
-type PlaygroundTab = "board" | "import"
+const BADGE_INDICATOR_STYLE = {
+  backgroundColor: "rgb(var(--color-primary))",
+  color: "rgb(var(--color-text))"
+}
 
 export const KanbanPlayground = () => {
   const { t } = useTranslation(["settings", "common"])
   const queryClient = useQueryClient()
-  // Tab state
-  const [activeTab, setActiveTab] = useState<PlaygroundTab>("board")
 
   // Board selection state
   const [selectedBoardId, setSelectedBoardId] = useState<number | null>(null)
@@ -38,6 +53,19 @@ export const KanbanPlayground = () => {
   // Create board modal state
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [newBoardName, setNewBoardName] = useState("")
+  const [newBoardDescription, setNewBoardDescription] = useState("")
+
+  // Import modal state
+  const [importModalOpen, setImportModalOpen] = useState(false)
+
+  // Archive drawer state
+  const [archiveDrawerOpen, setArchiveDrawerOpen] = useState(false)
+
+  // Ref for BoardView shortcut handlers (add-card / add-list)
+  const boardShortcutRef = useRef<{
+    startAddCard: () => void
+    startAddList: () => void
+  } | null>(null)
 
   // Fetch boards list
   const {
@@ -64,17 +92,18 @@ export const KanbanPlayground = () => {
 
   // Create board mutation
   const createBoardMutation = useMutation({
-    mutationFn: (name: string) =>
-      createBoard({ name, client_id: generateClientId() }),
+    mutationFn: ({ name, description }: { name: string; description?: string }) =>
+      createBoard({ name, description, client_id: generateClientId() }),
     onSuccess: (newBoard) => {
       message.success("Board created")
       queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
       setSelectedBoardId(newBoard.id)
       setCreateModalOpen(false)
       setNewBoardName("")
+      setNewBoardDescription("")
     },
-    onError: (err) => {
-      message.error(`Failed to create board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to create board. Please try again.")
     }
   })
 
@@ -86,8 +115,21 @@ export const KanbanPlayground = () => {
       queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
       setSelectedBoardId(null)
     },
-    onError: (err) => {
-      message.error(`Failed to delete board: ${err instanceof Error ? err.message : "Unknown error"}`)
+    onError: () => {
+      message.error("Failed to delete board. Please try again.")
+    }
+  })
+
+  // Archive board mutation
+  const archiveBoardMutation = useMutation({
+    mutationFn: (boardId: number) => archiveBoard(boardId),
+    onSuccess: () => {
+      message.success("Board archived")
+      queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
+      setSelectedBoardId(null)
+    },
+    onError: () => {
+      message.error("Failed to archive board. Please try again.")
     }
   })
 
@@ -96,30 +138,112 @@ export const KanbanPlayground = () => {
       message.warning("Please enter a board name")
       return
     }
-    createBoardMutation.mutate(newBoardName.trim())
-  }, [newBoardName, createBoardMutation])
+    createBoardMutation.mutate({
+      name: newBoardName.trim(),
+      description: newBoardDescription.trim() || undefined
+    })
+  }, [newBoardName, newBoardDescription, createBoardMutation])
 
   const handleDeleteBoard = useCallback(() => {
     if (!selectedBoardId) return
     deleteBoardMutation.mutate(selectedBoardId)
   }, [selectedBoardId, deleteBoardMutation])
 
-  const handleBoardImported = useCallback((boardId: number) => {
-    queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
-    setSelectedBoardId(boardId)
-    setActiveTab("board")
-  }, [queryClient])
+  const handleArchiveBoard = useCallback(() => {
+    if (!selectedBoardId) return
+    archiveBoardMutation.mutate(selectedBoardId)
+  }, [selectedBoardId, archiveBoardMutation])
+
+  const handleExportBoard = useCallback(async () => {
+    if (!selectedBoardId || !boardData) return
+    try {
+      const data = await exportBoard(selectedBoardId)
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json"
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${boardData.name.replace(/[^a-z0-9]/gi, "_")}_export.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      message.success("Board exported")
+    } catch (err) {
+      message.error("Failed to export board. Please try again.")
+    }
+  }, [selectedBoardId, boardData])
+
+  const handleBoardImported = useCallback(
+    (boardId: number) => {
+      queryClient.invalidateQueries({ queryKey: ["kanban-boards"] })
+      setSelectedBoardId(boardId)
+      setImportModalOpen(false)
+    },
+    [queryClient]
+  )
+
+  // Quick setup: create To Do / In Progress / Done lists
+  const handleQuickSetup = useCallback(async () => {
+    if (!selectedBoardId) return
+    const names = ["To Do", "In Progress", "Done"]
+    try {
+      for (const name of names) {
+        await createList(selectedBoardId, {
+          name,
+          client_id: generateClientId()
+        })
+      }
+      message.success("Lists created")
+      queryClient.invalidateQueries({
+        queryKey: ["kanban-board", selectedBoardId]
+      })
+    } catch (err) {
+      message.error("Failed to create lists. Please try again.")
+    }
+  }, [selectedBoardId, queryClient])
+
+  // Keyboard shortcuts
+  const { helpOpen, setHelpOpen } = useKanbanShortcuts({
+    onNewBoard: () => setCreateModalOpen(true),
+    onNewCard: () => boardShortcutRef.current?.startAddCard(),
+    onNewList: () => boardShortcutRef.current?.startAddList()
+  })
 
   const boards = boardsData?.boards ?? []
-  const emptyDescription =
-    boards.length > 0
-      ? "Select an existing board to get started"
-      : "No boards yet. Create your first board"
 
   const boardSelectorOptions = boards.map((b) => ({
     value: b.id,
     label: b.name
   }))
+
+  // Actions dropdown menu items
+  const actionsMenuItems: MenuProps["items"] = [
+    {
+      key: "import",
+      label: "Import Board...",
+      icon: <Upload className="w-4 h-4" />,
+      onClick: () => setImportModalOpen(true)
+    },
+    ...(selectedBoardId
+      ? [
+          {
+            key: "export",
+            label: "Export Board...",
+            icon: <Download className="w-4 h-4" />,
+            onClick: handleExportBoard
+          }
+        ]
+      : []),
+    { type: "divider" as const },
+    {
+      key: "archive",
+      label: "Archived Items",
+      icon: <Archive className="w-4 h-4" />,
+      onClick: () => setArchiveDrawerOpen(true)
+    }
+  ]
 
   const renderHeader = () => (
     <div className="flex items-center justify-between mb-4">
@@ -133,9 +257,7 @@ export const KanbanPlayground = () => {
           <Badge
             count={boards.length}
             showZero
-            styles={{
-              indicator: { backgroundColor: "rgb(var(--color-primary))", color: "rgb(var(--color-text))" }
-            }}
+            styles={{ indicator: BADGE_INDICATOR_STYLE }}
           />
         </div>
         <Select
@@ -154,6 +276,9 @@ export const KanbanPlayground = () => {
         >
           New Board
         </Button>
+        <Dropdown menu={{ items: actionsMenuItems }} trigger={["click"]}>
+          <Button icon={<MoreVertical className="w-4 h-4" />} />
+        </Dropdown>
         <Button
           icon={<RefreshCw className="w-4 h-4" />}
           onClick={() => {
@@ -165,65 +290,70 @@ export const KanbanPlayground = () => {
     </div>
   )
 
-  const tabItems = [
-    {
-      key: "board",
-      label: (
-        <span className="flex items-center gap-2">
-          <Kanban className="w-4 h-4" />
-          Board
-        </span>
-      ),
-      children: (
-        <div className="min-h-[500px]">
-          {boardLoading ? (
-            <div className="flex items-center justify-center h-96">
-              <Spin size="large" />
-            </div>
-          ) : !selectedBoardId ? (
-            <Empty
-              description={emptyDescription}
-              className="mt-20"
-            >
-              <Button
-                type="primary"
-                icon={<Plus className="w-4 h-4" />}
-                onClick={() => setCreateModalOpen(true)}
-              >
-                Create Board
-              </Button>
-            </Empty>
-          ) : boardData ? (
-            <BoardView
-              board={boardData}
-              onRefresh={() => refetchBoard()}
-              onDelete={handleDeleteBoard}
-            />
-          ) : null}
+  const renderContent = () => {
+    const isLoading = selectedBoardId ? boardLoading : boardsLoading
+
+    if (isLoading) {
+      return (
+        <div className="flex items-center justify-center h-96">
+          <Spin size="large" />
         </div>
       )
-    },
-    {
-      key: "import",
-      label: (
-        <span className="flex items-center gap-2">
-          <Upload className="w-4 h-4" />
-          Import
-        </span>
-      ),
-      children: <ImportPanel onImported={handleBoardImported} />
     }
-  ]
+
+    if (!selectedBoardId) {
+      return (
+        <BoardGallery
+          boards={boards}
+          onSelectBoard={setSelectedBoardId}
+          onCreateBoard={() => setCreateModalOpen(true)}
+        />
+      )
+    }
+
+    if (boardData) {
+      return (
+        <>
+          <BoardView
+            board={boardData}
+            onRefresh={() => refetchBoard()}
+            onDelete={handleDeleteBoard}
+            onArchive={handleArchiveBoard}
+            onQuickSetup={
+              boardData.lists.length === 0 ? handleQuickSetup : undefined
+            }
+            shortcutHandlersRef={boardShortcutRef}
+          />
+        </>
+      )
+    }
+
+    return null
+  }
 
   return (
     <div className="kanban-playground">
       {renderHeader()}
 
-      <Tabs
-        activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as PlaygroundTab)}
-        items={tabItems}
+      <div className="min-h-[500px]">{renderContent()}</div>
+
+      {/* Archive drawer */}
+      <ArchivedItemsDrawer
+        open={archiveDrawerOpen}
+        onClose={() => setArchiveDrawerOpen(false)}
+        boardId={selectedBoardId}
       />
+
+      {/* Import modal */}
+      <Modal
+        title="Import Board"
+        open={importModalOpen}
+        onCancel={() => setImportModalOpen(false)}
+        footer={null}
+        width={600}
+      >
+        <ImportPanel onImported={handleBoardImported} />
+      </Modal>
 
       {/* Create Board Modal */}
       <Modal
@@ -232,20 +362,63 @@ export const KanbanPlayground = () => {
         onCancel={() => {
           setCreateModalOpen(false)
           setNewBoardName("")
+          setNewBoardDescription("")
         }}
         onOk={handleCreateBoard}
         okText="Create"
         confirmLoading={createBoardMutation.isPending}
       >
-        <div className="py-4">
-          <label className="block text-sm font-medium mb-2">Board Name</label>
-          <Input
-            placeholder="Enter board name"
-            value={newBoardName}
-            onChange={(e) => setNewBoardName(e.target.value)}
-            onPressEnter={handleCreateBoard}
-            autoFocus
-          />
+        <div className="py-4 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              Board Name
+            </label>
+            <Input
+              placeholder="Enter board name"
+              value={newBoardName}
+              onChange={(e) => setNewBoardName(e.target.value)}
+              onPressEnter={handleCreateBoard}
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              Description{" "}
+              <span className="text-text-muted font-normal">(optional)</span>
+            </label>
+            <Input.TextArea
+              placeholder="What is this board for?"
+              value={newBoardDescription}
+              onChange={(e) => setNewBoardDescription(e.target.value)}
+              autoSize={{ minRows: 2, maxRows: 4 }}
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Keyboard shortcuts help */}
+      <Modal
+        title="Keyboard Shortcuts"
+        open={helpOpen}
+        onCancel={() => setHelpOpen(false)}
+        footer={null}
+        width={360}
+      >
+        <div className="space-y-2 py-2">
+          {[
+            { key: "N", desc: "New card" },
+            { key: "B", desc: "New board" },
+            { key: "L", desc: "New list" },
+            { key: "Esc", desc: "Close panel" },
+            { key: "?", desc: "Show this help" }
+          ].map(({ key, desc }) => (
+            <div key={key} className="flex items-center justify-between">
+              <span className="text-sm">{desc}</span>
+              <kbd className="px-2 py-0.5 rounded bg-surface text-xs font-mono border">
+                {key}
+              </kbd>
+            </div>
+          ))}
         </div>
       </Modal>
     </div>
