@@ -223,6 +223,24 @@ class KnowledgeModule(BaseModule):
                     candidate = uri.split("chats://", 1)[1].split("#", 1)[0]
             return self._id_matches_scope(candidate, scoped_conv_ids)
 
+        if source == "characters":
+            scoped_char_ids = get_explicit_scope_ids(context, "character_id")
+            candidate = item.get("character_id") or item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("characters://"):
+                    candidate = uri.split("characters://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_char_ids)
+
+        if source == "prompts":
+            scoped_prompt_ids = get_explicit_scope_ids(context, "prompt_id")
+            candidate = item.get("prompt_id") or item.get("id")
+            if candidate is None:
+                uri = str(item.get("uri") or "")
+                if uri.startswith("prompts://"):
+                    candidate = uri.split("prompts://", 1)[1].split("#", 1)[0]
+            return self._id_matches_scope(candidate, scoped_prompt_ids)
+
         return True
 
     async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
@@ -250,6 +268,7 @@ class KnowledgeModule(BaseModule):
         scoped_media_ids = get_explicit_scope_ids(context, "media_id")
         scoped_conv_ids = get_explicit_scope_ids(context, "conversation_id")
         scoped_char_ids = get_explicit_scope_ids(context, "character_id")
+        scoped_prompt_ids = get_explicit_scope_ids(context, "prompt_id")
 
         # Enforce per-source RBAC before fan-out calls
         allowed_sources: list[str] = []
@@ -325,16 +344,35 @@ class KnowledgeModule(BaseModule):
                 "conversation_ids_filter": sorted(scoped_conv_ids) if scoped_conv_ids is not None else None,
             }, context))
         if "characters" in sources:
-            tasks.append(self._call_tool("characters.search", {"query": query, "limit": limit + offset, "offset": 0, "snippet_length": snippet_len}, context))
+            tasks.append(
+                self._call_tool(
+                    "characters.search",
+                    {
+                        "query": query,
+                        "limit": limit + offset,
+                        "offset": 0,
+                        "snippet_length": snippet_len,
+                        "character_ids_filter": sorted(scoped_char_ids) if scoped_char_ids is not None else None,
+                    },
+                    context,
+                )
+            )
         if "prompts" in sources:
             f = (filters or {}).get("prompts") or {}
-            tasks.append(self._call_tool("prompts.search", {
-                "query": query,
-                "fields": f.get("fields"),
-                "limit": limit + offset,
-                "offset": 0,
-                "snippet_length": snippet_len,
-            }, context))
+            tasks.append(
+                self._call_tool(
+                    "prompts.search",
+                    {
+                        "query": query,
+                        "fields": f.get("fields"),
+                        "limit": limit + offset,
+                        "offset": 0,
+                        "snippet_length": snippet_len,
+                        "prompt_ids_filter": sorted(scoped_prompt_ids) if scoped_prompt_ids is not None else None,
+                    },
+                    context,
+                )
+            )
 
         results_raw = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 
@@ -400,6 +438,9 @@ class KnowledgeModule(BaseModule):
         if source == "chats":
             if not self._id_matches_scope(idv, get_explicit_scope_ids(context, "conversation_id")):
                 raise PermissionError("Source/id not allowed by persona scope")
+        if source == "characters":
+            if not self._id_matches_scope(idv, get_explicit_scope_ids(context, "character_id")):
+                raise PermissionError("Source/id not allowed by persona scope")
 
         # Enforce per-source RBAC for direct fetch
         allowed = await self._tool_allowed(tool, context)
@@ -434,7 +475,11 @@ class KnowledgeModule(BaseModule):
         if source == "characters":
             return await self._call_tool("characters.get", {"character_id": int(idv)}, context)
         if source == "prompts":
-            return await self._call_tool("prompts.get", {"prompt_id_or_name": str(idv)}, context)
+            out = await self._call_tool("prompts.get", {"prompt_id_or_name": str(idv)}, context)
+            meta = out.get("meta") if isinstance(out, dict) else None
+            if isinstance(meta, dict) and not self._item_allowed_by_scope(meta, context):
+                raise PermissionError("Source/id not allowed by persona scope")
+            return out
         # Unsupported source
         raise ValueError(f"Unsupported source for get: {source}")
 

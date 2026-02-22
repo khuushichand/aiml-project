@@ -61,7 +61,7 @@ AUTH_KEYS_DIR="${RUNTIME_HOME}/.ssh"
 AUTH_KEYS_FILE="${AUTH_KEYS_DIR}/authorized_keys"
 mkdir -p "${AUTH_KEYS_DIR}"
 if [ -n "${ACP_SSH_AUTHORIZED_KEY:-}" ]; then
-  printf '%s\n' "${ACP_SSH_AUTHORIZED_KEY}" > "${AUTH_KEYS_FILE}"
+  printf '%s\n' "${ACP_SSH_AUTHORIZED_KEY}" >> "${AUTH_KEYS_FILE}"
 fi
 chmod 700 "${AUTH_KEYS_DIR}"
 if [ -f "${AUTH_KEYS_FILE}" ]; then
@@ -90,7 +90,7 @@ PermitUserEnvironment yes
 AllowUsers ${USER_NAME}
 HostKey ${HOST_KEY}
 PidFile ${SSHD_RUNTIME_DIR}/sshd.pid
-StrictModes no
+StrictModes no  # Container-mounted volumes/runtime dirs may have UID/GID ownership drift; trade-off is weaker sshd permission enforcement, mitigated by key-only auth, non-root SSH user, limited exposure, and documented volume-ownership expectations.
 Subsystem sftp internal-sftp
 SSHD
 

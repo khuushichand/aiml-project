@@ -44,3 +44,23 @@ def test_postgres_statement_conversion_includes_persona_persistence_tables(
     assert "idx_persona_sessions_user" in full
     assert "idx_persona_memory_persona" in full
     assert re.search(r"SET\s+version\s*=\s*26", full, flags=re.IGNORECASE)
+
+
+def test_postgres_statement_conversion_includes_persona_memory_namespace_migration(
+    char_rag_db: CharactersRAGDB,
+) -> None:
+    """Verify v27 conversion output includes persona memory namespace columns/indexes."""
+
+    sql = char_rag_db._MIGRATION_SQL_V26_TO_V27
+    assert isinstance(sql, str) and "persona_memory_entries" in sql
+
+    stmts = char_rag_db._convert_sqlite_schema_to_postgres_statements(sql)
+    assert isinstance(stmts, list) and len(stmts) > 0
+
+    full = "\n".join(stmts)
+    assert "ALTER TABLE persona_memory_entries" in full
+    assert "scope_snapshot_id TEXT" in full
+    assert "session_id TEXT" in full
+    assert "idx_persona_memory_scope" in full
+    assert "idx_persona_memory_session" in full
+    assert re.search(r"SET\s+version\s*=\s*27", full, flags=re.IGNORECASE)

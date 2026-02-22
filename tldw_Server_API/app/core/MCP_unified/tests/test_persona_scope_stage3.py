@@ -173,6 +173,38 @@ async def test_chats_scope_enforces_conversation_and_character_filters():
 
 
 @pytest.mark.asyncio
+async def test_chats_scope_enforces_message_branch_filters():
+    mod = ChatsModule(ModuleConfig(name="chats"))
+    db = _ChatsScopeDB()
+    mod._open_db = lambda context: db  # type: ignore[assignment]
+
+    ctx_character = SimpleNamespace(metadata={"persona_scope": {"explicit_ids": {"character_id": ["2"]}}})
+    out_character = await mod.execute_tool(
+        "chats.search",
+        {"query": "hello", "by": "message", "limit": 10, "offset": 0},
+        context=ctx_character,
+    )
+    assert out_character["results"]
+    assert all(str(r.get("conversation_id")) == "conv_b" for r in out_character["results"])
+
+    out_character_mismatch = await mod.execute_tool(
+        "chats.search",
+        {"query": "hello", "by": "message", "limit": 10, "offset": 0, "character_id": 1},
+        context=ctx_character,
+    )
+    assert out_character_mismatch["results"] == []
+
+    ctx_conversation = SimpleNamespace(metadata={"persona_scope": {"explicit_ids": {"conversation_id": ["conv_a"]}}})
+    out_conversation = await mod.execute_tool(
+        "chats.search",
+        {"query": "hello", "by": "message", "limit": 10, "offset": 0},
+        context=ctx_conversation,
+    )
+    assert out_conversation["results"]
+    assert all(str(r.get("conversation_id")) == "conv_a" for r in out_conversation["results"])
+
+
+@pytest.mark.asyncio
 async def test_media_scope_enforces_media_search_and_get():
     mod = MediaModule(ModuleConfig(name="media"))
     db = _MediaScopeDB()
@@ -323,6 +355,116 @@ class _ScopeBypassChatsModule(BaseModule):
         raise ValueError(tool_name)
 
 
+class _ScopeBypassCharactersModule(BaseModule):
+    last_args: dict[str, Any] | None = None
+
+    async def on_initialize(self) -> None:
+        return None
+
+    async def on_shutdown(self) -> None:
+        return None
+
+    async def check_health(self) -> dict[str, bool]:
+        return {"ok": True}
+
+    async def get_tools(self) -> list[dict[str, Any]]:
+        return [
+            {"name": "characters.search", "description": "", "inputSchema": {"type": "object"}},
+            {"name": "characters.get", "description": "", "inputSchema": {"type": "object"}},
+        ]
+
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
+        type(self).last_args = dict(arguments)
+        if tool_name == "characters.search":
+            return {
+                "results": [
+                    {
+                        "id": 1,
+                        "source": "characters",
+                        "title": "C1",
+                        "snippet": "one",
+                        "uri": "characters://1",
+                        "score": 1.0,
+                    },
+                    {
+                        "id": 2,
+                        "source": "characters",
+                        "title": "C2",
+                        "snippet": "two",
+                        "uri": "characters://2",
+                        "score": 0.9,
+                    },
+                ],
+                "has_more": False,
+                "next_offset": None,
+                "total_estimated": 2,
+            }
+        if tool_name == "characters.get":
+            character_id = int(arguments.get("character_id"))
+            return {
+                "meta": {"id": character_id, "source": "characters", "uri": f"characters://{character_id}"},
+                "content": str(character_id),
+            }
+        raise ValueError(tool_name)
+
+
+class _ScopeBypassPromptsModule(BaseModule):
+    last_args: dict[str, Any] | None = None
+
+    async def on_initialize(self) -> None:
+        return None
+
+    async def on_shutdown(self) -> None:
+        return None
+
+    async def check_health(self) -> dict[str, bool]:
+        return {"ok": True}
+
+    async def get_tools(self) -> list[dict[str, Any]]:
+        return [
+            {"name": "prompts.search", "description": "", "inputSchema": {"type": "object"}},
+            {"name": "prompts.get", "description": "", "inputSchema": {"type": "object"}},
+        ]
+
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
+        type(self).last_args = dict(arguments)
+        if tool_name == "prompts.search":
+            return {
+                "results": [
+                    {
+                        "id": 1,
+                        "source": "prompts",
+                        "title": "P1",
+                        "snippet": "one",
+                        "uri": "prompts://1",
+                        "score": 1.0,
+                    },
+                    {
+                        "id": 2,
+                        "source": "prompts",
+                        "title": "P2",
+                        "snippet": "two",
+                        "uri": "prompts://2",
+                        "score": 0.9,
+                    },
+                ],
+                "has_more": False,
+                "next_offset": None,
+                "total_estimated": 2,
+            }
+        if tool_name == "prompts.get":
+            ident = str(arguments.get("prompt_id_or_name"))
+            try:
+                prompt_id = int(ident)
+            except (TypeError, ValueError):
+                prompt_id = 2 if ident.lower() == "p2" else 1
+            return {
+                "meta": {"id": prompt_id, "source": "prompts", "uri": f"prompts://{prompt_id}"},
+                "content": str(prompt_id),
+            }
+        raise ValueError(tool_name)
+
+
 @pytest.mark.asyncio
 async def test_knowledge_scope_propagates_filters_and_blocks_bypass():
     await reset_module_registry()
@@ -331,6 +473,12 @@ async def test_knowledge_scope_propagates_filters_and_blocks_bypass():
         await registry.register_module("notes_scope_bypass", _ScopeBypassNotesModule, ModuleConfig(name="notes_scope_bypass"))
         await registry.register_module("media_scope_bypass", _ScopeBypassMediaModule, ModuleConfig(name="media_scope_bypass"))
         await registry.register_module("chats_scope_bypass", _ScopeBypassChatsModule, ModuleConfig(name="chats_scope_bypass"))
+        await registry.register_module(
+            "characters_scope_bypass",
+            _ScopeBypassCharactersModule,
+            ModuleConfig(name="characters_scope_bypass"),
+        )
+        await registry.register_module("prompts_scope_bypass", _ScopeBypassPromptsModule, ModuleConfig(name="prompts_scope_bypass"))
 
         km = KnowledgeModule(ModuleConfig(name="knowledge"))
         await km.on_initialize()
@@ -344,6 +492,8 @@ async def test_knowledge_scope_propagates_filters_and_blocks_bypass():
                         "note_id": ["n2"],
                         "media_id": ["2"],
                         "conversation_id": ["conv_b"],
+                        "character_id": ["2"],
+                        "prompt_id": ["2"],
                     }
                 }
             },
@@ -351,7 +501,7 @@ async def test_knowledge_scope_propagates_filters_and_blocks_bypass():
 
         out = await km.execute_tool(
             "knowledge.search",
-            {"query": "x", "limit": 20, "sources": ["notes", "media", "chats"]},
+            {"query": "x", "limit": 20, "sources": ["notes", "media", "chats", "characters", "prompts"]},
             context=ctx,
         )
 
@@ -361,14 +511,22 @@ async def test_knowledge_scope_propagates_filters_and_blocks_bypass():
         assert _ScopeBypassMediaModule.last_args.get("media_ids_filter") == ["2"]
         assert _ScopeBypassChatsModule.last_args is not None
         assert _ScopeBypassChatsModule.last_args.get("conversation_ids_filter") == ["conv_b"]
+        assert _ScopeBypassCharactersModule.last_args is not None
+        assert _ScopeBypassCharactersModule.last_args.get("character_ids_filter") == ["2"]
+        assert _ScopeBypassPromptsModule.last_args is not None
+        assert _ScopeBypassPromptsModule.last_args.get("prompt_ids_filter") == ["2"]
 
         uris = {str(item.get("uri")) for item in out.get("results", [])}
         assert "notes://n1" not in uris
         assert "media://1" not in uris
         assert "chats://conv_a" not in uris
+        assert "characters://1" not in uris
+        assert "prompts://1" not in uris
         assert "notes://n2" in uris
         assert "media://2" in uris
         assert "chats://conv_b" in uris
+        assert "characters://2" in uris
+        assert "prompts://2" in uris
 
         with pytest.raises(PermissionError):
             await km.execute_tool("knowledge.get", {"source": "media", "id": 1}, context=ctx)
@@ -379,7 +537,22 @@ async def test_knowledge_scope_propagates_filters_and_blocks_bypass():
         with pytest.raises(PermissionError):
             await km.execute_tool("knowledge.get", {"source": "chats", "id": "conv_a"}, context=ctx)
 
+        with pytest.raises(PermissionError):
+            await km.execute_tool("knowledge.get", {"source": "characters", "id": 1}, context=ctx)
+
+        with pytest.raises(PermissionError):
+            await km.execute_tool("knowledge.get", {"source": "prompts", "id": 1}, context=ctx)
+
         allowed = await km.execute_tool("knowledge.get", {"source": "media", "id": 2}, context=ctx)
         assert int(allowed["meta"]["id"]) == 2
+
+        allowed_character = await km.execute_tool("knowledge.get", {"source": "characters", "id": 2}, context=ctx)
+        assert int(allowed_character["meta"]["id"]) == 2
+
+        allowed_prompt = await km.execute_tool("knowledge.get", {"source": "prompts", "id": 2}, context=ctx)
+        assert int(allowed_prompt["meta"]["id"]) == 2
+
+        allowed_prompt_by_name = await km.execute_tool("knowledge.get", {"source": "prompts", "id": "p2"}, context=ctx)
+        assert int(allowed_prompt_by_name["meta"]["id"]) == 2
     finally:
         await reset_module_registry()

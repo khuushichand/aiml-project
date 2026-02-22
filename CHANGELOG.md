@@ -5,10 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
-
 ## [0.1.23] 2026-02-22
 
 ### Added
+
 - Workspace account storage wiring in `/workspace-playground`:
   - Added authenticated client support for `GET /api/v1/users/storage`.
   - Added account quota fallback via `GET /api/v1/users/me/profile?sections=quotas`.
@@ -25,6 +25,7 @@ and this project adheres to Some kind of Versioning
 - Added and completed implementation plans for workspace UI refresh and workspace storage efficiency rollout.
 
 ### Changed
+
 - Workspace Playground layout and interaction model:
   - Refined shell hierarchy and status signaling.
   - Converted empty-state examples into actionable prompt chips that seed composer input.
@@ -49,16 +50,18 @@ and this project adheres to Some kind of Versioning
   - Added module/function docstrings in `tldw_Server_API/app/core/LLM_Calls/structured_output.py` clarifying candidate parsing order and strict/lenient semantics for shared endpoint and claims parsing paths.
 
 ### Removed
+
 - No removals in this session.
 
 ### Fixed
+
 - Fixed workspace chat pane width reclaim issues when side panes were collapsed.
 - Fixed storage usage ambiguity by separating workspace payload budget, account quota usage, and browser-origin storage usage in the UI.
-
 
 ## [0.1.22] 2026-02-22
 
 ### Added
+
 - Quick Chat helper documentation-assistant expansion:
   - Added a docs-focused Q&A workflow path for project-documentation guidance.
   - Added/expanded pre-written workflow Q&A cards for guided “how do I do X?” discovery.
@@ -85,6 +88,7 @@ and this project adheres to Some kind of Versioning
   - Added targeted Playwright validation coverage updates for character selection/default bootstrap and options first-run onboarding contracts.
 
 ### Changed
+
 - Workspace Playground conversation surface behavior:
   - Page now extends downward with conversation growth up to a max threshold, then switches to scrollable conversation behavior.
 - Character preview UX:
@@ -101,9 +105,11 @@ and this project adheres to Some kind of Versioning
   - Added explicit “how to add/edit tutorials” developer workflow and “how to edit pre-written workflow cards” user workflow documentation.
 
 ### Removed
+
 - No removals in this session.
 
 ### Fixed
+
 - Fixed free-floating notes modal open behavior in WebUI/extension where the modal would open then shrink to minimum size.
 - Fixed character-page pagination instability that could jump/skip back to page 1.
 - Fixed character image rendering in both character grid cards and selected character detail views.
@@ -130,10 +136,10 @@ and this project adheres to Some kind of Versioning
   - Fixed stale table-of-contents anchors (`#...--...`) that no longer matched generated heading IDs.
   - Strict build now reports zero missing-nav and zero broken-anchor info warnings in the docs scope.
 
-
 ## [0.1.21] 2026-02-21
 
 ### Added
+
 - New security and regression tests for:
   - Scheduler payload format/ref validation and legacy compatibility behavior.
   - Web dedupe JSON persistence and controlled legacy migration.
@@ -175,6 +181,7 @@ and this project adheres to Some kind of Versioning
   - New claims regression coverage for response-format contracts, strict/lenient API behavior, fallback resilience, parse-failure telemetry, and config precedence.
 
 ### Changed
+
 - Normalized Loguru formatting across tldw_Server_API/app from %-style placeholders to {} style.
 - Added CI/test guard to prevent reintroduction of %-style Loguru placeholders.
 - Sync client defaults now align with server routes (`/api/v1/sync/send` and `/api/v1/sync/get`) and support configurable auth headers (`Authorization` bearer and `X-API-KEY`).
@@ -241,12 +248,14 @@ and this project adheres to Some kind of Versioning
   - Updated code documentation and published mirrors for claims parse mode, alignment mode, adaptive throttling, and monitoring behavior.
 
 ### Removed
+
 - UI
   - Removed `apps/tldw-frontend/pages/chat/settings.tsx` after replacing with server-side route redirect strategy.
   - Removed duplicate chat disconnected guidance surfaces that previously showed overlapping connection messages.
   - Removed user-visible unresolved template placeholder rendering across audited chat/audio/documentation surfaces.
 
 ### Fixed
+
 - Auth/API: deprecated `PUT /api/v1/users/me` now returns `404 User not found` when the backing `users` row is missing, instead of returning a false-success profile payload.
 - Test isolation: hardened MediaDB2 `torch` stubs with minimal `Tensor`/`nn.Module` attributes so cross-suite pytest runs no longer fail during SciPy/NLTK import checks.
 - fix(audio-ws): make transcribe startup resilient to Nemo probe failures
@@ -338,10 +347,10 @@ and this project adheres to Some kind of Versioning
   - Fixed program-level UX closure criteria by completing all nine UX implementation plans and finalizing the overarching oversight plan status to complete.
 - Restored `Docs/Design/rich_text_chat_rendering_v1_2026_02_15.md` after an unintended deletion in a prior docs commit.
 
-
 ## [0.1.20] 2026-02-07
 
 ### Added
+
 - webui/extension fixes+improvements
   - New Guardian settings page
 - **FVA Pipeline (Falsification-Verification Alignment)**: New claim verification enhancement that actively searches for contradicting evidence to provide more robust verification results. Implements the FVA-RAG paper (arXiv:2512.07015).
@@ -374,6 +383,7 @@ and this project adheres to Some kind of Versioning
   - New “Skills” framework and Kanban endpoints/modules.
 
 ### Changed
+
 - DBs modified
 	- Media DB v2: per-user SQLite DB at Media_DB_v2.db (and Postgres equivalent when configured).
 - MCP Unified hardening:
@@ -413,6 +423,7 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 ### Fixed
+
 - Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 - Audit read paths no longer return empty results on DB failures; `/api/v1/audit/export` and `/api/v1/audit/count` now surface server errors when reads fail.
 - Audit fallback replay now quarantines malformed JSONL lines into `audit_fallback_queue.bad.jsonl` instead of silently dropping them.
@@ -420,10 +431,10 @@ and this project adheres to Some kind of Versioning
 - CodeQL Bugfixes
 - ruff and mypy fixes
 
-
 ## [0.1.19] 2026-01-31
 
 ### Added
+
 - Soft delete support for notes/character cards
 - Qwen3-STT
 - JSON validation utilities with detailed error positioning (line/column information)
@@ -439,6 +450,7 @@ and this project adheres to Some kind of Versioning
 - [WebUI] Added Writing Playground
 
 ### Changed
+
 - Implemented httpx/aiohttp transport adapters with centralized policy enforcement in http_client.
 - Added httpx client caching and shutdown cleanup to align with aiohttp lifecycle handling.
 - Formalized streaming behavior with first‑byte/idle timeouts and mid‑stream retry support.
@@ -448,12 +460,13 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 ### Fixed
-- Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 
+- Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
 
 ## [0.1.18] 2026-01-29
 
 ### Added
+
 - Slides Module
 - TTS:
   - Added NeuTTS, PocketTTS (ONNX), EchoTTS, Qwen3-TTS, LuxTTS, VibeVoice-ASR docs; updated streaming/format rules, default voice behavior, and setup guides.
@@ -463,6 +476,7 @@ and this project adheres to Some kind of Versioning
 - Image creation API via files 
 
 ### Changed
+
 - Workflows Module
   - New "llm" step type (distinct from "prompt")
   - MCP tool allowlist and scope validation
@@ -477,14 +491,15 @@ and this project adheres to Some kind of Versioning
 - Workflows: LLM step type with MCP tool allowlist and scope validation
 
 ### Removed
+
 - Legacy webui
 
 ### Fixed
 
-
 ## [0.1.17] 2026-01-19
 
 ### Added
+
 - File Artifacts System: Comprehensive implementation of file artifact management with support for multiple export formats (iCalendar, Markdown tables, HTML tables, XLSX, data tables) including export lifecycle management, garbage collection, and validation
 - Data Tables Module: Complete backend implementation with LLM-based table generation, async job workers, database schema (tables, columns, rows, sources), REST API endpoints, and export functionality
 - Media Ingestion Cancellation: Added cancellation support across audio and video processing pipelines with subprocess monitoring and graceful error handling
@@ -502,52 +517,57 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
-
 ## [0.1.16] - 2026-01-17 / Broken Bugs
 
 ### Added
+
 - Jobs Postgres RLS policy setup now supports `JOBS_PG_RLS_DEBUG` for policy output and `JOBS_PG_RLS_ROLE` role overrides.
 - Jobs prune scheduler for retention-based cleanup (env-gated, internal scheduler).
 - `CHAT_COMMANDS_ASYNC_ONLY` flag to force async chat orchestration (`achat`) and block sync `chat(...)`.
 - Chat command concurrency integration test and PERF-gated p50 latency smoke test.
 
 ### Changed
+
 - Jobs Postgres tests now default to the shared per-test Postgres fixture by wiring `JOBS_DB_URL` and ensuring Jobs tables/counters.
 - Jobs RLS policy setup uses negotiated Postgres DSNs for compatibility across server versions.
 - Sync `chat(...)` now offloads to a worker when invoked from a running event loop (non-streaming).
 
 ### Removed
+
 - Legacy `command_router.dispatch_command` path (now raises with migration hint).
 
 ### Fixed
+
 - Jobs RLS debug output now reports distinct settings fields without clobbering values.
 - Fixing of 200+ bugs
-
 
 ## [0.1.15] - 2026-01-10
 
 ### Added
 
 ### Changed
+
 - Jobs adapters now ignore legacy read-backend flags; Chatbooks/Prompt Studio are core Jobs only, embeddings read fallback is disabled.
 - Documentation updated to reflect core Jobs defaults and the current embeddings execution modes.
 
 ### Removed
 
 ### Fixed
+
 - Legacy AuthNZ rate limiting now bypasses only when an RG policy is attached, and cancellations propagate correctly in rate limit fallbacks.
 - ChaChaNotes shutdown now drains default-character tasks and waits for the executor to prevent SQLite close races (fixes Jobs web UI TTL test segfaults).
-
 
 ## [0.1.14] - 2026-01-06
 
 ### Added
+
 - Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP. 
 - Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
 - introduced API key KDF/key_id, 
 - added admin effective-config endpoint/UI,
 
 ### Changed
+
 - Centralized per-user path utilities for storage safety and consistency
 - Migrated ingress rate limiting to Resource Governance (RG), removed SlowAPI decorators
 - Enhanced feedback system with explicit endpoint, schemas, and idempotent merge rules
@@ -557,16 +577,17 @@ and this project adheres to Some kind of Versioning
 - Comprehensive test coverage for feedback, chat metadata, and UI integration
 
 ### Removed
+
 - slowapi usage
 
-
 ### Fixed
-- Lots of Bugs
 
+- Lots of Bugs
 
 ## [0.1.13] - 2025-12-29
 
 ### Added
+
 - Next.js WebUI (apps/tldw-frontend)
 - admin-ui - Full Admin UI: dashboard, users/orgs/teams, roles & permissions, API keys, jobs, usage analytics, budgets, BYOK, flags, incidents, logs, monitoring panels.
 - Content Review: draft editor, sidebar, reattach-source flow, commit/review workflows.
@@ -574,18 +595,21 @@ and this project adheres to Some kind of Versioning
 - Option for review of media prior to ingestion.
 
 ### Changed
+
 - Claims module expanded
 
 ### Removed
+
 - N/A
 
 ### Fixed
-- Improved frontend/backend error handling and type safety; more robust API interactions.
 
+- Improved frontend/backend error handling and type safety; more robust API interactions.
 
 ## [0.1.12] - 2025-12-20
 
 ### Added
+
 - Full Kanban API (boards, lists, cards, labels, checklists, comments, import/export, bulk ops, card linking) with hybrid search (FTS vector).
 - Self‑service Organizations & Teams (invites preview/redeem) and org admin flows.
 - Billing & subscriptions (plans, checkout/portal, invoices, usage) and Stripe webhook handling.
@@ -593,30 +617,35 @@ and this project adheres to Some kind of Versioning
 - TTS providers onboarding and user TTS guide.
 
 ### Changed
+
 - Adds a full billing/subscription system (plans, limits, Stripe integration, webhooks), BYOK (per‑user and shared provider keys) with admin tooling, invitations/org/team RBAC, a Kanban module with per‑user DB FTS/vector search, many new endpoints/schemas/repos, DB migrations, audit/auth dependency changes, media visibility, and extensive docs/config updates.
 
 ### Removed
+
 - A sense of failure.
 
 ### Fixed
+
 - 500bugs
 
 ## [0.1.11] - 2025-11-27
 
 ### Added
+
 - Guidance on stress testing chat server
 
 ### Changed
+
 - RAG Documentation
 
 ### Removed
 
 ### Fixed
 
-
 ## [0.1.10] - 2025-11-27
 
 ### Added
+
 - ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
 - MLX local provider scaffolding (Apple Silicon): adapters admin lifecycle endpoints, metrics parity, and config keys/tests with non-Apple skips.
 - `LLM_MLX` extra in `pyproject.toml` to install `mlx-lm`/`mlx` for Apple Silicon users.
@@ -628,6 +657,7 @@ and this project adheres to Some kind of Versioning
 - Chat diagnostics endpoints: `GET /api/v1/chat/queue/status` and `GET /api/v1/chat/queue/activity` exposing queue metrics and recent job activity, RBAC-gated to `system.logs` in multi-user mode.
 
 ### Changed
+
 - Conversation title search now applies global BM25 normalization so pagination returns stable, deterministic ordering across the entire result set.
 - Chunking engine improvements for streaming text and Markdown: better whitespace handling for word/semantic/token chunking and promotion of bold-only headings into hierarchical subsections under their parent section.
 - ChaChaNotes dependency now ensures per-user DB directories are created, optional `message_metadata` is initialized, and default-character warmup tasks are tracked so the health snapshot accurately reflects warm starts.
@@ -635,6 +665,7 @@ and this project adheres to Some kind of Versioning
 - Workflows and scheduler workflow routers are always mounted (without an `/api/v1` prefix) inside minimal/test apps so tests and tooling can call them consistently.
 
 ### Fixed
+
 - ChaChaNotes warmup no longer leaves orphaned default-character tasks; background tasks are tracked and cleaned up when complete, improving shutdown and health reporting.
 - Visual document ingestion from audio/video analysis now persists slide/visual artifacts via a thread executor, avoiding event-loop blocking during heavy analysis.
 - MLX local provider concurrency: `MLXSessionRegistry.session_scope` snapshots the semaphore per context so dynamic concurrency updates cannot corrupt in-flight sessions.
@@ -643,13 +674,14 @@ and this project adheres to Some kind of Versioning
 - `/api/v1/health` now logs ChaChaNotes snapshot failures and resource-governance policy file read errors while still reporting a degraded health state instead of failing the endpoint.
 - Chat queue status/activity endpoints avoid shadowing FastAPI's `status` module and enforce RBAC correctly, so authentication/authorization failures return the intended HTTP codes instead of spurious 500s.
 
-
 ## [0.1.9]
 
 ### Added
+
 - ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
 
 ### Changed
+
 - ChaChaNotes dependency now initializes in a dedicated executor with WAL/busy-timeout tuning and background default-character creation; request path reduced to cache lookup health probe.
 - Startup warms the single-user ChaChaNotes instance to avoid first-request blocking; shutdown now closes cached instances and stops the ChaChaNotes executor to prevent lingering threads.
 
@@ -657,10 +689,10 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
-
 ## [0.1.8] - 2025-11-22
 
 ### Added
+
 - Auto-streaming for large audit exports exceeding configured threshold
 - CSV streaming support for audit exports
 - Model discovery for local LLM endpoints
@@ -672,6 +704,7 @@ and this project adheres to Some kind of Versioning
   - Documentation for `speech_to_text(...)` (segment-based) and `transcribe_audio(...)` (waveform-based) as the two canonical STT entrypoints, including guidance on error sentinel handling.
 
 ### Changed
+
 - Audio:
   - Replace Parakeet-specific transcriber/config usage with unified UnifiedStreamingTranscriber/UnifiedStreamingConfig; add _LegacyWebSocketAdapter to adapt legacy WS to unified handler; defer imports and update tests to use unified stubs.
   - Move desktop/live audio helpers (LiveAudioStreamer, system-audio utilities) into `Audio/ARCHIVE/Desktop_Live_Audio_Samples.py` so core STT modules no longer depend on optional PyAudio/sounddevice at import time.
@@ -688,34 +721,41 @@ and this project adheres to Some kind of Versioning
   - STT unit tests for Parakeet/Qwen2Audio `return_language` branches now exercise the provider branches directly and avoid unintended Whisper fallbacks by normalizing file-path arguments.
 
 ### Removed
+
 - Hopes, Dreams.
 
 ### Deprecated
+
 - Efficiency.
 
 ### Fixed
+
 - Improved WebSocket disconnect handling
 - Consistent error handling in session cleanup and web ingestion
 - Better network error resilience with graceful fallbacks
 - Add _is_dns_resolution_error detection and mark DNS resolution errors non-retriable (DNSResolutionError signal); tests verify DNS errors are not retried while other network errors follow retry policy.
 - My life.
 
-
 ## [0.1.6] - 2025-11-14
+
 ### Fixed
+
 - HTTP-redirect loop
 - test bugs
 
 ### Added
+
 - Option for HTTP redirect adherence in media ingestion endpoints added in config.txt
 
-
 ## [0.1.5] - 2025-11-13
+
 ### Fixed
+
 - Ollama API system_prompt
 - Other stuff
 
 ### Added
+
 - Updated WebUI
 - Added PRD/initial work for cli installer/setup wizard
   - Auto-title notes
@@ -723,14 +763,16 @@ and this project adheres to Some kind of Versioning
 - Documentation/PRDs
 - (From Gemini) New Chatbook Tools: Implemented a suite of new tools for Chatbooks, including sandboxed template variables for dynamic content in chat dictionary replacements, user-invoked slash commands (e.g., /time, /weather) for pre-LLM context enrichment, and a comprehensive dictionary validation tool (CLI and API) to lint schemas, regexes, and template syntax.
 
-
 ## [0.1.4] - 2025-11-9
+
 ### Fixed
+
 - Numpy requirement in base install
 - Default API now respected via config/not just ENV var.
 - Too many issues to count.
 
 ### Added
+
 - Unified requests module
 - Added Resource governance module
 - Moved all streaming requests to a unified pipeline (will need to revisit)
@@ -738,21 +780,29 @@ and this project adheres to Some kind of Versioning
 - Available models loaded/checked from `model_pricing.json`
 - Rewrote TTS install/setup scripts (all TTS modules are likely currently broken)
 
-
 ## [0.1.3.0] - 2025-X
+
 ### Fixed
+
 - Bugfixes
 -
 
 ## [0.1.2.0] - 2025-X
+
 ### Fixed
+
 - Bugfixes
 
-
 ## [0.1.1.0] - 2025-X
+
 ### Breaking
+
 - Prometheus scraping for MCP metrics now requires authentication with the `system.logs` permission; `MCP_PROMETHEUS_PUBLIC` no longer enables public access, is deprecated, and will be removed. Migration: update Prometheus scrape configs to send a Bearer token (API key or JWT) that includes `system.logs` (see `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md` migration note and scrape_config example).
+
 ### Features
+
 - Version 0.1
+
 ### Fixed
+
 - Use of gradio

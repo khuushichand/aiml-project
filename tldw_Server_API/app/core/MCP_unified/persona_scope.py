@@ -9,6 +9,7 @@ _SCOPE_RULE_TYPES = {
     "character_id",
     "media_id",
     "note_id",
+    "prompt_id",
 }
 
 
@@ -130,4 +131,3 @@ def merge_requested_ids_with_scope(
     if scoped_ids is None:
         return requested_set
     return requested_set & set(scoped_ids)
-

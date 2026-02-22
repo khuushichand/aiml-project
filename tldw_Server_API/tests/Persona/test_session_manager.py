@@ -55,6 +55,14 @@ def test_session_manager_rejects_resume_session_owner_mismatch():
         manager.create(user_id="user_2", persona_id="research_assistant", resume_session_id="sess_1")
 
 
+def test_session_manager_rejects_resume_session_persona_mismatch():
+    manager = SessionManager()
+    _ = manager.create(user_id="user_1", persona_id="research_assistant", resume_session_id="sess_1")
+
+    with pytest.raises(ValueError, match="persona mismatch"):
+        manager.create(user_id="user_1", persona_id="writer_assistant", resume_session_id="sess_1")
+
+
 def test_session_manager_clear_plans():
     manager = SessionManager()
     manager.put_plan(

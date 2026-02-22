@@ -28,6 +28,6 @@ Define the release rationale and route-by-route scope for baseline (`*-basics`) 
 
 ## Release Review Checklist
 
-- Confirm every route in this table resolves to a registered tutorial definition.
-- Confirm Page Help (`?`) and Quick Chat `Browse Guides` show the mapped tutorial on each route.
-- Confirm completion state persists and replay works for each mapped basics tutorial.
+- Verify every route in this table resolves to a registered tutorial definition.
+- Ensure Page Help (`?`) and Quick Chat `Browse Guides` show the mapped tutorial on each route.
+- Validate that completion state persists and replay works for each mapped basics tutorial.

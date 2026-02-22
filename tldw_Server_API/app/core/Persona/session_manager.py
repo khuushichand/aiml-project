@@ -72,6 +72,8 @@ class SessionManager:
             existing = self._sessions[resume_session_id]
             if existing.user_id != user_id:
                 raise ValueError("session ownership mismatch")
+            if existing.persona_id != persona_id:
+                raise ValueError("session persona mismatch")
             self._touch_session(existing)
             return existing
         sid = resume_session_id or str(uuid.uuid4())

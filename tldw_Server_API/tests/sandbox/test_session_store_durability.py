@@ -177,7 +177,7 @@ def test_destroy_session_cleans_snapshots_artifacts_and_usage(monkeypatch, tmp_p
     )
     svc._orch.store_artifacts(run.id, {"out.txt": b"hello"})
     snapshot_dir = Path(tmp_path) / "snapshots" / session.id
-    artifact_dir = Path(tmp_path) / "sandbox_root" / "user-77" / "runs" / run.id / "artifacts"
+    artifact_dir = svc._orch._artifact_dir("user-77", run.id)  # type: ignore[attr-defined]
     assert snapshot_dir.exists()
     assert artifact_dir.exists()
     assert svc._orch._store.get_user_artifact_bytes("user-77") == 5  # type: ignore[attr-defined]

@@ -432,7 +432,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 26  # Schema v26 adds persona profile/scope/policy/session/memory tables
+    _CURRENT_SCHEMA_VERSION = 27  # Schema v27 adds persona memory namespace keys (scope/session)
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -2817,6 +2817,28 @@ UPDATE db_schema_version
    AND version < 26;
 """
 
+    _MIGRATION_SQL_V26_TO_V27 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 27 - Persona memory namespace keying (2026-02-22)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE persona_memory_entries
+  ADD COLUMN IF NOT EXISTS scope_snapshot_id TEXT;
+
+ALTER TABLE persona_memory_entries
+  ADD COLUMN IF NOT EXISTS session_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_persona_memory_scope
+  ON persona_memory_entries(user_id, persona_id, scope_snapshot_id, archived, deleted);
+
+CREATE INDEX IF NOT EXISTS idx_persona_memory_session
+  ON persona_memory_entries(user_id, persona_id, session_id, archived, deleted);
+
+UPDATE db_schema_version
+   SET version = 27
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 27;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -4140,6 +4162,46 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V25->V26: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V26 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v26_to_v27(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V26 to V27 (persona memory namespace columns + indexes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V26 to V27 for DB: {self.db_path_str}...")
+        try:
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_memory_entries')").fetchall()}
+            if "scope_snapshot_id" not in existing_cols:
+                conn.execute("ALTER TABLE persona_memory_entries ADD COLUMN scope_snapshot_id TEXT")
+            if "session_id" not in existing_cols:
+                conn.execute("ALTER TABLE persona_memory_entries ADD COLUMN session_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_persona_memory_scope "
+                "ON persona_memory_entries(user_id, persona_id, scope_snapshot_id, archived, deleted)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_persona_memory_session "
+                "ON persona_memory_entries(user_id, persona_id, session_id, archived, deleted)"
+            )
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 27
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 27;
+                """
+            )
+            final_version = self._get_db_version(conn)
+            if final_version != 27:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V26->V27 failed version check. Expected 27, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V27 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V26->V27 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V26->V27 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V26->V27: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V27 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4355,6 +4417,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 26 and current_db_version == 25:
                         self._migrate_from_v25_to_v26(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 27 and current_db_version == 26:
+                        self._migrate_from_v26_to_v27(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -4575,6 +4640,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 25 and target_version >= 26:
                         self._migrate_from_v25_to_v26(conn)
                         current_db_version = self._get_db_version(conn)
+                        if target_version >= 27 and current_db_version == 26:
+                            self._migrate_from_v26_to_v27(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 26 and target_version >= 27:
+                        self._migrate_from_v26_to_v27(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         # Fallback: attempt linear migrations for known versions.
                         fallback_version = current_initial_version
@@ -4623,6 +4694,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v24_to_v25(conn)
                             elif fallback_version == 25:
                                 self._migrate_from_v25_to_v26(conn)
+                            elif fallback_version == 26:
+                                self._migrate_from_v26_to_v27(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -4676,6 +4749,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 26 and current_db_version == 25:
                     self._migrate_from_v25_to_v26(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 27 and current_db_version == 26:
+                    self._migrate_from_v26_to_v27(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -4943,6 +5019,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 26:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V25_TO_V26, conn, expected_version=26)
                 current_version = 26
+            if current_version < 27:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V26_TO_V27, conn, expected_version=27)
+                current_version = 27
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -6662,6 +6741,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         entry_id = str(entry_data.get("id") or self._generate_uuid())
         source_conversation_id = entry_data.get("source_conversation_id")
+        scope_snapshot_id_raw = entry_data.get("scope_snapshot_id")
+        session_id_raw = entry_data.get("session_id")
+        scope_snapshot_id = str(scope_snapshot_id_raw).strip() if scope_snapshot_id_raw is not None else None
+        if scope_snapshot_id == "":
+            scope_snapshot_id = None
+        session_id = str(session_id_raw).strip() if session_id_raw is not None else None
+        if session_id == "":
+            session_id = None
         try:
             salience = float(entry_data.get("salience", 0.0))
         except (TypeError, ValueError) as exc:
@@ -6679,9 +6766,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
             query = (
                 "INSERT INTO persona_memory_entries("
-                "id, persona_id, user_id, memory_type, content, source_conversation_id, salience, archived, "
-                "created_at, last_modified, deleted, version"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "id, persona_id, user_id, memory_type, content, source_conversation_id, "
+                "scope_snapshot_id, session_id, salience, archived, created_at, last_modified, deleted, version"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             params = (
                 entry_id,
@@ -6690,6 +6777,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 memory_type,
                 content,
                 source_conversation_id,
+                scope_snapshot_id,
+                session_id,
                 salience,
                 bool_cast(archived),
                 entry_data.get("created_at") or now,
@@ -6707,6 +6796,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         user_id: str,
         persona_id: str | None = None,
         memory_type: str | None = None,
+        scope_snapshot_id: str | None = None,
+        session_id: str | None = None,
         include_archived: bool = False,
         include_deleted: bool = False,
         limit: int = 100,
@@ -6721,6 +6812,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if memory_type is not None:
             clauses.append("memory_type = ?")
             params.append(str(memory_type).strip())
+        if scope_snapshot_id is not None:
+            clauses.append("scope_snapshot_id = ?")
+            params.append(str(scope_snapshot_id).strip())
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(str(session_id).strip())
         if not include_archived:
             clauses.append("archived = 0")
         if not include_deleted:

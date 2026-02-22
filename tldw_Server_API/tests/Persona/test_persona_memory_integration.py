@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
@@ -27,6 +29,24 @@ def _seed_memory_db(tmp_path, monkeypatch, *, user_id: str, enabled: bool) -> Pe
     db = PersonalizationDB(str(path))
     db.update_profile(user_id, enabled=1 if enabled else 0)
     return db
+
+
+def _seed_memory_db_for_raw_user(
+    tmp_path,
+    monkeypatch,
+    *,
+    raw_user_id: str,
+    enabled: bool,
+) -> tuple[PersonalizationDB, str]:
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    base = tmp_path / "user_db"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    normalized_user_id = mem._normalize_personalization_user_id(raw_user_id)
+    path = DatabasePaths.get_personalization_db_path(normalized_user_id)
+    db = PersonalizationDB(str(path))
+    db.update_profile(normalized_user_id, enabled=1 if enabled else 0)
+    return db, normalized_user_id
 
 
 def _chacha_entries_for_user(tmp_path, monkeypatch, *, user_id: str, persona_id: str) -> list[dict]:
@@ -319,3 +339,198 @@ def test_backfill_respects_opt_in_gate(tmp_path, monkeypatch):
 
     rows = _chacha_entries_for_user(tmp_path, monkeypatch, user_id=user_id, persona_id=persona_id)
     assert rows == []
+
+
+def test_chacha_memory_retrieval_is_scope_snapshot_namespaced(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    user_id = "301"
+    persona_id = "research_assistant"
+    _ = _seed_memory_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    monkeypatch.setattr(mem, "_get_persona_memory_write_mode", lambda: "chacha_only")
+    monkeypatch.setattr(mem, "_get_persona_memory_read_mode", lambda: "chacha_only")
+
+    assert persist_persona_turn(
+        user_id=user_id,
+        session_id="sess_scope_a",
+        persona_id=persona_id,
+        role="assistant",
+        content="scope-a-memory",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_a",
+    )
+    assert persist_persona_turn(
+        user_id=user_id,
+        session_id="sess_scope_b",
+        persona_id=persona_id,
+        role="assistant",
+        content="scope-b-memory",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_b",
+    )
+
+    scope_a_memories = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="scope-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_a",
+        session_id="sess_scope_a",
+    )
+    assert [item.content for item in scope_a_memories] == ["scope-a-memory"]
+
+    scope_b_memories = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="scope-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_b",
+        session_id="sess_scope_b",
+    )
+    assert [item.content for item in scope_b_memories] == ["scope-b-memory"]
+
+    missing_scope = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="scope-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id=None,
+        session_id="sess_scope_a",
+    )
+    assert missing_scope == []
+
+
+def test_chacha_memory_retrieval_is_session_namespaced_for_session_mode(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    user_id = "302"
+    persona_id = "research_assistant"
+    _ = _seed_memory_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    monkeypatch.setattr(mem, "_get_persona_memory_write_mode", lambda: "chacha_only")
+    monkeypatch.setattr(mem, "_get_persona_memory_read_mode", lambda: "chacha_only")
+
+    assert persist_persona_turn(
+        user_id=user_id,
+        session_id="sess_one",
+        persona_id=persona_id,
+        role="assistant",
+        content="session-one-memory",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope_same",
+    )
+    assert persist_persona_turn(
+        user_id=user_id,
+        session_id="sess_two",
+        persona_id=persona_id,
+        role="assistant",
+        content="session-two-memory",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope_same",
+    )
+
+    sess_one_memories = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="session-",
+        top_k=10,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope_same",
+        session_id="sess_one",
+    )
+    assert [item.content for item in sess_one_memories] == ["session-one-memory"]
+
+    sess_two_memories = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="session-",
+        top_k=10,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope_same",
+        session_id="sess_two",
+    )
+    assert [item.content for item in sess_two_memories] == ["session-two-memory"]
+
+    missing_session = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="session-",
+        top_k=10,
+        runtime_mode="session_scoped",
+        scope_snapshot_id="scope_same",
+        session_id=None,
+    )
+    assert missing_session == []
+
+
+def test_non_numeric_user_ids_use_collision_safe_mapping(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    user_a = "user-94641"
+    user_b = "user-115688"
+    legacy_a = int.from_bytes(hashlib.sha1(user_a.encode("utf-8"), usedforsecurity=False).digest()[:4], "big")
+    legacy_b = int.from_bytes(hashlib.sha1(user_b.encode("utf-8"), usedforsecurity=False).digest()[:4], "big")
+    assert legacy_a == legacy_b
+
+    _, normalized_a = _seed_memory_db_for_raw_user(tmp_path, monkeypatch, raw_user_id=user_a, enabled=True)
+    _, normalized_b = _seed_memory_db_for_raw_user(tmp_path, monkeypatch, raw_user_id=user_b, enabled=True)
+    assert normalized_a != normalized_b
+
+    persona_id = "research_assistant"
+    monkeypatch.setattr(mem, "_get_persona_memory_write_mode", lambda: "chacha_only")
+    monkeypatch.setattr(mem, "_get_persona_memory_read_mode", lambda: "chacha_only")
+
+    assert persist_persona_turn(
+        user_id=user_a,
+        session_id="sess_user_a",
+        persona_id=persona_id,
+        role="assistant",
+        content="memory-for-user-a",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_shared",
+    )
+    assert persist_persona_turn(
+        user_id=user_b,
+        session_id="sess_user_b",
+        persona_id=persona_id,
+        role="assistant",
+        content="memory-for-user-b",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_shared",
+    )
+
+    user_a_memories = retrieve_top_memories(
+        user_id=user_a,
+        persona_id=persona_id,
+        query_text="memory-for-user-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_shared",
+        session_id="sess_user_a",
+    )
+    user_b_memories = retrieve_top_memories(
+        user_id=user_b,
+        persona_id=persona_id,
+        query_text="memory-for-user-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id="scope_shared",
+        session_id="sess_user_b",
+    )
+
+    assert [item.content for item in user_a_memories] == ["memory-for-user-a"]
+    assert [item.content for item in user_b_memories] == ["memory-for-user-b"]

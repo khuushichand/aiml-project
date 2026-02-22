@@ -331,7 +331,7 @@ Voice cloning allows you to synthesize speech using a reference voice from an au
    - Minimal background noise
    - Natural speaking pace
 
-2. **Convert Audio Format** (if needed):
+1. **Convert Audio Format** (if needed):
 
 ```bash
 # Convert to WAV with proper sample rate for Higgs/Chatterbox
@@ -344,7 +344,7 @@ ffmpeg -i input.mp3 -ar 22050 -ac 1 output.wav
 ffmpeg -i input.wav -ss 0 -t 10 -ar 24000 output_10s.wav
 ```
 
-3. **Validate Audio Quality**:
+1. **Validate Audio Quality**:
 
 ```python
 import librosa
@@ -367,10 +367,17 @@ elif np.max(np.abs(audio)) > 0.95:
 
 ### Using Voice Cloning via API
 
+Set your API token once before running the examples:
+
+```bash
+export API_TOKEN="your_real_api_token"
+```
+
 #### Basic Voice Cloning Request
 
 ```python
 import base64
+import os
 import requests
 
 # Prepare voice reference
@@ -380,7 +387,7 @@ with open("voice_sample.wav", "rb") as f:
 # Make TTS request with voice cloning
 response = requests.post(
     "http://localhost:8000/api/v1/audio/speech",
-    headers={"Authorization": "Bearer your-token"},
+    headers={"Authorization": f"Bearer {os.environ['API_TOKEN']}"},
     json={
         "model": "higgs",  # or "chatterbox", "vibevoice"
         "input": "This text will be spoken in the cloned voice.",
@@ -451,7 +458,7 @@ EOF
 # Send request
 curl -X POST http://localhost:8000/api/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-token" \
+  -H "Authorization: Bearer $API_TOKEN" \
   -d @request.json \
   --output cloned.mp3
 ```

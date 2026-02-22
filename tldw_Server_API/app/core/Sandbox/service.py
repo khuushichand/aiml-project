@@ -80,6 +80,8 @@ class SandboxService:
         self._snapshots = SnapshotManager(
             storage_path=os.getenv("SANDBOX_SNAPSHOT_PATH")
         )
+        self._snapshot_locks_guard = threading.RLock()
+        self._snapshot_locks: dict[str, threading.RLock] = {}
         self._maintenance_lock = threading.RLock()
         self._maintenance_stop = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
@@ -246,6 +248,11 @@ class SandboxService:
             "corrected_bytes": 0,
             "disk_users": 0,
         }
+        snapshot_summary: dict[str, int] = {
+            "scanned_sessions": 0,
+            "evicted_sessions": 0,
+            "deleted_snapshots": 0,
+        }
         now_mono = time.monotonic()
         reconcile_interval = self._effective_artifact_reconcile_interval_sec()
         should_reconcile = (
@@ -255,6 +262,11 @@ class SandboxService:
         if should_reconcile:
             reconcile_summary = self._orch.reconcile_artifact_usage()
             self._last_reconcile_monotonic = now_mono
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            snapshot_summary = self._snapshots.enforce_quota_all_sessions(
+                max_snapshots=self._effective_snapshot_max_count(),
+                max_size_mb=self._effective_snapshot_max_size_mb(),
+            )
 
         duration_ms = max(0.0, (time.monotonic() - start) * 1000.0)
         with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
@@ -267,8 +279,16 @@ class SandboxService:
             or int(janitor_summary.get("removed_bytes", 0) or 0) > 0
             or int(reconcile_summary.get("corrected_users", 0) or 0) > 0
             or int(reconcile_summary.get("corrected_bytes", 0) or 0) > 0
+            or int(snapshot_summary.get("evicted_sessions", 0) or 0) > 0
+            or int(snapshot_summary.get("deleted_snapshots", 0) or 0) > 0
         ):
-            self._audit_artifact_maintenance(janitor_summary, reconcile_summary, trigger=trigger, duration_ms=duration_ms)
+            self._audit_artifact_maintenance(
+                janitor_summary,
+                reconcile_summary,
+                snapshot_summary,
+                trigger=trigger,
+                duration_ms=duration_ms,
+            )
 
         merged = {
             "janitor_removed_runs": int(janitor_summary.get("removed_runs", 0) or 0),
@@ -278,6 +298,9 @@ class SandboxService:
             "reconcile_corrected_users": int(reconcile_summary.get("corrected_users", 0) or 0),
             "reconcile_corrected_bytes": int(reconcile_summary.get("corrected_bytes", 0) or 0),
             "reconcile_disk_users": int(reconcile_summary.get("disk_users", 0) or 0),
+            "snapshot_scanned_sessions": int(snapshot_summary.get("scanned_sessions", 0) or 0),
+            "snapshot_evicted_sessions": int(snapshot_summary.get("evicted_sessions", 0) or 0),
+            "snapshot_deleted_snapshots": int(snapshot_summary.get("deleted_snapshots", 0) or 0),
         }
         return merged
 
@@ -293,6 +316,7 @@ class SandboxService:
         self,
         janitor_summary: dict[str, int],
         reconcile_summary: dict[str, int],
+        snapshot_summary: dict[str, int],
         *,
         trigger: str,
         duration_ms: float,
@@ -327,6 +351,9 @@ class SandboxService:
                             "reconcile_corrected_users": int(reconcile_summary.get("corrected_users", 0) or 0),
                             "reconcile_corrected_bytes": int(reconcile_summary.get("corrected_bytes", 0) or 0),
                             "reconcile_disk_users": int(reconcile_summary.get("disk_users", 0) or 0),
+                            "snapshot_scanned_sessions": int(snapshot_summary.get("scanned_sessions", 0) or 0),
+                            "snapshot_evicted_sessions": int(snapshot_summary.get("evicted_sessions", 0) or 0),
+                            "snapshot_deleted_snapshots": int(snapshot_summary.get("deleted_snapshots", 0) or 0),
                         },
                     )
                 finally:
@@ -684,7 +711,8 @@ class SandboxService:
             destroyed = bool(self._orch.destroy_session(session_id))
             if destroyed:
                 with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                    self._snapshots.cleanup_session_snapshots(session_id)
+                    with self._snapshot_lock(session_id):
+                        self._snapshots.cleanup_session_snapshots(session_id)
             return destroyed
         except SessionActiveRunsConflict:
             timeout_sec = 10.0
@@ -741,7 +769,8 @@ class SandboxService:
             destroyed = bool(self._orch.destroy_session(session_id))
             if destroyed:
                 with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
-                    self._snapshots.cleanup_session_snapshots(session_id)
+                    with self._snapshot_lock(session_id):
+                        self._snapshots.cleanup_session_snapshots(session_id)
             return destroyed
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"destroy_session failed: {e}")
@@ -1185,6 +1214,15 @@ class SandboxService:
     # Snapshot Operations
     # -----------------
 
+    def _snapshot_lock(self, session_id: str) -> threading.RLock:
+        sid = str(session_id or "")
+        with self._snapshot_locks_guard:
+            lock = self._snapshot_locks.get(sid)
+            if lock is None:
+                lock = threading.RLock()
+                self._snapshot_locks[sid] = lock
+            return lock
+
     def create_snapshot(self, session_id: str) -> dict:
         """Create a snapshot of a session's workspace.
 
@@ -1197,18 +1235,19 @@ class SandboxService:
         Raises:
             ValueError: If session not found or has no workspace.
         """
-        ws = self._orch.get_session_workspace_path(session_id)
-        if not ws:
-            raise ValueError("Session not found or no workspace")
-        result = self._snapshots.create_snapshot(session_id, ws)
-        deleted = self._snapshots.enforce_quota(
-            session_id,
-            max_snapshots=self._effective_snapshot_max_count(),
-            max_size_mb=self._effective_snapshot_max_size_mb(),
-        )
-        if deleted:
-            result["evicted_snapshot_ids"] = list(deleted)
-        return result
+        with self._snapshot_lock(session_id):
+            ws = self._orch.get_session_workspace_path(session_id)
+            if not ws:
+                raise ValueError("Session not found or no workspace")
+            result = self._snapshots.create_snapshot(session_id, ws)
+            deleted = self._snapshots.enforce_quota(
+                session_id,
+                max_snapshots=self._effective_snapshot_max_count(),
+                max_size_mb=self._effective_snapshot_max_size_mb(),
+            )
+            if deleted:
+                result["evicted_snapshot_ids"] = list(deleted)
+            return result
 
     def restore_snapshot(self, session_id: str, snapshot_id: str) -> bool:
         """Restore a session's workspace from a snapshot.
@@ -1223,10 +1262,11 @@ class SandboxService:
         Raises:
             ValueError: If session or snapshot not found.
         """
-        ws = self._orch.get_session_workspace_path(session_id)
-        if not ws:
-            raise ValueError("Session not found or no workspace")
-        return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
+        with self._snapshot_lock(session_id):
+            ws = self._orch.get_session_workspace_path(session_id)
+            if not ws:
+                raise ValueError("Session not found or no workspace")
+            return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
 
     def clone_session(self, session_id: str, new_name: str | None = None) -> Session:
         """Clone a session including its workspace.
@@ -1241,50 +1281,51 @@ class SandboxService:
         Raises:
             ValueError: If source session not found.
         """
-        # Get source session info
-        source_ws = self._orch.get_session_workspace_path(session_id)
-        if not source_ws:
-            raise ValueError("Source session not found or no workspace")
+        with self._snapshot_lock(session_id):
+            # Get source session info
+            source_ws = self._orch.get_session_workspace_path(session_id)
+            if not source_ws:
+                raise ValueError("Source session not found or no workspace")
 
-        source_owner = self._orch.get_session_owner(session_id)
-        if not source_owner:
-            raise ValueError("Source session owner not found")
+            source_owner = self._orch.get_session_owner(session_id)
+            if not source_owner:
+                raise ValueError("Source session owner not found")
 
-        # Resolve source session details from orchestrator cache/store.
-        source_sess = self._orch.get_session(session_id)
+            # Resolve source session details from orchestrator cache/store.
+            source_sess = self._orch.get_session(session_id)
 
-        if not source_sess:
-            raise ValueError("Source session not found")
+            if not source_sess:
+                raise ValueError("Source session not found")
 
-        # Create new session with same spec
-        spec = SessionSpec(
-            runtime=source_sess.runtime,
-            base_image=source_sess.base_image,
-            persona_id=source_sess.persona_id,
-            workspace_id=source_sess.workspace_id,
-            workspace_group_id=source_sess.workspace_group_id,
-            scope_snapshot_id=source_sess.scope_snapshot_id,
-        )
-        new_sess = self._orch.create_session(
-            user_id=source_owner,
-            spec=spec,
-            spec_version="1.0",
-            idem_key=None,
-            body={"cloned_from": session_id},
-        )
+            # Create new session with same spec
+            spec = SessionSpec(
+                runtime=source_sess.runtime,
+                base_image=source_sess.base_image,
+                persona_id=source_sess.persona_id,
+                workspace_id=source_sess.workspace_id,
+                workspace_group_id=source_sess.workspace_group_id,
+                scope_snapshot_id=source_sess.scope_snapshot_id,
+            )
+            new_sess = self._orch.create_session(
+                user_id=source_owner,
+                spec=spec,
+                spec_version="1.0",
+                idem_key=None,
+                body={"cloned_from": session_id},
+            )
 
-        # Copy workspace
-        new_ws = self._orch.get_session_workspace_path(new_sess.id)
-        if new_ws:
-            try:
-                self._snapshots.clone_session(session_id, source_ws, new_sess.id, new_ws)
-            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Failed to clone workspace: {e}")
-                # Clean up on failure
-                self._orch.destroy_session(new_sess.id)
-                raise ValueError(f"Failed to clone workspace: {e}") from e
+            # Copy workspace
+            new_ws = self._orch.get_session_workspace_path(new_sess.id)
+            if new_ws:
+                try:
+                    self._snapshots.clone_session(session_id, source_ws, new_sess.id, new_ws)
+                except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
+                    logger.warning(f"Failed to clone workspace: {e}")
+                    # Clean up on failure
+                    self._orch.destroy_session(new_sess.id)
+                    raise ValueError(f"Failed to clone workspace: {e}") from e
 
-        return new_sess
+            return new_sess
 
     def list_snapshots(self, session_id: str) -> list[dict]:
         """List all snapshots for a session.
@@ -1295,7 +1336,8 @@ class SandboxService:
         Returns:
             List of snapshot metadata dictionaries.
         """
-        return self._snapshots.list_snapshots(session_id)
+        with self._snapshot_lock(session_id):
+            return self._snapshots.list_snapshots(session_id)
 
     def delete_snapshot(self, session_id: str, snapshot_id: str) -> bool:
         """Delete a specific snapshot.
@@ -1307,7 +1349,8 @@ class SandboxService:
         Returns:
             True if deleted successfully.
         """
-        return self._snapshots.delete_snapshot(session_id, snapshot_id)
+        with self._snapshot_lock(session_id):
+            return self._snapshots.delete_snapshot(session_id, snapshot_id)
 
     def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
         """Get information about a specific snapshot.
@@ -1319,4 +1362,5 @@ class SandboxService:
         Returns:
             Snapshot metadata or None if not found.
         """
-        return self._snapshots.get_snapshot_info(session_id, snapshot_id)
+        with self._snapshot_lock(session_id):
+            return self._snapshots.get_snapshot_info(session_id, snapshot_id)

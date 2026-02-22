@@ -70,13 +70,13 @@ def _normalize_personalization_user_id(user_id: str) -> str:
         raise ValueError("user_id is required")
     if raw.isdigit():
         return str(int(raw))
-    digest = hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).digest()
-    return str(int.from_bytes(digest[:4], byteorder="big", signed=False))
+    digest = hashlib.sha256(raw.encode("utf-8")).digest()
+    return str(int.from_bytes(digest, byteorder="big", signed=False))
 
 
 def _get_db_for_user(user_id: str) -> tuple[PersonalizationDB, str]:
     normalized_user_id = _normalize_personalization_user_id(user_id)
-    db_path = DatabasePaths.get_personalization_db_path(int(normalized_user_id))
+    db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
     return PersonalizationDB(str(db_path)), normalized_user_id
 
 
@@ -104,6 +104,29 @@ def _coerce_flag_bool(value: Any, default: bool) -> bool:
     if candidate in {"0", "false", "no", "off", "disabled"}:
         return False
     return default
+
+
+def _normalize_namespace_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _resolve_persona_memory_namespace(
+    *,
+    runtime_mode: str | None,
+    scope_snapshot_id: str | None,
+    session_id: str | None,
+) -> tuple[str | None, str | None]:
+    mode = str(runtime_mode or "").strip().lower()
+    normalized_scope_snapshot_id = _normalize_namespace_value(scope_snapshot_id)
+    normalized_session_id = _normalize_namespace_value(session_id)
+    if mode == "persistent_scoped":
+        return normalized_scope_snapshot_id, None
+    if mode == "session_scoped":
+        return normalized_scope_snapshot_id, normalized_session_id
+    return None, None
 
 
 def _get_persona_memory_read_mode() -> str:
@@ -167,7 +190,7 @@ def _write_legacy_persona_turn(
     metadata: dict[str, Any] | None,
     store_as_memory: bool,
 ) -> bool:
-    db_path = DatabasePaths.get_personalization_db_path(int(normalized_user_id))
+    db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
     db = PersonalizationDB(str(db_path))
     clean_metadata = dict(metadata or {})
     clean_metadata["persona_id"] = str(persona_id or "")
@@ -209,6 +232,8 @@ def _write_chacha_persona_turn(
     turn_type: str,
     metadata: dict[str, Any] | None,
     store_as_memory: bool,
+    scope_snapshot_id: str | None,
+    namespace_session_id: str | None,
 ) -> bool:
     chacha_db = None
     try:
@@ -220,6 +245,8 @@ def _write_chacha_persona_turn(
             "role": str(role or "unknown"),
             "turn_type": str(turn_type or "text"),
             "session_id": str(session_id or ""),
+            "namespace_session_id": str(namespace_session_id or ""),
+            "scope_snapshot_id": str(scope_snapshot_id or ""),
             "persona_id": str(persona_id or ""),
             "content_length": len(str(content or "")),
             "metadata": dict(metadata or {}),
@@ -230,6 +257,8 @@ def _write_chacha_persona_turn(
                 "user_id": str(normalized_user_id),
                 "memory_type": "usage_event",
                 "content": json.dumps(telemetry_payload, ensure_ascii=True, sort_keys=True),
+                "scope_snapshot_id": scope_snapshot_id,
+                "session_id": namespace_session_id,
                 "salience": 0.0,
             }
         )
@@ -244,6 +273,8 @@ def _write_chacha_persona_turn(
                         "user_id": str(normalized_user_id),
                         "memory_type": "summary",
                         "content": memory_text,
+                        "scope_snapshot_id": scope_snapshot_id,
+                        "session_id": namespace_session_id,
                         "salience": 0.5,
                     }
                 )
@@ -267,7 +298,7 @@ def _read_legacy_memories(
     query_text: str,
     top_k: int,
 ) -> list[RetrievedMemory]:
-    db_path = DatabasePaths.get_personalization_db_path(int(normalized_user_id))
+    db_path = DatabasePaths.get_personalization_db_path(normalized_user_id)
     db = PersonalizationDB(str(db_path))
     safe_top_k = max(1, min(int(top_k), 10))
     query = str(query_text or "").strip() or None
@@ -306,14 +337,29 @@ def _read_chacha_memories(
     persona_id: str | None,
     query_text: str,
     top_k: int,
+    runtime_mode: str | None,
+    scope_snapshot_id: str | None,
+    session_id: str | None,
 ) -> list[RetrievedMemory]:
     chacha_db = None
     try:
         chacha_db, _ = _open_chacha_db_for_user(user_id)
+        normalized_runtime_mode = str(runtime_mode or "").strip().lower()
+        namespace_scope_snapshot_id, namespace_session_id = _resolve_persona_memory_namespace(
+            runtime_mode=normalized_runtime_mode,
+            scope_snapshot_id=scope_snapshot_id,
+            session_id=session_id,
+        )
+        if normalized_runtime_mode == "persistent_scoped" and not namespace_scope_snapshot_id:
+            return []
+        if normalized_runtime_mode == "session_scoped" and not namespace_session_id:
+            return []
         candidate_limit = max(25, min(500, int(top_k) * 25))
         rows = chacha_db.list_persona_memory_entries(
             user_id=str(normalized_user_id),
             persona_id=(str(persona_id).strip() if persona_id else None),
+            scope_snapshot_id=namespace_scope_snapshot_id,
+            session_id=namespace_session_id,
             include_archived=False,
             include_deleted=False,
             limit=candidate_limit,
@@ -392,6 +438,9 @@ def retrieve_top_memories(
     query_text: str,
     top_k: int = 3,
     persona_id: str | None = None,
+    runtime_mode: str | None = None,
+    scope_snapshot_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[RetrievedMemory]:
     if not user_id or not is_personalization_enabled():
         return []
@@ -408,6 +457,9 @@ def retrieve_top_memories(
                 persona_id=persona_id,
                 query_text=query_text,
                 top_k=top_k,
+                runtime_mode=runtime_mode,
+                scope_snapshot_id=scope_snapshot_id,
+                session_id=session_id,
             )
         if read_mode == "chacha_first_fallback_legacy":
             chacha_result = _read_chacha_memories(
@@ -416,6 +468,9 @@ def retrieve_top_memories(
                 persona_id=persona_id,
                 query_text=query_text,
                 top_k=top_k,
+                runtime_mode=runtime_mode,
+                scope_snapshot_id=scope_snapshot_id,
+                session_id=session_id,
             )
             if chacha_result:
                 return chacha_result
@@ -446,6 +501,8 @@ def persist_persona_turn(
     turn_type: str,
     metadata: dict[str, Any] | None = None,
     store_as_memory: bool = False,
+    runtime_mode: str | None = None,
+    scope_snapshot_id: str | None = None,
 ) -> bool:
     if not user_id or not is_personalization_enabled():
         return False
@@ -457,6 +514,11 @@ def persist_persona_turn(
         write_mode = _get_persona_memory_write_mode()
         legacy_ok = False
         chacha_ok = False
+        namespace_scope_snapshot_id, namespace_session_id = _resolve_persona_memory_namespace(
+            runtime_mode=runtime_mode,
+            scope_snapshot_id=scope_snapshot_id,
+            session_id=session_id,
+        )
 
         if write_mode in {"legacy_only", "dual_write"}:
             legacy_ok = _write_legacy_persona_turn(
@@ -481,6 +543,8 @@ def persist_persona_turn(
                 turn_type=turn_type,
                 metadata=metadata,
                 store_as_memory=bool(store_as_memory),
+                scope_snapshot_id=namespace_scope_snapshot_id,
+                namespace_session_id=namespace_session_id,
             )
 
         if write_mode == "dual_write":
@@ -502,6 +566,8 @@ def persist_tool_outcome(
     step_idx: int,
     outcome: dict[str, Any],
     store_as_memory: bool = True,
+    runtime_mode: str | None = None,
+    scope_snapshot_id: str | None = None,
 ) -> bool:
     try:
         serialized = json.dumps(outcome, ensure_ascii=True, sort_keys=True)
@@ -517,6 +583,8 @@ def persist_tool_outcome(
         turn_type="tool_result",
         metadata={"tool_name": str(tool_name or ""), "step_idx": int(step_idx)},
         store_as_memory=bool(store_as_memory),
+        runtime_mode=runtime_mode,
+        scope_snapshot_id=scope_snapshot_id,
     )
 
 

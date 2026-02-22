@@ -91,6 +91,57 @@ def test_persona_session_resume_rejects_ownership_mismatch(monkeypatch, persona_
     fastapi_app.dependency_overrides.clear()
 
 
+def test_persona_session_resume_rejects_persona_mismatch(monkeypatch, persona_db: CharactersRAGDB):
+    manager = SessionManager()
+    monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)
+
+    _ = persona_db.create_persona_profile(
+        {
+            "id": "persona_a",
+            "user_id": "1",
+            "name": "Persona A",
+            "mode": "session_scoped",
+            "system_prompt": "A",
+            "is_active": True,
+        }
+    )
+    _ = persona_db.create_persona_profile(
+        {
+            "id": "persona_b",
+            "user_id": "1",
+            "name": "Persona B",
+            "mode": "session_scoped",
+            "system_prompt": "B",
+            "is_active": True,
+        }
+    )
+    _ = persona_db.create_persona_session(
+        {
+            "id": "sess_bound_persona_a",
+            "persona_id": "persona_a",
+            "user_id": "1",
+            "mode": "session_scoped",
+            "reuse_allowed": False,
+            "status": "active",
+            "scope_snapshot_json": {},
+        }
+    )
+
+    with _client_for_user(1, persona_db) as client:
+        resp = client.post(
+            "/api/v1/persona/session",
+            json={
+                "persona_id": "persona_b",
+                "resume_session_id": "sess_bound_persona_a",
+            },
+        )
+        assert resp.status_code == 409
+        assert "different persona_id" in str(resp.json().get("detail"))
+        assert manager.get("sess_bound_persona_a") is None
+
+    fastapi_app.dependency_overrides.clear()
+
+
 def test_persona_session_detail_is_user_scoped(monkeypatch, persona_db: CharactersRAGDB):
     manager = SessionManager()
     monkeypatch.setattr(persona_ep, "get_session_manager", lambda: manager)

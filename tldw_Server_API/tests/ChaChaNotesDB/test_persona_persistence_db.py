@@ -24,7 +24,7 @@ def db_instance(db_path: Path) -> Iterator[CharactersRAGDB]:
     db.close_connection()
 
 
-def test_migration_v25_to_v26_creates_persona_tables(db_path: Path):
+def test_migration_v25_to_latest_creates_persona_tables(db_path: Path):
     db = CharactersRAGDB(db_path, "seed-client")
     db.close_connection()
 
@@ -65,6 +65,12 @@ def test_migration_v25_to_v26_creates_persona_tables(db_path: Path):
 
     profile_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('persona_profiles')").fetchall()}
     assert "idx_persona_profiles_user_active" in profile_indexes
+    memory_columns = {row["name"] for row in conn.execute("PRAGMA table_info('persona_memory_entries')").fetchall()}
+    assert "scope_snapshot_id" in memory_columns
+    assert "session_id" in memory_columns
+    memory_indexes = {row["name"] for row in conn.execute("PRAGMA index_list('persona_memory_entries')").fetchall()}
+    assert "idx_persona_memory_scope" in memory_indexes
+    assert "idx_persona_memory_session" in memory_indexes
 
     migrated.close_connection()
 
@@ -164,13 +170,43 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
             "user_id": "user-1",
             "memory_type": "summary",
             "content": "User prefers concise evidence-backed responses.",
+            "scope_snapshot_id": "scope_1",
+            "session_id": "sess_1",
             "salience": 0.9,
         }
     )
     memories = db_instance.list_persona_memory_entries(user_id="user-1", persona_id=persona_id)
     assert len(memories) == 1
     assert memories[0]["id"] == memory_id
+    assert memories[0]["scope_snapshot_id"] == "scope_1"
+    assert memories[0]["session_id"] == "sess_1"
     assert memories[0]["archived"] is False
+
+    _ = db_instance.add_persona_memory_entry(
+        {
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "memory_type": "summary",
+            "content": "Scope/session isolated memory.",
+            "scope_snapshot_id": "scope_2",
+            "session_id": "sess_2",
+            "salience": 0.7,
+        }
+    )
+    scoped_memories = db_instance.list_persona_memory_entries(
+        user_id="user-1",
+        persona_id=persona_id,
+        scope_snapshot_id="scope_1",
+    )
+    assert len(scoped_memories) == 1
+    assert scoped_memories[0]["id"] == memory_id
+    session_memories = db_instance.list_persona_memory_entries(
+        user_id="user-1",
+        persona_id=persona_id,
+        session_id="sess_2",
+    )
+    assert len(session_memories) == 1
+    assert session_memories[0]["session_id"] == "sess_2"
 
     assert db_instance.set_persona_memory_archived(
         entry_id=memory_id,
@@ -181,6 +217,7 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     visible_memories = db_instance.list_persona_memory_entries(
         user_id="user-1",
         persona_id=persona_id,
+        scope_snapshot_id="scope_1",
         include_archived=False,
     )
     assert visible_memories == []

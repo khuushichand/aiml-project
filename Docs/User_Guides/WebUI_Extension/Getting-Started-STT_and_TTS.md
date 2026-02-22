@@ -207,6 +207,7 @@ Kokoro supports lightweight “blended” voices and additional custom voice pro
 - **Blend existing voices in a single request** using a mix pattern:
   - Syntax: `voice_id1(weight1)+voice_id2(weight2)+...`
   - Example (2 parts Bella, 1 part Adam):
+
     ```bash
     curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
       -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -219,6 +220,7 @@ Kokoro supports lightweight “blended” voices and additional custom voice pro
           }' \
       --output kokoro_mix.mp3
     ```
+
   - You can mix more voices, for example: `af_bella(3)+am_adam(1)+bf_emma(2)`. The numbers are relative weights (2:1 is the same ratio as 4:2).
 
 - **Add custom Kokoro voices** if you have extra voice profiles from upstream Kokoro tools (e.g., Kokoro‑82M WebUI or other pipelines):
@@ -399,11 +401,13 @@ providers:
 
 - Deps: `pip install torch torchaudio sentencepiece soundfile huggingface_hub`
 - Install (official):
+
   ```bash
   git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
   cd libs/VibeVoice && pip install -e .
   cd ../..
   ```
+
 - YAML:
 
 ```yaml

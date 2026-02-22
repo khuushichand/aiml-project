@@ -1103,8 +1103,21 @@ def test_persona_memory_top_k_override_used(monkeypatch):
         def __init__(self, content: str):
             self.content = content
 
-    def _fake_retrieve(*, user_id: str, query_text: str, top_k: int):
+    def _fake_retrieve(
+        *,
+        user_id: str,
+        query_text: str,
+        top_k: int,
+        persona_id: str | None = None,
+        runtime_mode: str | None = None,
+        scope_snapshot_id: str | None = None,
+        session_id: str | None = None,
+    ):
         captured["top_k"] = top_k
+        captured["persona_id"] = str(persona_id or "")
+        captured["runtime_mode"] = str(runtime_mode or "")
+        captured["scope_snapshot_id"] = scope_snapshot_id
+        captured["session_id"] = str(session_id or "")
         return [_Memory("memory-a"), _Memory("memory-b")]
 
     monkeypatch.setattr(persona_ep, "_resolve_authenticated_user_id", _fake_resolve)
@@ -1131,6 +1144,9 @@ def test_persona_memory_top_k_override_used(monkeypatch):
             plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
 
     assert captured.get("top_k") == 1
+    assert captured.get("persona_id")
+    assert captured.get("runtime_mode") == "session_scoped"
+    assert captured.get("session_id") == "sess_mem_topk"
     memory_payload = plan.get("memory") or {}
     assert memory_payload.get("requested_top_k") == 1
     assert memory_payload.get("applied_count") == 2

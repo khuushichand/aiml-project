@@ -86,6 +86,26 @@ class SnapshotManager:
         if target != root and root not in target.parents:
             raise ValueError(f"Path traversal detected: {member.name}")
 
+    @staticmethod
+    def _validate_workspace_tree_for_copy(workspace_root: Path) -> None:
+        """Validate workspace tree for snapshot/clone copy semantics.
+
+        Policy: reject symlinks and any path resolution outside workspace root.
+        """
+        if workspace_root.is_symlink():
+            raise ValueError("Refusing symlink workspace root")
+        root = workspace_root.resolve()
+        for current, dirnames, filenames in os.walk(workspace_root, topdown=True, followlinks=False):
+            cur_path = Path(current)
+            cur_resolved = cur_path.resolve()
+            if cur_resolved != root and root not in cur_resolved.parents:
+                raise ValueError(f"Workspace path traversal detected: {cur_path}")
+            for name in [*dirnames, *filenames]:
+                entry = cur_path / name
+                if entry.is_symlink():
+                    rel = entry.relative_to(workspace_root)
+                    raise ValueError(f"Refusing symlink workspace entry: {rel}")
+
     def create_snapshot(self, session_id: str, workspace_path: str) -> dict:
         """Create a snapshot of the session workspace.
 
@@ -105,6 +125,8 @@ class SnapshotManager:
         """
         if not workspace_path or not os.path.isdir(workspace_path):
             raise ValueError(f"Invalid workspace path: {workspace_path}")
+        workspace_root = Path(workspace_path)
+        self._validate_workspace_tree_for_copy(workspace_root)
 
         snapshot_id = f"snap-{uuid.uuid4().hex[:12]}"
         snapshot_dir = self._snapshot_dir(session_id)
@@ -279,6 +301,8 @@ class SnapshotManager:
 
         if not new_workspace:
             raise ValueError("Invalid new workspace path")
+
+        self._validate_workspace_tree_for_copy(Path(source_workspace))
 
         try:
             # Ensure parent directory exists
@@ -482,3 +506,40 @@ class SnapshotManager:
                 total_size -= snap_size
 
         return deleted
+
+    def enforce_quota_all_sessions(
+        self,
+        *,
+        max_snapshots: int = 10,
+        max_size_mb: int = 256,
+    ) -> dict[str, int]:
+        """Enforce snapshot quotas for all session snapshot directories."""
+        scanned_sessions = 0
+        evicted_sessions = 0
+        deleted_snapshots = 0
+        root = Path(self.storage_path)
+        if not root.exists():
+            return {
+                "scanned_sessions": 0,
+                "evicted_sessions": 0,
+                "deleted_snapshots": 0,
+            }
+        with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+            for session_dir in root.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                session_id = session_dir.name
+                scanned_sessions += 1
+                deleted = self.enforce_quota(
+                    session_id,
+                    max_snapshots=max_snapshots,
+                    max_size_mb=max_size_mb,
+                )
+                if deleted:
+                    evicted_sessions += 1
+                    deleted_snapshots += len(deleted)
+        return {
+            "scanned_sessions": int(scanned_sessions),
+            "evicted_sessions": int(evicted_sessions),
+            "deleted_snapshots": int(deleted_snapshots),
+        }

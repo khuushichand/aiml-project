@@ -293,6 +293,7 @@ def _load_persona_policy_rules_for_session(
     default_payload = {
         "persona_id": _DEFAULT_PERSONA_ID,
         "runtime_mode": "session_scoped",
+        "scope_snapshot_id": None,
         "policy_rules": normalize_policy_rules(_DEFAULT_PERSONA_POLICY_RULES),
         "session_exists": False,
     }
@@ -308,10 +309,12 @@ def _load_persona_policy_rules_for_session(
         runtime_mode = str(session_row.get("mode") or "session_scoped").strip().lower()
         if runtime_mode not in _PERSONA_RUNTIME_MODES:
             runtime_mode = "session_scoped"
+        scope_snapshot_id = _scope_snapshot_id_from_snapshot(session_row.get("scope_snapshot") or {})
         policy_rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=uid, include_deleted=False)
         return {
             "persona_id": persona_id,
             "runtime_mode": runtime_mode,
+            "scope_snapshot_id": scope_snapshot_id,
             "policy_rules": normalize_policy_rules(policy_rules),
             "session_exists": True,
         }
@@ -1283,17 +1286,6 @@ async def persona_session(
     requested_persona_id = str(req.persona_id or "").strip() or _DEFAULT_PERSONA_ID
     session_manager = get_session_manager()
 
-    # Preserve scaffold ownership semantics for resume IDs in process-local session manager.
-    if req.resume_session_id:
-        try:
-            _ = session_manager.create(
-                user_id=user_id,
-                persona_id=requested_persona_id,
-                resume_session_id=req.resume_session_id,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-
     try:
         profile = db.get_persona_profile(requested_persona_id, user_id=user_id, include_deleted=False)
         if profile is None:
@@ -1307,9 +1299,27 @@ async def persona_session(
         policy_rules = db.list_persona_policy_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
         persona = _persona_info_from_profile(profile, policy_rules=policy_rules)
 
+        # Preserve scaffold ownership/persona binding semantics for resume IDs in process-local session manager
+        # without creating new local entries before DB validation succeeds.
+        if req.resume_session_id:
+            local_session = session_manager.get(req.resume_session_id)
+            if local_session is not None:
+                if str(local_session.user_id) != user_id:
+                    raise HTTPException(status_code=403, detail="session ownership mismatch")
+                if str(local_session.persona_id) != persona_id:
+                    raise HTTPException(status_code=409, detail="session persona mismatch")
+
         session_row: dict[str, Any] | None = None
         if req.resume_session_id:
             session_row = db.get_persona_session(req.resume_session_id, user_id=user_id, include_deleted=False)
+            if session_row is not None:
+                bound_persona_id = str(session_row.get("persona_id") or "").strip()
+                if bound_persona_id and bound_persona_id != persona_id:
+                    raise ConflictError(
+                        "resume_session_id is bound to a different persona_id.",
+                        entity="persona_sessions",
+                        entity_id=str(req.resume_session_id),
+                    )
 
         if session_row is None:
             scope_rules = db.list_persona_scope_rules(persona_id=persona_id, user_id=user_id, include_deleted=False)
@@ -1639,10 +1649,12 @@ async def persona_stream(
             persist_personalization: bool = True,
             persona_id_override: str | None = None,
             runtime_mode_override: str | None = None,
+            scope_snapshot_id_override: str | None = None,
             memory_kind: str | None = None,
         ) -> None:
             effective_persona_id = str(persona_id_override or persona_id or "").strip() or persona_id
             effective_runtime_mode = str(runtime_mode_override or "session_scoped").strip().lower()
+            effective_scope_snapshot_id = str(scope_snapshot_id_override or "").strip() or None
             should_store_memory = bool(
                 persist_as_memory
                 and effective_runtime_mode == "persistent_scoped"
@@ -1670,6 +1682,8 @@ async def persona_stream(
                     turn_type=turn_type,
                     metadata=metadata,
                     store_as_memory=should_store_memory,
+                    runtime_mode=effective_runtime_mode,
+                    scope_snapshot_id=effective_scope_snapshot_id,
                 )
 
         async def _call_mcp_tool(
@@ -1953,6 +1967,7 @@ async def persona_stream(
                     allowed=_PERSONA_RUNTIME_MODES,
                     fallback="session_scoped",
                 )
+                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
                 session_exists = bool(runtime_context.get("session_exists", False))
                 _increment_persona_metric(
@@ -2027,6 +2042,7 @@ async def persona_stream(
                     persist_as_memory=False,
                     persona_id_override=runtime_persona_id,
                     runtime_mode_override=runtime_mode,
+                    scope_snapshot_id_override=runtime_scope_snapshot_id,
                 )
                 memory_context: list[str] = []
                 if use_memory_context and memory_allowed_by_mode:
@@ -2034,6 +2050,10 @@ async def persona_stream(
                         user_id=authenticated_user_id,
                         query_text=text,
                         top_k=memory_top_k,
+                        persona_id=runtime_persona_id,
+                        runtime_mode=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
+                        session_id=session_id,
                     )
                     memory_context = [m.content for m in memories]
                 memory_usage = {
@@ -2144,6 +2164,7 @@ async def persona_stream(
                     allowed=_PERSONA_RUNTIME_MODES,
                     fallback="session_scoped",
                 )
+                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 audio_format = str(msg.get("audio_format") or "pcm16").strip().lower()
                 if audio_format not in allowed_audio_formats:
                     await _emit_notice(
@@ -2202,6 +2223,7 @@ async def persona_stream(
                         persist_as_memory=False,
                         persona_id_override=runtime_persona_id,
                         runtime_mode_override=runtime_mode,
+                        scope_snapshot_id_override=runtime_scope_snapshot_id,
                     )
                     await stream.send_json(
                         {
@@ -2284,6 +2306,7 @@ async def persona_stream(
                     persist_as_memory=False,
                     persona_id_override=runtime_persona_id,
                     runtime_mode_override=runtime_mode,
+                    scope_snapshot_id_override=runtime_scope_snapshot_id,
                 )
             elif mtype == "confirm_plan":
                 session_id = _normalize_ws_identifier(msg.get("session_id"), fallback=default_session_id)
@@ -2349,6 +2372,7 @@ async def persona_stream(
                     allowed=_PERSONA_RUNTIME_MODES,
                     fallback="session_scoped",
                 )
+                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 persona_policy_rules = normalize_policy_rules(runtime_context.get("policy_rules"))
                 current_preferences = session_manager.get_preferences(
                     session_id=session_id,
@@ -2424,6 +2448,7 @@ async def persona_stream(
                             persist_personalization=False,
                             persona_id_override=runtime_persona_id,
                             runtime_mode_override=runtime_mode,
+                            scope_snapshot_id_override=runtime_scope_snapshot_id,
                         )
                         _ = persist_tool_outcome(
                             user_id=authenticated_user_id,
@@ -2433,6 +2458,8 @@ async def persona_stream(
                             step_idx=step.idx,
                             outcome=result,
                             store_as_memory=False,
+                            runtime_mode=runtime_mode,
+                            scope_snapshot_id=runtime_scope_snapshot_id,
                         )
                         executed_steps += 1
                         continue
@@ -2458,6 +2485,7 @@ async def persona_stream(
                             persist_as_memory=True,
                             persona_id_override=runtime_persona_id,
                             runtime_mode_override=runtime_mode,
+                            scope_snapshot_id_override=runtime_scope_snapshot_id,
                             memory_kind="summary",
                         )
                         continue
@@ -2511,6 +2539,7 @@ async def persona_stream(
                         persist_personalization=False,
                         persona_id_override=runtime_persona_id,
                         runtime_mode_override=runtime_mode,
+                        scope_snapshot_id_override=runtime_scope_snapshot_id,
                     )
                     _ = persist_tool_outcome(
                         user_id=authenticated_user_id,
@@ -2520,6 +2549,8 @@ async def persona_stream(
                         step_idx=step.idx,
                         outcome=result,
                         store_as_memory=False,
+                        runtime_mode=runtime_mode,
+                        scope_snapshot_id=runtime_scope_snapshot_id,
                     )
                 if executed_steps == 0:
                     await _emit_notice(
@@ -2551,6 +2582,7 @@ async def persona_stream(
                     allowed=_PERSONA_RUNTIME_MODES,
                     fallback="session_scoped",
                 )
+                runtime_scope_snapshot_id = str(runtime_context.get("scope_snapshot_id") or "").strip() or None
                 assistant_text = "(scaffold)"
                 await _emit_assistant_delta(
                     session_id=session_id,
@@ -2571,6 +2603,7 @@ async def persona_stream(
                     persist_as_memory=False,
                     persona_id_override=runtime_persona_id,
                     runtime_mode_override=runtime_mode,
+                    scope_snapshot_id_override=runtime_scope_snapshot_id,
                 )
     except WebSocketDisconnect:
         logger.info("Persona stream disconnected")
