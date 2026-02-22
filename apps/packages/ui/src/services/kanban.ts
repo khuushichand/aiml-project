@@ -23,8 +23,15 @@ import type {
   BoardImportResponse,
   Label,
   LabelCreate,
-  LabelUpdate
+  LabelUpdate,
+  Checklist,
+  ChecklistItem,
+  ChecklistWithItems,
+  Comment
 } from "@/types/kanban"
+
+// Re-export types that consumers import from this module
+export type { Checklist, ChecklistItem, ChecklistWithItems, Comment }
 
 // =============================================================================
 // Board API
@@ -54,9 +61,15 @@ export async function listBoards(params?: {
 /**
  * Get a single board with nested lists and cards
  */
-export async function getBoard(boardId: number): Promise<BoardWithLists> {
+export async function getBoard(
+  boardId: number,
+  params?: { includeArchived?: boolean }
+): Promise<BoardWithLists> {
+  const query = new URLSearchParams()
+  if (params?.includeArchived) query.set("include_archived", "true")
+  const suffix = query.toString() ? `?${query.toString()}` : ""
   return await bgRequest<BoardWithLists>({
-    path: `/api/v1/kanban/boards/${boardId}`,
+    path: `/api/v1/kanban/boards/${boardId}${suffix}`,
     method: "GET"
   })
 }
@@ -438,31 +451,6 @@ export async function searchCards(params: {
 // Checklist API
 // =============================================================================
 
-export interface Checklist {
-  id: number
-  uuid: string
-  card_id: number
-  title: string
-  position: number
-  created_at: string
-  updated_at: string
-}
-
-export interface ChecklistItem {
-  id: number
-  uuid: string
-  checklist_id: number
-  content: string
-  checked: boolean
-  position: number
-  created_at: string
-  updated_at: string
-}
-
-export interface ChecklistWithItems extends Checklist {
-  items: ChecklistItem[]
-}
-
 export async function listChecklists(cardId: number): Promise<ChecklistWithItems[]> {
   return await bgRequest<ChecklistWithItems[]>({
     path: `/api/v1/kanban/cards/${cardId}/checklists`,
@@ -531,16 +519,6 @@ export async function deleteChecklistItem(itemId: number): Promise<void> {
 // =============================================================================
 // Comment API
 // =============================================================================
-
-export interface Comment {
-  id: number
-  uuid: string
-  card_id: number
-  user_id: string
-  content: string
-  created_at: string
-  updated_at: string
-}
 
 export async function listComments(cardId: number): Promise<Comment[]> {
   return await bgRequest<Comment[]>({

@@ -54,7 +54,12 @@ export const BoardGallery = ({
               </p>
             )}
             <div className="text-xs text-text-subtle">
-              Updated {new Date(board.updated_at).toLocaleDateString()}
+              Updated{" "}
+              {new Date(board.updated_at).toLocaleDateString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric"
+              })}
             </div>
           </button>
         ))}

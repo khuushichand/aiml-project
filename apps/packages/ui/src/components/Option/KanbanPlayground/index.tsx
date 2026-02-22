@@ -38,6 +38,11 @@ import { ArchivedItemsDrawer } from "./ArchivedItemsDrawer"
 import { BoardGallery } from "./BoardGallery"
 import { useKanbanShortcuts } from "./useKanbanShortcuts"
 
+const BADGE_INDICATOR_STYLE = {
+  backgroundColor: "rgb(var(--color-primary))",
+  color: "rgb(var(--color-text))"
+}
+
 export const KanbanPlayground = () => {
   const { t } = useTranslation(["settings", "common"])
   const queryClient = useQueryClient()
@@ -195,9 +200,7 @@ export const KanbanPlayground = () => {
 
   // Keyboard shortcuts
   const { helpOpen, setHelpOpen } = useKanbanShortcuts({
-    onNewBoard: () => setCreateModalOpen(true),
-    onNewCard: undefined, // Handled by BoardView
-    onNewList: undefined  // Handled by BoardView
+    onNewBoard: () => setCreateModalOpen(true)
   })
 
   const boards = boardsData?.boards ?? []
@@ -246,12 +249,7 @@ export const KanbanPlayground = () => {
           <Badge
             count={boards.length}
             showZero
-            styles={{
-              indicator: {
-                backgroundColor: "rgb(var(--color-primary))",
-                color: "rgb(var(--color-text))"
-              }
-            }}
+            styles={{ indicator: BADGE_INDICATOR_STYLE }}
           />
         </div>
         <Select
@@ -285,14 +283,6 @@ export const KanbanPlayground = () => {
   )
 
   const renderContent = () => {
-    if (boardLoading) {
-      return (
-        <div className="flex items-center justify-center h-96">
-          <Spin size="large" />
-        </div>
-      )
-    }
-
     if (!selectedBoardId) {
       return (
         <BoardGallery
@@ -300,6 +290,14 @@ export const KanbanPlayground = () => {
           onSelectBoard={setSelectedBoardId}
           onCreateBoard={() => setCreateModalOpen(true)}
         />
+      )
+    }
+
+    if (boardLoading) {
+      return (
+        <div className="flex items-center justify-center h-96">
+          <Spin size="large" />
+        </div>
       )
     }
 
@@ -332,7 +330,7 @@ export const KanbanPlayground = () => {
       <ArchivedItemsDrawer
         open={archiveDrawerOpen}
         onClose={() => setArchiveDrawerOpen(false)}
-        board={boardData}
+        boardId={selectedBoardId}
       />
 
       {/* Import modal */}

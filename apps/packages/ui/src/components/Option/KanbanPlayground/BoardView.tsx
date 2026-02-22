@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button, Input, message, Popconfirm, Dropdown, Modal, Select } from "antd"
 import type { MenuProps } from "antd"
@@ -563,7 +563,7 @@ export const BoardView = ({
   }
 
   // Collect all unique labels from cards for filter options
-  const allLabels = (() => {
+  const allLabels = useMemo(() => {
     const map = new Map<number, { id: number; name: string; color: string }>()
     for (const list of board.lists) {
       for (const card of list.cards) {
@@ -573,7 +573,13 @@ export const BoardView = ({
       }
     }
     return Array.from(map.values())
-  })()
+  }, [board.lists])
+
+  const handleClearFilters = useCallback(() => {
+    setFilterLabelIds([])
+    setFilterPriorities([])
+    setSearchQuery("")
+  }, [])
 
   // Check if card matches current filters
   const cardMatchesFilters = useCallback(
@@ -710,11 +716,7 @@ export const BoardView = ({
             <Button
               size="small"
               type="link"
-              onClick={() => {
-                setFilterLabelIds([])
-                setFilterPriorities([])
-                setSearchQuery("")
-              }}
+              onClick={handleClearFilters}
             >
               Clear filters
             </Button>

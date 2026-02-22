@@ -13,9 +13,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Trash2, Archive, Copy, Send } from "lucide-react"
 import dayjs from "dayjs"
 
-import type { Card, CardUpdate, ListWithCards, PriorityType } from "@/types/kanban"
+import type { Card, CardUpdate, ListWithCards, PriorityType, Comment } from "@/types/kanban"
 import { copyCard, listComments, createComment, generateClientId } from "@/services/kanban"
-import type { Comment } from "@/services/kanban"
 import { LabelManager } from "./LabelManager"
 import { ChecklistSection } from "./ChecklistSection"
 
@@ -338,7 +337,13 @@ export const CardDetailPanel = ({
                     className="bg-surface rounded p-2 text-sm"
                   >
                     <div className="text-text-muted text-xs mb-1">
-                      {new Date(comment.created_at).toLocaleString()}
+                      {new Date(comment.created_at).toLocaleString(undefined, {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })}
                     </div>
                     <div className="whitespace-pre-wrap">{comment.content}</div>
                   </div>
@@ -381,8 +386,26 @@ export const CardDetailPanel = ({
 
           {/* Metadata (read-only info) */}
           <div className="pt-4 border-t text-xs text-text-muted space-y-1">
-            <div>Created: {new Date(card.created_at).toLocaleString()}</div>
-            <div>Updated: {new Date(card.updated_at).toLocaleString()}</div>
+            <div>
+              Created:{" "}
+              {new Date(card.created_at).toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+              })}
+            </div>
+            <div>
+              Updated:{" "}
+              {new Date(card.updated_at).toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+              })}
+            </div>
             <div>ID: {card.id}</div>
           </div>
         </div>

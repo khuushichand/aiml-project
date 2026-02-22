@@ -1,8 +1,9 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button, Input, Checkbox, Progress, Collapse, Popconfirm, message } from "antd"
-import { Plus, Trash2, Edit2, ChevronDown } from "lucide-react"
+import { Plus, Trash2 } from "lucide-react"
 
+import type { ChecklistWithItems, ChecklistItem } from "@/types/kanban"
 import {
   listChecklists,
   createChecklist,
@@ -11,9 +12,7 @@ import {
   createChecklistItem,
   updateChecklistItem,
   deleteChecklistItem,
-  generateClientId,
-  type ChecklistWithItems,
-  type ChecklistItem
+  generateClientId
 } from "@/services/kanban"
 
 interface ChecklistSectionProps {
@@ -199,7 +198,11 @@ const SingleChecklist = ({
               if (t && t !== checklist.title) updateTitleMutation.mutate(t)
               else setEditingTitle(false)
             }}
-            onBlur={() => setEditingTitle(false)}
+            onBlur={() => {
+              const t = titleValue.trim()
+              if (t && t !== checklist.title) updateTitleMutation.mutate(t)
+              else setEditingTitle(false)
+            }}
             autoFocus
             className="flex-1 mr-2"
           />
@@ -332,7 +335,11 @@ const ChecklistItemRow = ({
             if (t && t !== item.content) onUpdateContent(t)
             setEditing(false)
           }}
-          onBlur={() => setEditing(false)}
+          onBlur={() => {
+            const t = editValue.trim()
+            if (t && t !== item.content) onUpdateContent(t)
+            setEditing(false)
+          }}
           autoFocus
           className="flex-1"
         />

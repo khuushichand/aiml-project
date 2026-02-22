@@ -206,6 +206,49 @@ export interface ReorderResponse {
 }
 
 // =============================================================================
+// Checklist Types
+// =============================================================================
+
+export interface Checklist {
+  id: number
+  uuid: string
+  card_id: number
+  title: string
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChecklistItem {
+  id: number
+  uuid: string
+  checklist_id: number
+  content: string
+  checked: boolean
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChecklistWithItems extends Checklist {
+  items: ChecklistItem[]
+}
+
+// =============================================================================
+// Comment Types
+// =============================================================================
+
+export interface Comment {
+  id: number
+  uuid: string
+  card_id: number
+  user_id: string
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+// =============================================================================
 // Import/Export Types
 // =============================================================================
 

@@ -174,6 +174,8 @@ export const LabelManager = ({
                       }`}
                       style={{ backgroundColor: c }}
                       onClick={() => setEditColor(c)}
+                      aria-label={`Select color ${c}`}
+                      title={c}
                     />
                   ))}
                 </div>
@@ -250,6 +252,8 @@ export const LabelManager = ({
               }`}
               style={{ backgroundColor: c }}
               onClick={() => setNewLabelColor(c)}
+              aria-label={`Select color ${c}`}
+              title={c}
             />
           ))}
         </div>

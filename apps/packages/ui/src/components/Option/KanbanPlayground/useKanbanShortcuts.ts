@@ -32,26 +32,34 @@ export const useKanbanShortcuts = (actions: KanbanShortcutActions) => {
   )
 
   const shortcuts: KeyboardShortcutConfig[] = [
-    {
-      shortcut: { key: "n", preventDefault: true, stopPropagation: false },
-      action: guard(actions.onNewCard),
-      description: "New card in active list"
-    },
-    {
-      shortcut: { key: "b", preventDefault: true, stopPropagation: false },
-      action: guard(actions.onNewBoard),
-      description: "New board"
-    },
-    {
-      shortcut: { key: "l", preventDefault: true, stopPropagation: false },
-      action: guard(actions.onNewList),
-      description: "New list"
-    },
-    {
-      shortcut: { key: "Escape", preventDefault: true, stopPropagation: false },
-      action: guard(actions.onClosePanel),
-      description: "Close panel"
-    },
+    ...(actions.onNewCard
+      ? [{
+          shortcut: { key: "n", preventDefault: true, stopPropagation: false },
+          action: guard(actions.onNewCard),
+          description: "New card in active list"
+        }]
+      : []),
+    ...(actions.onNewBoard
+      ? [{
+          shortcut: { key: "b", preventDefault: true, stopPropagation: false },
+          action: guard(actions.onNewBoard),
+          description: "New board"
+        }]
+      : []),
+    ...(actions.onNewList
+      ? [{
+          shortcut: { key: "l", preventDefault: true, stopPropagation: false },
+          action: guard(actions.onNewList),
+          description: "New list"
+        }]
+      : []),
+    ...(actions.onClosePanel
+      ? [{
+          shortcut: { key: "Escape", preventDefault: true, stopPropagation: false },
+          action: guard(actions.onClosePanel),
+          description: "Close panel"
+        }]
+      : []),
     {
       shortcut: { key: "?", shiftKey: true, preventDefault: true, stopPropagation: false },
       action: guard(() => setHelpOpen(true)),
