@@ -16,11 +16,13 @@
 ####################
 
 import importlib.util
+import inspect
 import logging
 import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -32,6 +34,181 @@ IS_MACOS = sys.platform == 'darwin'
 
 # Global model cache
 _mlx_model_cache: Optional[Any] = None
+_DEFAULT_MLX_MODEL_ID = "mlx-community/parakeet-tdt-0.6b-v3"
+
+
+def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _supports_kwarg(callable_obj: Any, kwarg_name: str) -> bool:
+    try:
+        return kwarg_name in inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _token_to_dict(token: Any) -> dict[str, Any]:
+    start = _safe_float(getattr(token, "start", None), 0.0) or 0.0
+    duration = _safe_float(getattr(token, "duration", None), None)
+    end_from_attr = _safe_float(getattr(token, "end", None), None)
+    end = end_from_attr if end_from_attr is not None else (start + (duration or 0.0))
+    if duration is None:
+        duration = max(end - start, 0.0)
+    return {
+        "id": getattr(token, "id", None),
+        "text": str(getattr(token, "text", "") or ""),
+        "start": float(start),
+        "end": float(end),
+        "duration": float(duration),
+        "confidence": float(_safe_float(getattr(token, "confidence", None), 1.0) or 1.0),
+    }
+
+
+def _sentence_to_dict(sentence: Any) -> dict[str, Any]:
+    tokens_raw = getattr(sentence, "tokens", None)
+    token_dicts: list[dict[str, Any]] = []
+    if isinstance(tokens_raw, list):
+        token_dicts = [_token_to_dict(token) for token in tokens_raw]
+
+    start = _safe_float(getattr(sentence, "start", None), None)
+    end = _safe_float(getattr(sentence, "end", None), None)
+    duration = _safe_float(getattr(sentence, "duration", None), None)
+    if start is None and token_dicts:
+        start = token_dicts[0]["start"]
+    if end is None and token_dicts:
+        end = token_dicts[-1]["end"]
+    if start is None:
+        start = 0.0
+    if end is None:
+        end = start
+    if duration is None:
+        duration = max(end - start, 0.0)
+
+    return {
+        "text": str(getattr(sentence, "text", "") or ""),
+        "start": float(start),
+        "end": float(end),
+        "duration": float(duration),
+        "confidence": float(_safe_float(getattr(sentence, "confidence", None), 1.0) or 1.0),
+        "tokens": token_dicts,
+    }
+
+
+def _as_structured_artifact(result: Any) -> dict[str, Any]:
+    if isinstance(result, dict):
+        text = str(result.get("text", "") or "")
+        raw_sentences = result.get("sentences") if isinstance(result.get("sentences"), list) else []
+        raw_tokens = result.get("tokens") if isinstance(result.get("tokens"), list) else []
+        sentences = [dict(sentence) for sentence in raw_sentences if isinstance(sentence, dict)]
+        tokens = [dict(token) for token in raw_tokens if isinstance(token, dict)]
+        if not tokens and sentences:
+            for sentence in sentences:
+                words = sentence.get("tokens")
+                if isinstance(words, list):
+                    for token in words:
+                        if isinstance(token, dict):
+                            tokens.append(dict(token))
+        return {
+            "text": text,
+            "sentences": sentences,
+            "tokens": tokens,
+        }
+
+    text = str(getattr(result, "text", result) or "")
+    sentences_raw = getattr(result, "sentences", None)
+    sentences: list[dict[str, Any]] = []
+    if isinstance(sentences_raw, list):
+        sentences = [_sentence_to_dict(sentence) for sentence in sentences_raw]
+
+    tokens_raw = getattr(result, "tokens", None)
+    tokens: list[dict[str, Any]] = []
+    if isinstance(tokens_raw, list):
+        tokens = [_token_to_dict(token) for token in tokens_raw]
+    elif sentences:
+        for sentence in sentences:
+            for token in sentence.get("tokens", []):
+                tokens.append(token)
+
+    return {
+        "text": text,
+        "sentences": sentences,
+        "tokens": tokens,
+    }
+
+
+def _build_decoding_config(
+    *,
+    decoding_mode: Optional[str] = None,
+    beam_size: Optional[int] = None,
+    length_penalty: Optional[float] = None,
+    patience: Optional[float] = None,
+    duration_reward: Optional[float] = None,
+    sentence_max_words: Optional[int] = None,
+    sentence_silence_gap: Optional[float] = None,
+    sentence_max_duration: Optional[float] = None,
+) -> Optional[Any]:
+    has_sentence_overrides = any(
+        value is not None
+        for value in (sentence_max_words, sentence_silence_gap, sentence_max_duration)
+    )
+    mode = str(decoding_mode or "").strip().lower()
+    has_beam_overrides = mode == "beam" or any(
+        value is not None for value in (beam_size, length_penalty, patience, duration_reward)
+    )
+    if not has_sentence_overrides and not has_beam_overrides and mode != "greedy":
+        return None
+
+    try:
+        import parakeet_mlx
+    except Exception as exc:
+        logging.debug(f"Unable to import parakeet_mlx for decoding config construction: {exc}")
+        return None
+
+    SentenceConfig = getattr(parakeet_mlx, "SentenceConfig", None)
+    DecodingConfig = getattr(parakeet_mlx, "DecodingConfig", None)
+    Greedy = getattr(parakeet_mlx, "Greedy", None)
+    Beam = getattr(parakeet_mlx, "Beam", None)
+    if SentenceConfig is None or DecodingConfig is None or Greedy is None or Beam is None:
+        logging.debug("parakeet_mlx decoding classes unavailable; skipping decoding config")
+        return None
+
+    sentence_obj = SentenceConfig()
+    if sentence_max_words is not None:
+        sentence_obj.max_words = int(sentence_max_words)
+    if sentence_silence_gap is not None:
+        sentence_obj.silence_gap = float(sentence_silence_gap)
+    if sentence_max_duration is not None:
+        sentence_obj.max_duration = float(sentence_max_duration)
+
+    if mode == "beam" or has_beam_overrides:
+        beam_kwargs: dict[str, Any] = {}
+        if beam_size is not None:
+            beam_kwargs["beam_size"] = int(beam_size)
+        if length_penalty is not None:
+            beam_kwargs["length_penalty"] = float(length_penalty)
+        if patience is not None:
+            beam_kwargs["patience"] = float(patience)
+        if duration_reward is not None:
+            beam_kwargs["duration_reward"] = float(duration_reward)
+        decode_obj = Beam(**beam_kwargs) if beam_kwargs else Beam()
+    else:
+        decode_obj = Greedy()
+    return DecodingConfig(decoding=decode_obj, sentence=sentence_obj)
 
 #######################################################################################################################
 # Installation and Setup
@@ -115,7 +292,11 @@ def install_parakeet_mlx() -> bool:
 # Model Loading and Management
 #
 
-def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str] = None):
+def load_parakeet_mlx_model(
+    force_reload: bool = False,
+    model_path: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+):
     """
     Load the Parakeet MLX model.
 
@@ -140,15 +321,23 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
         logging.error("MLX is not available. Install with: pip install mlx")
         return None
 
-    # Check/install parakeet-mlx
+    # Check parakeet-mlx
     if not check_parakeet_mlx_installed():
-        logging.info("parakeet-mlx not found, attempting to install...")
-        if not install_parakeet_mlx():
-            logging.error("Failed to install parakeet-mlx")
-            return None
+        logging.error(
+            "parakeet-mlx is not installed. Install during setup/deploy (runtime auto-install is disabled)."
+        )
+        return None
 
     try:
         import parakeet_mlx
+        stt_cfg: dict[str, Any] = {}
+        try:
+            from tldw_Server_API.app.core.config import get_stt_config
+
+            stt_cfg = get_stt_config() or {}
+        except Exception:
+            stt_cfg = {}
+
         # dtype is optional for tests; if mlx is unavailable, proceed without dtype
         try:
             import mlx.core as mx
@@ -161,25 +350,29 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
         # Initialize the model
         # The parakeet-mlx library handles model downloading and caching
         # Try to load from Hugging Face model ID
-        # Default model from the parakeet-mlx CLI
-        model_id = model_path or "mlx-community/parakeet-tdt-0.6b-v2"
+        # Default model from the parakeet-mlx CLI (v3)
+        model_id = (
+            model_path
+            or str(stt_cfg.get("mlx_model_id", "")).strip()
+            or _DEFAULT_MLX_MODEL_ID
+        )
+        model_cache_dir = cache_dir or str(stt_cfg.get("mlx_cache_dir", "")).strip() or None
+        from_pretrained_kwargs: dict[str, Any] = {}
+        if _dtype is not None and _supports_kwarg(parakeet_mlx.from_pretrained, "dtype"):
+            from_pretrained_kwargs["dtype"] = _dtype
+        if model_cache_dir and _supports_kwarg(parakeet_mlx.from_pretrained, "cache_dir"):
+            from_pretrained_kwargs["cache_dir"] = model_cache_dir
 
         try:
             # Try to load the model from Hugging Face
             logging.info(f"Loading model from: {model_id}")
-            if _dtype is not None:
-                model = parakeet_mlx.from_pretrained(model_id, dtype=_dtype)
-            else:
-                model = parakeet_mlx.from_pretrained(model_id)
+            model = parakeet_mlx.from_pretrained(model_id, **from_pretrained_kwargs)
         except FileNotFoundError:
             # Model might need to be downloaded first
             logging.info("Model not found locally, downloading from Hugging Face...")
             try:
                 # The model will be downloaded automatically
-                if _dtype is not None:
-                    model = parakeet_mlx.from_pretrained(model_id, dtype=_dtype)
-                else:
-                    model = parakeet_mlx.from_pretrained(model_id)
+                model = parakeet_mlx.from_pretrained(model_id, **from_pretrained_kwargs)
             except Exception as e2:
                 logging.exception(f"Failed to download/load model: {e2}")
                 return None
@@ -213,8 +406,20 @@ def transcribe_with_parakeet_mlx(
     verbose: bool = False,
     chunk_duration: Optional[float] = None,
     overlap_duration: float = 15.0,
-    chunk_callback: Optional[Callable[[int, int], None]] = None
-) -> str:
+    chunk_callback: Optional[Callable[[int, int], None]] = None,
+    *,
+    return_structured: bool = False,
+    model_path: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    decoding_mode: Optional[str] = None,
+    beam_size: Optional[int] = None,
+    length_penalty: Optional[float] = None,
+    patience: Optional[float] = None,
+    duration_reward: Optional[float] = None,
+    sentence_max_words: Optional[int] = None,
+    sentence_silence_gap: Optional[float] = None,
+    sentence_max_duration: Optional[float] = None,
+) -> Union[str, dict[str, Any]]:
     """
     Transcribe audio using Parakeet MLX model.
 
@@ -231,8 +436,9 @@ def transcribe_with_parakeet_mlx(
     Returns:
         Transcribed text string
     """
+    _ = (language, batch_size)
     # Attempt to load the model first (tests may monkeypatch loader)
-    model = load_parakeet_mlx_model()
+    model = load_parakeet_mlx_model(model_path=model_path, cache_dir=cache_dir)
     if model is None:
         # Preserve the original platform check semantics only when loading fails
         if not IS_MACOS:
@@ -240,37 +446,16 @@ def transcribe_with_parakeet_mlx(
         return "[Error: Failed to load Parakeet MLX model]"
 
     try:
-        import soundfile as sf
-
         # Handle different input types
-        audio_file_path = None
+        audio_file_path: Optional[str] = None
+        audio_np: Optional[np.ndarray] = None
 
         if isinstance(audio_data, (str, Path)):
             # Already a file path
             audio_path = Path(audio_data)
             if not audio_path.exists():
                 return f"[Error: Audio file not found: {audio_path}]"
-
-            # Check if we need to resample
-            audio_np, file_sr = sf.read(str(audio_path))
-
-            # Convert to mono if stereo
-            if len(audio_np.shape) > 1:
-                audio_np = np.mean(audio_np, axis=1)
-
-            # Only create new file if resampling is needed
-            if file_sr != 16000:
-                import librosa
-                audio_np = librosa.resample(
-                    audio_np,
-                    orig_sr=file_sr,
-                    target_sr=16000
-                )
-                audio_data = audio_np  # Will be saved to temp file later
-            else:
-                # Can use the original file directly
-                audio_file_path = str(audio_path)
-                audio_data = None  # Clear audio_data to avoid processing it later
+            audio_file_path = str(audio_path)
 
         elif isinstance(audio_data, np.ndarray):
             # Ensure float32
@@ -284,41 +469,90 @@ def transcribe_with_parakeet_mlx(
             # Resample if needed
             if sample_rate != 16000:
                 import librosa
+
                 audio_data = librosa.resample(
-                    audio_data,
+                    audio_data,  # type: ignore[arg-type]
                     orig_sr=sample_rate,
                     target_sr=16000
                 )
+            audio_np = np.asarray(audio_data, dtype=np.float32)
         else:
             return "[Error: Invalid audio data type]"
 
         # Normalize audio to [-1, 1] range (only if we have numpy array)
-        if isinstance(audio_data, np.ndarray) and np.abs(audio_data).max() > 1.0:
-            audio_data = audio_data / np.abs(audio_data).max()
+        if isinstance(audio_np, np.ndarray) and audio_np.size > 0 and np.abs(audio_np).max() > 1.0:
+            audio_np = audio_np / np.abs(audio_np).max()
 
         # Transcribe using parakeet-mlx
         if verbose:
-            if isinstance(audio_data, np.ndarray):
-                logging.info(f"Transcribing audio of length {len(audio_data)/16000:.2f} seconds")
+            if isinstance(audio_np, np.ndarray):
+                logging.info(f"Transcribing audio of length {len(audio_np)/16000:.2f} seconds")
             else:
                 logging.info("Transcribing audio file")
 
-        transcribe_kwargs = {}
+        try:
+            from tldw_Server_API.app.core.config import get_stt_config
+
+            stt_cfg = get_stt_config() or {}
+        except Exception:
+            stt_cfg = {}
+
+        transcribe_kwargs: dict[str, Any] = {}
         if chunk_duration is not None:
             transcribe_kwargs['chunk_duration'] = chunk_duration
             transcribe_kwargs['overlap_duration'] = overlap_duration
         if chunk_callback is not None:
             transcribe_kwargs['chunk_callback'] = chunk_callback
 
+        decoding_mode = decoding_mode or str(stt_cfg.get("mlx_decoding_mode", "")).strip() or None
+        beam_size = beam_size if beam_size is not None else _safe_int(stt_cfg.get("mlx_beam_size"))
+        length_penalty = (
+            length_penalty if length_penalty is not None else _safe_float(stt_cfg.get("mlx_length_penalty"))
+        )
+        patience = patience if patience is not None else _safe_float(stt_cfg.get("mlx_patience"))
+        duration_reward = (
+            duration_reward if duration_reward is not None else _safe_float(stt_cfg.get("mlx_duration_reward"))
+        )
+        sentence_max_words = (
+            sentence_max_words
+            if sentence_max_words is not None
+            else _safe_int(stt_cfg.get("mlx_sentence_max_words"))
+        )
+        sentence_silence_gap = (
+            sentence_silence_gap
+            if sentence_silence_gap is not None
+            else _safe_float(stt_cfg.get("mlx_sentence_silence_gap"))
+        )
+        sentence_max_duration = (
+            sentence_max_duration
+            if sentence_max_duration is not None
+            else _safe_float(stt_cfg.get("mlx_sentence_max_duration"))
+        )
+
+        decoding_config = _build_decoding_config(
+            decoding_mode=decoding_mode,
+            beam_size=beam_size,
+            length_penalty=length_penalty,
+            patience=patience,
+            duration_reward=duration_reward,
+            sentence_max_words=sentence_max_words,
+            sentence_silence_gap=sentence_silence_gap,
+            sentence_max_duration=sentence_max_duration,
+        )
+        if decoding_config is not None and _supports_kwarg(model.transcribe, "decoding_config"):
+            transcribe_kwargs["decoding_config"] = decoding_config
+
         temp_audio_path: Optional[str] = None
         try:
             if audio_file_path:
                 result = model.transcribe(audio_file_path, **transcribe_kwargs)
-            elif isinstance(audio_data, np.ndarray):
+            elif isinstance(audio_np, np.ndarray):
+                import soundfile as sf
+
                 # Persist numpy audio to a temp file so downstream callers (and tests)
                 # receive a filesystem path consistently.
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-                    sf.write(tmp_file.name, audio_data, 16000, format='WAV')
+                    sf.write(tmp_file.name, audio_np, 16000, format='WAV')
                     temp_audio_path = tmp_file.name
                 result = model.transcribe(temp_audio_path, **transcribe_kwargs)
             else:
@@ -330,20 +564,14 @@ def transcribe_with_parakeet_mlx(
                 except Exception as rm_err:
                     logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
 
-        # The transcribe method returns an AlignedResult object
-        # Extract the text from it
-        transcription = result.text if hasattr(result, 'text') else result
-
-        if isinstance(transcription, dict):
-            # Handle structured output
-            text = transcription.get('text', '')
-        else:
-            # Direct text output
-            text = str(transcription)
+        artifact = _as_structured_artifact(result)
+        text = artifact["text"]
 
         if verbose:
             logging.info(f"Transcription complete: {text[:100]}...")
 
+        if return_structured:
+            return artifact
         return text
 
     except ImportError as e:
@@ -354,6 +582,97 @@ def transcribe_with_parakeet_mlx(
         logging.exception(f"Error during Parakeet MLX transcription: {e}")
         logging.exception(f"Traceback: {traceback.format_exc()}")
         return f"[Error: Transcription failed: {str(e)}]"
+
+
+@dataclass
+class ParakeetMLXStreamingSession:
+    """Thin wrapper around parakeet-mlx StreamingParakeet."""
+
+    model: Any
+    streamer: Any
+    _closed: bool = False
+
+    def add_audio(self, audio_np: np.ndarray, sample_rate: int = 16000) -> dict[str, Any]:
+        if self._closed:
+            return {"text": "", "sentences": [], "tokens": []}
+        if not isinstance(audio_np, np.ndarray):
+            return {"text": "", "sentences": [], "tokens": []}
+        if audio_np.dtype != np.float32:
+            audio_np = audio_np.astype(np.float32)
+        if audio_np.ndim > 1:
+            audio_np = np.mean(audio_np, axis=1).astype(np.float32)
+        if sample_rate != 16000:
+            import librosa
+
+            audio_np = librosa.resample(audio_np, orig_sr=sample_rate, target_sr=16000)
+        if audio_np.size == 0:
+            return {"text": "", "sentences": [], "tokens": []}
+
+        import mlx.core as mx
+
+        self.streamer.add_audio(mx.array(audio_np, dtype=mx.float32))
+        return _as_structured_artifact(self.streamer.result)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.streamer.__exit__(None, None, None)
+        except Exception as exc:
+            logging.debug(f"Parakeet MLX streaming session close warning: {exc}")
+
+
+def create_parakeet_mlx_streaming_session(
+    *,
+    model_path: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    context_size: tuple[int, int] = (256, 256),
+    depth: int = 1,
+    keep_original_attention: bool = False,
+    decoding_mode: Optional[str] = None,
+    beam_size: Optional[int] = None,
+    length_penalty: Optional[float] = None,
+    patience: Optional[float] = None,
+    duration_reward: Optional[float] = None,
+    sentence_max_words: Optional[int] = None,
+    sentence_silence_gap: Optional[float] = None,
+    sentence_max_duration: Optional[float] = None,
+) -> Optional[ParakeetMLXStreamingSession]:
+    model = load_parakeet_mlx_model(model_path=model_path, cache_dir=cache_dir)
+    if model is None:
+        return None
+    if not hasattr(model, "transcribe_stream"):
+        logging.warning("Loaded Parakeet MLX model does not expose transcribe_stream; streaming session unavailable")
+        return None
+
+    try:
+        decoding_config = _build_decoding_config(
+            decoding_mode=decoding_mode,
+            beam_size=beam_size,
+            length_penalty=length_penalty,
+            patience=patience,
+            duration_reward=duration_reward,
+            sentence_max_words=sentence_max_words,
+            sentence_silence_gap=sentence_silence_gap,
+            sentence_max_duration=sentence_max_duration,
+        )
+        stream_kwargs: dict[str, Any] = {
+            "context_size": context_size,
+            "depth": depth,
+        }
+        if decoding_config is not None and _supports_kwarg(model.transcribe_stream, "decoding_config"):
+            stream_kwargs["decoding_config"] = decoding_config
+        if _supports_kwarg(model.transcribe_stream, "keep_original_attention"):
+            stream_kwargs["keep_original_attention"] = keep_original_attention
+
+        streamer = model.transcribe_stream(**stream_kwargs)
+        if hasattr(streamer, "__enter__"):
+            streamer = streamer.__enter__()
+        return ParakeetMLXStreamingSession(model=model, streamer=streamer)
+    except Exception as exc:
+        logging.warning(f"Failed to create Parakeet MLX streaming session: {exc}")
+        return None
 
 
 def transcribe_streaming_mlx(
@@ -378,10 +697,12 @@ def transcribe_streaming_mlx(
         yield "[Error: Parakeet MLX is only supported on macOS]"
         return
 
-    model = load_parakeet_mlx_model()
-    if model is None:
-        yield "[Error: Failed to load model]"
-        return
+    session = create_parakeet_mlx_streaming_session()
+    if session is None:
+        model = load_parakeet_mlx_model()
+        if model is None:
+            yield "[Error: Failed to load model]"
+            return
 
     buffer = np.array([], dtype=np.float32)
     overlap_size = int(chunk_size * overlap)
@@ -397,11 +718,15 @@ def transcribe_streaming_mlx(
                 chunk = buffer[:chunk_size]
 
                 # Transcribe chunk
-                text = transcribe_with_parakeet_mlx(
-                    chunk,
-                    sample_rate=16000,
-                    verbose=verbose
-                )
+                if session is not None:
+                    artifact = session.add_audio(chunk, sample_rate=16000)
+                    text = artifact.get("text", "")
+                else:
+                    text = transcribe_with_parakeet_mlx(
+                        chunk,
+                        sample_rate=16000,
+                        verbose=verbose
+                    )
 
                 if text and not text.startswith("[Error"):
                     yield text
@@ -411,17 +736,24 @@ def transcribe_streaming_mlx(
 
         # Process remaining buffer
         if len(buffer) > 0:
-            text = transcribe_with_parakeet_mlx(
-                buffer,
-                sample_rate=16000,
-                verbose=verbose
-            )
+            if session is not None:
+                artifact = session.add_audio(buffer, sample_rate=16000)
+                text = artifact.get("text", "")
+            else:
+                text = transcribe_with_parakeet_mlx(
+                    buffer,
+                    sample_rate=16000,
+                    verbose=verbose
+                )
             if text and not text.startswith("[Error"):
                 yield text
 
     except Exception as e:
         logging.exception(f"Error in streaming transcription: {e}")
         yield f"[Error: {str(e)}]"
+    finally:
+        if session is not None:
+            session.close()
 
 
 def unload_parakeet_mlx_model():

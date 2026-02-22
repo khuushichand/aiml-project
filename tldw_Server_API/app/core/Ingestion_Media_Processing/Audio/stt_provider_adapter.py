@@ -249,7 +249,11 @@ class FasterWhisperAdapter(SttProviderAdapter):
         segments_list, detected_lang = result
         # Strip Whisper metadata header so callers see only user content
         segments_for_response = strip_whisper_metadata_header(segments_list)
-        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_for_response if isinstance(seg, dict))
+        text = " ".join(
+            str(seg.get("Text") or seg.get("text") or "").strip()
+            for seg in segments_for_response
+            if isinstance(seg, dict)
+        )
 
         return {
             "text": text,
@@ -320,7 +324,11 @@ class ParakeetAdapter(SttProviderAdapter):
             base_dir=base_dir,
             cancel_check=cancel_check,
         )
-        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
+        text = " ".join(
+            str(seg.get("Text") or seg.get("text") or "").strip()
+            for seg in segments_list
+            if isinstance(seg, dict)
+        )
         return {
             "text": text,
             "language": language or lang,
@@ -461,7 +469,11 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             base_dir=base_dir,
             cancel_check=cancel_check,
         )
-        text = " ".join(str(seg.get("Text", "")).strip() for seg in segments_list if isinstance(seg, dict))
+        text = " ".join(
+            str(seg.get("Text") or seg.get("text") or "").strip()
+            for seg in segments_list
+            if isinstance(seg, dict)
+        )
         return {
             "text": text,
             "language": language or lang,

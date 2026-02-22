@@ -19,12 +19,264 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 from loguru import logger
 
 logger = logger
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = -1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _token_from_mapping(token: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(token, dict):
+        return None
+    text = str(token.get("text", "") or "")
+    start = _safe_float(token.get("start"), 0.0)
+    end = _safe_float(token.get("end"), start)
+    if end < start:
+        end = start
+    duration = _safe_float(token.get("duration"), max(end - start, 0.0))
+    token_id = _safe_int(token.get("id"), -1)
+    if token_id < 0:
+        token_id = _safe_int(token.get("token_id"), -1)
+    return {
+        "id": token_id,
+        "text": text,
+        "start": start,
+        "end": end,
+        "duration": duration,
+        "confidence": _safe_float(token.get("confidence"), 1.0),
+    }
+
+
+def _extract_tokens_from_mlx_artifact(artifact: Any) -> list[dict[str, Any]]:
+    if not isinstance(artifact, dict):
+        return []
+    tokens: list[dict[str, Any]] = []
+    raw_tokens = artifact.get("tokens")
+    if isinstance(raw_tokens, list):
+        for token in raw_tokens:
+            token_norm = _token_from_mapping(token)
+            if token_norm is not None:
+                tokens.append(token_norm)
+    if tokens:
+        return tokens
+
+    raw_sentences = artifact.get("sentences")
+    if isinstance(raw_sentences, list):
+        for sentence in raw_sentences:
+            if not isinstance(sentence, dict):
+                continue
+            for token in sentence.get("tokens", []):
+                token_norm = _token_from_mapping(token)
+                if token_norm is not None:
+                    tokens.append(token_norm)
+    return tokens
+
+
+def _token_match(a: dict[str, Any], b: dict[str, Any], overlap_duration: float) -> bool:
+    return (
+        _safe_int(a.get("id"), -1) >= 0
+        and _safe_int(a.get("id"), -1) == _safe_int(b.get("id"), -1)
+        and abs(_safe_float(a.get("start")) - _safe_float(b.get("start"))) < (overlap_duration / 2.0)
+    )
+
+
+def _merge_tokens_midpoint(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not existing:
+        return incoming
+    if not incoming:
+        return existing
+    cutoff_time = (_safe_float(existing[-1].get("end")) + _safe_float(incoming[0].get("start"))) / 2.0
+    return [token for token in existing if _safe_float(token.get("end")) <= cutoff_time] + [
+        token for token in incoming if _safe_float(token.get("start")) >= cutoff_time
+    ]
+
+
+def _merge_tokens_longest_contiguous(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+    *,
+    overlap_duration: float,
+) -> list[dict[str, Any]]:
+    if not existing or not incoming:
+        return incoming if not existing else existing
+
+    existing_end = _safe_float(existing[-1].get("end"))
+    incoming_start = _safe_float(incoming[0].get("start"))
+    if existing_end <= incoming_start:
+        return existing + incoming
+
+    overlap_existing = [
+        token for token in existing if _safe_float(token.get("end")) > incoming_start - overlap_duration
+    ]
+    overlap_incoming = [
+        token for token in incoming if _safe_float(token.get("start")) < existing_end + overlap_duration
+    ]
+    enough_pairs = len(overlap_existing) // 2
+    if len(overlap_existing) < 2 or len(overlap_incoming) < 2:
+        return _merge_tokens_midpoint(existing, incoming)
+
+    best_contiguous: list[tuple[int, int]] = []
+    for i in range(len(overlap_existing)):
+        for j in range(len(overlap_incoming)):
+            if _token_match(overlap_existing[i], overlap_incoming[j], overlap_duration):
+                current: list[tuple[int, int]] = []
+                k, l = i, j
+                while (
+                    k < len(overlap_existing)
+                    and l < len(overlap_incoming)
+                    and _token_match(overlap_existing[k], overlap_incoming[l], overlap_duration)
+                ):
+                    current.append((k, l))
+                    k += 1
+                    l += 1
+                if len(current) > len(best_contiguous):
+                    best_contiguous = current
+
+    if len(best_contiguous) < enough_pairs or not best_contiguous:
+        return _merge_tokens_midpoint(existing, incoming)
+
+    existing_overlap_start_idx = len(existing) - len(overlap_existing)
+    overlap_indices_existing = [existing_overlap_start_idx + pair[0] for pair in best_contiguous]
+    overlap_indices_incoming = [pair[1] for pair in best_contiguous]
+
+    merged: list[dict[str, Any]] = []
+    merged.extend(existing[: overlap_indices_existing[0]])
+    for idx in range(len(best_contiguous)):
+        idx_existing = overlap_indices_existing[idx]
+        idx_incoming = overlap_indices_incoming[idx]
+        merged.append(existing[idx_existing])
+        if idx < len(best_contiguous) - 1:
+            next_existing = overlap_indices_existing[idx + 1]
+            next_incoming = overlap_indices_incoming[idx + 1]
+            gap_existing = existing[idx_existing + 1 : next_existing]
+            gap_incoming = incoming[idx_incoming + 1 : next_incoming]
+            merged.extend(gap_incoming if len(gap_incoming) > len(gap_existing) else gap_existing)
+    merged.extend(incoming[overlap_indices_incoming[-1] + 1 :])
+    return merged
+
+
+def _merge_tokens_longest_common_subsequence(
+    existing: list[dict[str, Any]],
+    incoming: list[dict[str, Any]],
+    *,
+    overlap_duration: float,
+) -> list[dict[str, Any]]:
+    if not existing or not incoming:
+        return incoming if not existing else existing
+
+    existing_end = _safe_float(existing[-1].get("end"))
+    incoming_start = _safe_float(incoming[0].get("start"))
+    if existing_end <= incoming_start:
+        return existing + incoming
+
+    overlap_existing = [
+        token for token in existing if _safe_float(token.get("end")) > incoming_start - overlap_duration
+    ]
+    overlap_incoming = [
+        token for token in incoming if _safe_float(token.get("start")) < existing_end + overlap_duration
+    ]
+    if len(overlap_existing) < 2 or len(overlap_incoming) < 2:
+        return _merge_tokens_midpoint(existing, incoming)
+
+    dp = [[0 for _ in range(len(overlap_incoming) + 1)] for _ in range(len(overlap_existing) + 1)]
+    for i in range(1, len(overlap_existing) + 1):
+        for j in range(1, len(overlap_incoming) + 1):
+            if _token_match(overlap_existing[i - 1], overlap_incoming[j - 1], overlap_duration):
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+
+    pairs: list[tuple[int, int]] = []
+    i = len(overlap_existing)
+    j = len(overlap_incoming)
+    while i > 0 and j > 0:
+        if _token_match(overlap_existing[i - 1], overlap_incoming[j - 1], overlap_duration):
+            pairs.append((i - 1, j - 1))
+            i -= 1
+            j -= 1
+        elif dp[i - 1][j] > dp[i][j - 1]:
+            i -= 1
+        else:
+            j -= 1
+
+    pairs.reverse()
+    if not pairs:
+        return _merge_tokens_midpoint(existing, incoming)
+
+    existing_overlap_start_idx = len(existing) - len(overlap_existing)
+    overlap_indices_existing = [existing_overlap_start_idx + pair[0] for pair in pairs]
+    overlap_indices_incoming = [pair[1] for pair in pairs]
+
+    merged: list[dict[str, Any]] = []
+    merged.extend(existing[: overlap_indices_existing[0]])
+    for idx in range(len(pairs)):
+        idx_existing = overlap_indices_existing[idx]
+        idx_incoming = overlap_indices_incoming[idx]
+        merged.append(existing[idx_existing])
+        if idx < len(pairs) - 1:
+            next_existing = overlap_indices_existing[idx + 1]
+            next_incoming = overlap_indices_incoming[idx + 1]
+            gap_existing = existing[idx_existing + 1 : next_existing]
+            gap_incoming = incoming[idx_incoming + 1 : next_incoming]
+            merged.extend(gap_incoming if len(gap_incoming) > len(gap_existing) else gap_existing)
+    merged.extend(incoming[overlap_indices_incoming[-1] + 1 :])
+    return merged
+
+
+def _tokens_to_sentence_dicts(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not tokens:
+        return []
+    sentences: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for token in tokens:
+        current.append(token)
+        token_text = str(token.get("text", ""))
+        is_sentence_boundary = any(symbol in token_text for symbol in ("!", "?", "。", "？", "！")) or "." in token_text
+        if is_sentence_boundary:
+            sentences.append(current)
+            current = []
+    if current:
+        sentences.append(current)
+
+    out: list[dict[str, Any]] = []
+    for sentence_tokens in sentences:
+        text = "".join(str(token.get("text", "")) for token in sentence_tokens).strip()
+        if not text:
+            continue
+        start = _safe_float(sentence_tokens[0].get("start"))
+        end = _safe_float(sentence_tokens[-1].get("end"), start)
+        confidences = np.array([max(_safe_float(token.get("confidence"), 1.0), 1e-10) for token in sentence_tokens])
+        confidence = float(np.exp(np.mean(np.log(confidences)))) if confidences.size else 1.0
+        out.append(
+            {
+                "text": text,
+                "start": start,
+                "end": max(end, start),
+                "duration": max(end - start, 0.0),
+                "confidence": confidence,
+                "tokens": sentence_tokens,
+            }
+        )
+    return out
 
 
 class MergeAlgorithm(Enum):
@@ -378,8 +630,20 @@ def transcribe_long_audio(
     total_buffer: Optional[float] = None,
     merge_algo: str = 'middle',
     device: str = 'cpu',
-    progress_callback: Optional[Callable[[int, int], None]] = None
-) -> str:
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    *,
+    return_structured: bool = False,
+    model_path: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    decoding_mode: Optional[str] = None,
+    beam_size: Optional[int] = None,
+    length_penalty: Optional[float] = None,
+    patience: Optional[float] = None,
+    duration_reward: Optional[float] = None,
+    sentence_max_words: Optional[int] = None,
+    sentence_silence_gap: Optional[float] = None,
+    sentence_max_duration: Optional[float] = None,
+) -> Union[str, dict[str, Any]]:
     """
     Transcribe long audio files using buffered/chunked processing.
 
@@ -428,13 +692,27 @@ def transcribe_long_audio(
         transcriber = BufferedTranscriber(config)
 
     # Create transcribe function
-    def transcribe_chunk(chunk_audio: np.ndarray) -> str:
+    def transcribe_chunk(chunk_audio: np.ndarray) -> Union[str, dict[str, Any]]:
         # Import appropriate transcription function
         if variant == 'mlx':
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
                 transcribe_with_parakeet_mlx,
             )
-            return transcribe_with_parakeet_mlx(chunk_audio, sample_rate=16000)
+            return transcribe_with_parakeet_mlx(
+                chunk_audio,
+                sample_rate=16000,
+                return_structured=return_structured,
+                model_path=model_path,
+                cache_dir=cache_dir,
+                decoding_mode=decoding_mode,
+                beam_size=beam_size,
+                length_penalty=length_penalty,
+                patience=patience,
+                duration_reward=duration_reward,
+                sentence_max_words=sentence_max_words,
+                sentence_silence_gap=sentence_silence_gap,
+                sentence_max_duration=sentence_max_duration,
+            )
         elif variant == 'onnx':
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
                 transcribe_with_parakeet_onnx,
@@ -451,15 +729,83 @@ def transcribe_long_audio(
                 variant=variant
             )
 
-    # Process audio
-    result = transcriber.process_audio(
+    if variant == "mlx" and return_structured:
+        chunks = transcriber._create_chunks(audio_data)
+        total_chunks = len(chunks)
+        merged_tokens: list[dict[str, Any]] = []
+        fallback_text_chunks: list[str] = []
+
+        for idx, chunk in enumerate(chunks):
+            chunk_result = transcribe_chunk(chunk["audio"])
+            if progress_callback:
+                progress_callback(idx + 1, total_chunks)
+
+            if isinstance(chunk_result, dict):
+                tokens = _extract_tokens_from_mlx_artifact(chunk_result)
+                if tokens:
+                    chunk_start = _safe_float(chunk.get("start"), 0.0)
+                    for token in tokens:
+                        token["start"] = _safe_float(token.get("start"), 0.0) + chunk_start
+                        token["end"] = _safe_float(token.get("end"), token["start"]) + chunk_start
+                        if token["end"] < token["start"]:
+                            token["end"] = token["start"]
+                        token["duration"] = max(token["end"] - token["start"], 0.0)
+
+                    if not merged_tokens:
+                        merged_tokens = tokens
+                    else:
+                        overlap_for_merge = max(
+                            _safe_float(chunk.get("overlap_start"), 0.0),
+                            _safe_float(chunk.get("overlap_end"), 0.0),
+                            0.0,
+                        )
+                        if config.merge_algo == MergeAlgorithm.LCS:
+                            merged_tokens = _merge_tokens_longest_common_subsequence(
+                                merged_tokens,
+                                tokens,
+                                overlap_duration=overlap_for_merge,
+                            )
+                        elif config.merge_algo == MergeAlgorithm.SIMPLE:
+                            merged_tokens.extend(tokens)
+                        else:
+                            merged_tokens = _merge_tokens_longest_contiguous(
+                                merged_tokens,
+                                tokens,
+                                overlap_duration=overlap_for_merge,
+                            )
+                else:
+                    chunk_text = str(chunk_result.get("text", "")).strip()
+                    if chunk_text:
+                        fallback_text_chunks.append(chunk_text)
+            else:
+                chunk_text = str(chunk_result).strip()
+                if chunk_text:
+                    fallback_text_chunks.append(chunk_text)
+
+        if merged_tokens:
+            sentences = _tokens_to_sentence_dicts(merged_tokens)
+            text = "".join(str(token.get("text", "")) for token in merged_tokens).strip()
+            if not text and sentences:
+                text = " ".join(str(sentence.get("text", "")) for sentence in sentences).strip()
+            return {
+                "text": text,
+                "sentences": sentences,
+                "tokens": merged_tokens,
+            }
+
+        return {
+            "text": " ".join(fallback_text_chunks).strip(),
+            "sentences": [],
+            "tokens": [],
+        }
+
+    # Process audio with legacy text merge
+    return transcriber.process_audio(
         audio_data,
         sample_rate,
         transcribe_chunk,
         progress_callback
     )
-
-    return result
 
 
 #######################################################################################################################

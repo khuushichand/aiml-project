@@ -176,6 +176,38 @@ def _stt_provider_availability(
     return "unknown"
 
 
+def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(raw_segments, list):
+        return normalized
+    for segment in raw_segments:
+        if not isinstance(segment, dict):
+            continue
+        text = str(segment.get("Text") or segment.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = float(segment.get("start_seconds", segment.get("start", 0.0)) or 0.0)
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+            start = 0.0
+        try:
+            end = float(segment.get("end_seconds", segment.get("end", start)) or start)
+        except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+            end = start
+        if end < start:
+            end = start
+        norm_seg: dict[str, Any] = {
+            "text": text,
+            "start_seconds": start,
+            "end_seconds": end,
+        }
+        words = segment.get("words")
+        if isinstance(words, list):
+            norm_seg["words"] = words
+        normalized.append(norm_seg)
+    return normalized
+
+
 _PROVIDER_LANGUAGE_HINT_POLICY: dict[str, str] = {
     "faster-whisper": "iso639_base",
     "parakeet": "iso639_base",
@@ -805,12 +837,14 @@ async def create_transcription(
                 rid,
             )
 
+        timed_segments = _normalize_timed_segments(segments_for_timing)
+
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
 
         if response_format == "srt":
             _raise_on_transcription_error(transcribed_text)
-            if provider == "faster-whisper" and segments_for_timing:
+            if timed_segments:
                 lines: list[str] = []
 
                 def _fmt_srt_timestamp(total_seconds: float) -> str:
@@ -826,12 +860,8 @@ async def create_transcription(
                     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
 
                 idx = 1
-                for seg in segments_for_timing:
-                    if not isinstance(seg, dict):
-                        continue
-                    text_seg = str(seg.get("Text", "")).strip()
-                    if not text_seg:
-                        continue
+                for seg in timed_segments:
+                    text_seg = str(seg.get("text", "")).strip()
                     start = seg.get("start_seconds", 0.0)
                     end = seg.get("end_seconds", start)
                     start_ts = _fmt_srt_timestamp(start)
@@ -852,7 +882,7 @@ async def create_transcription(
 
         if response_format == "vtt":
             _raise_on_transcription_error(transcribed_text)
-            if provider == "faster-whisper" and segments_for_timing:
+            if timed_segments:
                 lines_vtt: list[str] = ["WEBVTT", ""]
 
                 def _fmt_vtt_timestamp(total_seconds: float) -> str:
@@ -867,12 +897,8 @@ async def create_transcription(
                     minutes, seconds = divmod(seconds, 60)
                     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
 
-                for seg in segments_for_timing:
-                    if not isinstance(seg, dict):
-                        continue
-                    text_seg = str(seg.get("Text", "")).strip()
-                    if not text_seg:
-                        continue
+                for seg in timed_segments:
+                    text_seg = str(seg.get("text", "")).strip()
                     start = seg.get("start_seconds", 0.0)
                     end = seg.get("end_seconds", start)
                     start_ts = _fmt_vtt_timestamp(start)
@@ -897,18 +923,16 @@ async def create_transcription(
         response_data["duration"] = duration
 
         if "segment" in granularity_tokens:
-            if provider == "faster-whisper" and segments_for_timing:
+            if timed_segments:
                 segs = []
-                for i, seg in enumerate(segments_for_timing):
-                    if not isinstance(seg, dict):
-                        continue
+                for i, seg in enumerate(timed_segments):
                     start = float(seg.get("start_seconds", 0.0))
                     end = float(seg.get("end_seconds", duration))
                     seg_obj: dict[str, Any] = {
                         "id": i,
                         "start": start,
                         "end": end,
-                        "text": seg.get("Text", ""),
+                        "text": seg.get("text", ""),
                     }
                     if "word" in granularity_tokens and isinstance(seg.get("words"), list):
                         seg_obj["words"] = seg["words"]

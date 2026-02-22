@@ -2647,6 +2647,97 @@ def create_segments_from_text(text: str, audio_duration: float = None, segmentat
 
     return segments
 
+
+def create_segments_from_parakeet_mlx_artifact(
+    artifact: Any,
+    audio_duration: Optional[float] = None,
+) -> list[dict[str, Any]]:
+    """
+    Convert a Parakeet MLX structured artifact into whisper-compatible segments.
+
+    Expected artifact shape:
+    {
+      "text": str,
+      "sentences": [
+        {
+          "text": str,
+          "start": float,
+          "end": float,
+          "confidence": float,
+          "tokens": [{"text": str, "start": float, "end": float, ...}]
+        },
+      ],
+      "tokens": [...]
+    }
+    """
+    if not isinstance(artifact, dict):
+        text = str(artifact or "").strip()
+        return create_segments_from_text(text, audio_duration, segmentation="sentence")
+
+    text = str(artifact.get("text", "") or "").strip()
+    raw_sentences = artifact.get("sentences")
+    if not isinstance(raw_sentences, list):
+        return create_segments_from_text(text, audio_duration, segmentation="sentence")
+
+    segments: list[dict[str, Any]] = []
+    for sentence in raw_sentences:
+        if not isinstance(sentence, dict):
+            continue
+        sentence_text = str(sentence.get("text", "") or "").strip()
+        if not sentence_text:
+            continue
+
+        sentence_start = _coerce_float(sentence.get("start"))
+        sentence_end = _coerce_float(sentence.get("end"))
+        if sentence_start is None:
+            sentence_start = 0.0
+        if sentence_end is None or sentence_end < sentence_start:
+            sentence_end = sentence_start
+
+        segment: dict[str, Any] = {
+            "start_seconds": float(sentence_start),
+            "end_seconds": float(sentence_end),
+            "text": sentence_text,
+            "Text": sentence_text,
+            "start": format_time(float(sentence_start)),
+            "end": format_time(float(sentence_end)),
+            "Time_Start": float(sentence_start),
+            "Time_End": float(sentence_end),
+        }
+        sentence_confidence = _coerce_float(sentence.get("confidence"))
+        if sentence_confidence is not None:
+            segment["confidence"] = float(sentence_confidence)
+
+        raw_tokens = sentence.get("tokens")
+        words: list[dict[str, Any]] = []
+        if isinstance(raw_tokens, list):
+            for token in raw_tokens:
+                if not isinstance(token, dict):
+                    continue
+                token_text = str(token.get("text", "") or "").strip()
+                token_start = _coerce_float(token.get("start"))
+                token_end = _coerce_float(token.get("end"))
+                if not token_text or token_start is None or token_end is None:
+                    continue
+                if token_end < token_start:
+                    token_end = token_start
+                words.append(
+                    {
+                        "start": float(token_start),
+                        "end": float(token_end),
+                        "word": token_text,
+                    }
+                )
+        if words:
+            segment["words"] = words
+
+        segments.append(segment)
+
+    if not segments:
+        return create_segments_from_text(text, audio_duration, segmentation="sentence")
+    return segments
+
+
 def speech_to_text_parakeet(
     audio_file_path: str,
     variant: str = "standard",
@@ -2701,8 +2792,20 @@ def speech_to_text_parakeet(
                     stt_cfg = get_stt_config() or {}
                     raw_chunk_duration = stt_cfg.get("mlx_chunk_duration")
                     raw_overlap_duration = stt_cfg.get("mlx_overlap_duration")
+                    mlx_model_id = str(stt_cfg.get("mlx_model_id", "")).strip() or None
+                    mlx_cache_dir = str(stt_cfg.get("mlx_cache_dir", "")).strip() or None
+                    mlx_decoding_mode = str(stt_cfg.get("mlx_decoding_mode", "")).strip() or None
+                    mlx_beam_size = _coerce_int(stt_cfg.get("mlx_beam_size"))
+                    mlx_length_penalty = _coerce_float(stt_cfg.get("mlx_length_penalty"))
+                    mlx_patience = _coerce_float(stt_cfg.get("mlx_patience"))
+                    mlx_duration_reward = _coerce_float(stt_cfg.get("mlx_duration_reward"))
+                    mlx_sentence_max_words = _coerce_int(stt_cfg.get("mlx_sentence_max_words"))
+                    mlx_sentence_silence_gap = _coerce_float(stt_cfg.get("mlx_sentence_silence_gap"))
+                    mlx_sentence_max_duration = _coerce_float(stt_cfg.get("mlx_sentence_max_duration"))
 
                     chunk_duration = _coerce_float(raw_chunk_duration)
+                    if chunk_duration is None:
+                        chunk_duration = _coerce_float(stt_cfg.get("buffered_chunk_duration"))
                     if chunk_duration is None:
                         chunk_duration = 30.0
 
@@ -2710,11 +2813,23 @@ def speech_to_text_parakeet(
                     if overlap_duration is None:
                         overlap_duration = 5.0
 
+                    mlx_result: Union[str, dict[str, Any]]
                     if chunk_duration <= 0:
-                        text = transcribe_with_parakeet_mlx(
+                        mlx_result = transcribe_with_parakeet_mlx(
                             audio_file_path,
                             chunk_duration=None,
                             overlap_duration=15.0,
+                            return_structured=True,
+                            model_path=mlx_model_id,
+                            cache_dir=mlx_cache_dir,
+                            decoding_mode=mlx_decoding_mode,
+                            beam_size=mlx_beam_size,
+                            length_penalty=mlx_length_penalty,
+                            patience=mlx_patience,
+                            duration_reward=mlx_duration_reward,
+                            sentence_max_words=mlx_sentence_max_words,
+                            sentence_silence_gap=mlx_sentence_silence_gap,
+                            sentence_max_duration=mlx_sentence_max_duration,
                         )
                     else:
                         use_buffered = audio_duration is None or audio_duration > chunk_duration
@@ -2742,26 +2857,47 @@ def speech_to_text_parakeet(
                                 if total_buffer <= chunk_duration or total_buffer >= 3.0 * chunk_duration:
                                     total_buffer = None
 
-                            text = transcribe_long_audio(
+                            mlx_result = transcribe_long_audio(
                                 audio_file_path,
                                 model_name="parakeet",
                                 variant="mlx",
                                 chunk_duration=chunk_duration,
                                 total_buffer=total_buffer,
                                 merge_algo=merge_algo,
+                                return_structured=True,
+                                model_path=mlx_model_id,
+                                cache_dir=mlx_cache_dir,
+                                decoding_mode=mlx_decoding_mode,
+                                beam_size=mlx_beam_size,
+                                length_penalty=mlx_length_penalty,
+                                patience=mlx_patience,
+                                duration_reward=mlx_duration_reward,
+                                sentence_max_words=mlx_sentence_max_words,
+                                sentence_silence_gap=mlx_sentence_silence_gap,
+                                sentence_max_duration=mlx_sentence_max_duration,
                             )
                         else:
-                            text = transcribe_with_parakeet_mlx(
+                            mlx_result = transcribe_with_parakeet_mlx(
                                 audio_file_path,
                                 chunk_duration=chunk_duration,
                                 overlap_duration=overlap_duration,
+                                return_structured=True,
+                                model_path=mlx_model_id,
+                                cache_dir=mlx_cache_dir,
+                                decoding_mode=mlx_decoding_mode,
+                                beam_size=mlx_beam_size,
+                                length_penalty=mlx_length_penalty,
+                                patience=mlx_patience,
+                                duration_reward=mlx_duration_reward,
+                                sentence_max_words=mlx_sentence_max_words,
+                                sentence_silence_gap=mlx_sentence_silence_gap,
+                                sentence_max_duration=mlx_sentence_max_duration,
                             )
 
-                    if _looks_like_error_text(text):
-                        raise RuntimeError(text)
+                    if isinstance(mlx_result, str) and _looks_like_error_text(mlx_result):
+                        raise RuntimeError(mlx_result)
 
-                    # Default to sentence-level segmentation
-                    return create_segments_from_text(text, audio_duration, segmentation="sentence")
+                    return create_segments_from_parakeet_mlx_artifact(mlx_result, audio_duration)
 
             except ImportError as e:
                 logging.warning(f"Could not import Parakeet MLX: {e}. Falling back to standard.")
@@ -2862,6 +2998,10 @@ def speech_to_text_qwen2audio(
             label="Audio input path",
         )
         audio_file_path = str(audio_path)
+
+        # Validate provider availability/config before decoding audio so
+        # disabled Qwen routes can fall back cleanly without decode errors.
+        load_qwen2audio()
 
         # Load audio data
         import librosa

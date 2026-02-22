@@ -83,8 +83,13 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
     elif v == "mlx":
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
+                create_parakeet_mlx_streaming_session as _create_mlx_stream,
                 transcribe_with_parakeet_mlx as _tx_mlx,
             )
+
+            session = _create_mlx_stream()
+            last_audio = np.array([], dtype=np.float32)
+            last_text = ""
 
             def _fn(audio_np: np.ndarray, sr: int) -> str:
                 """
@@ -93,7 +98,43 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
                 Returns:
                     The transcription text produced by the MLX model.
                 """
-                return _tx_mlx(audio_np, sample_rate=sr)
+                nonlocal session, last_audio, last_text
+                if session is None:
+                    return _tx_mlx(audio_np, sample_rate=sr)
+
+                try:
+                    audio_arr = np.asarray(audio_np, dtype=np.float32).flatten()
+                except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
+                    return _tx_mlx(audio_np, sample_rate=sr)
+
+                if audio_arr.size == 0:
+                    return last_text
+
+                if (
+                    last_audio.size > 0
+                    and audio_arr.size >= last_audio.size
+                    and np.array_equal(audio_arr[: last_audio.size], last_audio)
+                ):
+                    delta = audio_arr[last_audio.size :]
+                else:
+                    # Audio buffer was rewound/trimmed (final chunk consume path).
+                    # Reset session and continue from current window.
+                    try:
+                        session.close()
+                    except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
+                        pass
+                    session = _create_mlx_stream()
+                    if session is None:
+                        return _tx_mlx(audio_arr, sample_rate=sr)
+                    delta = audio_arr
+
+                last_audio = audio_arr
+                if delta.size == 0:
+                    return last_text
+
+                artifact = session.add_audio(delta, sample_rate=sr)
+                last_text = str((artifact or {}).get("text", "")).strip()
+                return last_text
 
             return _fn
         except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:

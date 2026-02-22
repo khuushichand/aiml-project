@@ -46,6 +46,18 @@ from .Audio_Transcription_Nemo import (
     transcribe_with_canary,
     transcribe_with_parakeet,
 )
+try:  # pragma: no cover - optional on non-macOS or minimal test envs
+    from .Audio_Transcription_Parakeet_MLX import (
+        create_parakeet_mlx_streaming_session,
+        transcribe_with_parakeet_mlx,
+    )
+except Exception:  # pragma: no cover - provide safe fallbacks
+    def create_parakeet_mlx_streaming_session(*_args, **_kwargs):  # type: ignore[override]
+        return None
+
+    def transcribe_with_parakeet_mlx(*_args, **_kwargs):  # type: ignore[override]
+        return ""
+
 from .model_utils import normalize_model_and_variant
 
 _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS = (
@@ -1253,6 +1265,9 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         self._rnnt_streamer: Optional[_ParakeetRNNTStreamer] = None
         self._rnnt_last_partial: str = ""
         self._rnnt_last_final: str = ""
+        self._mlx_stream_session: Any = None
+        self._mlx_last_partial: str = ""
+        self._mlx_last_final: str = ""
 
         if variant == 'mlx':
             # MLX model is loaded on-demand in transcribe function
@@ -1263,6 +1278,69 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 )
                 logger.info("Using Parakeet MLX variant (lazy loading)")
                 self.model = "mlx"  # Placeholder to indicate MLX is ready
+                try:
+                    from tldw_Server_API.app.core.config import get_stt_config
+
+                    stt_cfg = get_stt_config() or {}
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    stt_cfg = {}
+
+                def _cfg_int(key: str, default: int) -> int:
+                    try:
+                        value = stt_cfg.get(key, default)
+                        return int(value)
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                        return default
+
+                def _cfg_float(key: str, default: float) -> float:
+                    try:
+                        value = stt_cfg.get(key, default)
+                        return float(value)
+                    except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                        return default
+
+                def _cfg_str(key: str) -> Optional[str]:
+                    value = stt_cfg.get(key)
+                    if value is None:
+                        return None
+                    value_str = str(value).strip()
+                    return value_str if value_str else None
+
+                def _cfg_bool(key: str, default: bool = False) -> bool:
+                    value = stt_cfg.get(key)
+                    if value is None:
+                        return default
+                    if isinstance(value, bool):
+                        return value
+                    value_str = str(value).strip().lower()
+                    if value_str in {"1", "true", "yes", "on"}:
+                        return True
+                    if value_str in {"0", "false", "no", "off"}:
+                        return False
+                    return default
+
+                self._mlx_stream_session = create_parakeet_mlx_streaming_session(
+                    model_path=_cfg_str("mlx_model_id"),
+                    cache_dir=_cfg_str("mlx_cache_dir"),
+                    context_size=(
+                        _cfg_int("mlx_stream_context_left", 256),
+                        _cfg_int("mlx_stream_context_right", 256),
+                    ),
+                    depth=max(_cfg_int("mlx_stream_depth", 1), 1),
+                    keep_original_attention=_cfg_bool("mlx_stream_keep_original_attention", False),
+                    decoding_mode=_cfg_str("mlx_decoding_mode"),
+                    beam_size=_cfg_int("mlx_beam_size", 0) or None,
+                    length_penalty=_cfg_float("mlx_length_penalty", 0.0) if stt_cfg.get("mlx_length_penalty") is not None else None,
+                    patience=_cfg_float("mlx_patience", 0.0) if stt_cfg.get("mlx_patience") is not None else None,
+                    duration_reward=_cfg_float("mlx_duration_reward", 0.0) if stt_cfg.get("mlx_duration_reward") is not None else None,
+                    sentence_max_words=_cfg_int("mlx_sentence_max_words", 0) or None,
+                    sentence_silence_gap=_cfg_float("mlx_sentence_silence_gap", 0.0) if stt_cfg.get("mlx_sentence_silence_gap") is not None else None,
+                    sentence_max_duration=_cfg_float("mlx_sentence_max_duration", 0.0) if stt_cfg.get("mlx_sentence_max_duration") is not None else None,
+                )
+                if self._mlx_stream_session is not None:
+                    logger.info("Initialized Parakeet MLX native streaming session")
+                else:
+                    logger.info("Parakeet MLX native streaming unavailable; using legacy chunk decode path")
                 return  # Success
             except ImportError as e:
                 logger.error(f"Failed to import Parakeet MLX: {e}")
@@ -1359,6 +1437,15 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         # Clear RNNT-specific tracking so partial/final comparisons start fresh
         self._rnnt_last_partial = ""
         self._rnnt_last_final = ""
+        mlx_session = getattr(self, "_mlx_stream_session", None)
+        if mlx_session is not None and hasattr(mlx_session, "close"):
+            try:
+                mlx_session.close()
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                pass
+        self._mlx_stream_session = None
+        self._mlx_last_partial = ""
+        self._mlx_last_final = ""
 
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
@@ -1440,6 +1527,72 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
 
             return None
 
+        if self.config.model_variant == "mlx" and self._mlx_stream_session is not None:
+            try:
+                artifact = self._mlx_stream_session.add_audio(audio_np, sample_rate=self.config.sample_rate)
+                full_text = str((artifact or {}).get("text", "")).strip()
+            except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as mlx_stream_err:
+                logger.warning(f"Parakeet MLX native streaming failed, falling back to legacy chunking: {mlx_stream_err}")
+                try:
+                    self._mlx_stream_session.close()
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    pass
+                self._mlx_stream_session = None
+                full_text = ""
+
+            if full_text:
+                try:
+                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+
+                    full_text = postprocess_text_if_enabled(full_text)
+                except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                    pass
+
+            if (
+                self.config.enable_partial
+                and current_time - self.last_partial_time > self.config.partial_interval
+                and buffer_duration > max(self.config.min_partial_duration, 0.1)
+                and full_text
+                and full_text != self._mlx_last_partial
+            ):
+                self._mlx_last_partial = full_text
+                self.last_partial_time = current_time
+                metadata = self._prepare_partial_metadata(buffer_duration)
+                result = {
+                    "type": "partial",
+                    "text": full_text,
+                    "timestamp": current_time,
+                    "is_final": False,
+                    "model": f"parakeet-{self.config.model_variant}",
+                }
+                result.update(metadata)
+                return result
+
+            if buffer_duration >= self.config.chunk_duration:
+                audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
+                if audio_chunk is not None:
+                    self.buffer.consume(
+                        self.config.chunk_duration,
+                        self.config.overlap_duration
+                    )
+                    if full_text and full_text != self._mlx_last_final:
+                        self._mlx_last_final = full_text
+                        self.transcription_history.append(full_text)
+                        chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                        metadata = self._prepare_final_metadata(chunk_duration)
+                        result = {
+                            "type": "final",
+                            "text": full_text,
+                            "timestamp": current_time,
+                            "is_final": True,
+                            "model": f"parakeet-{self.config.model_variant}",
+                        }
+                        result.update(metadata)
+                        result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                        return result
+
+            return None
+
         # Check if we should send a partial result
         if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
@@ -1450,8 +1603,6 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
             if audio_for_partial is not None and len(audio_for_partial) > 0:
                 # Transcribe partial audio
                 if self.config.model_variant == 'mlx':
-                    # Use MLX implementation
-                    from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
                     text = transcribe_with_parakeet_mlx(
                         audio_for_partial,
                         sample_rate=self.config.sample_rate
@@ -1492,7 +1643,6 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
             if audio_chunk is not None:
                 # Transcribe the chunk
                 if self.config.model_variant == 'mlx':
-                    from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
                     text = transcribe_with_parakeet_mlx(
                         audio_chunk,
                         sample_rate=self.config.sample_rate
