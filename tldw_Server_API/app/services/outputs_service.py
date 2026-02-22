@@ -677,6 +677,8 @@ def group_items(
             mode = rule.get("match_mode", "exact")
             for item in items:
                 item_id = id(item)
+                if item_id in matched_ids:
+                    continue
                 if field == "tag":
                     values = [str(t) for t in (item.get("tags") or [])]
                 else:
@@ -849,7 +851,7 @@ async def generate_briefing_summary(
                 ),
             )
 
-    if len(items) <= max_items_for_direct:
+    if 0 < len(items) <= max_items_for_direct:
         # Direct: concatenate all summaries, one LLM call
         texts = []
         for item in items:

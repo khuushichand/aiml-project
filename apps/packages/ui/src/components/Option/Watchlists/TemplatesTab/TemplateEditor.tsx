@@ -295,11 +295,11 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       children: (
         <div className="grid grid-cols-2 gap-4" style={{ minHeight: 300 }}>
           <div>
-            <div className="text-xs font-semibold text-text-muted mb-2">Variables</div>
+            <div className="text-xs font-semibold text-text-muted mb-2">{t("watchlists:templates.docs.variables", "Variables")}</div>
             <TemplateVariablesPanel onInsert={insertSnippet} />
           </div>
           <div>
-            <div className="text-xs font-semibold text-text-muted mb-2">Snippets</div>
+            <div className="text-xs font-semibold text-text-muted mb-2">{t("watchlists:templates.docs.snippets", "Snippets")}</div>
             <TemplateSnippetPalette
               format={formatValue === "md" ? "md" : "html"}
               onInsert={insertSnippet}

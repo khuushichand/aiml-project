@@ -50,7 +50,7 @@ export const TemplatePreviewPane: React.FC<TemplatePreviewPaneProps> = ({
     setLoading(true)
     setError(null)
     try {
-      const result = await previewWatchlistTemplate(content, selectedRunId, format)
+      const result = await previewWatchlistTemplate(content, selectedRunId, format, abortRef.current.signal)
       setLiveRendered(result.rendered)
       setWarnings(result.warnings || [])
     } catch (err: any) {

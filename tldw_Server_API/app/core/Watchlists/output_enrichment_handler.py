@@ -29,7 +29,7 @@ async def enrich_output(
     Called by Scheduler as a background task after initial output creation.
     Updates the output artifact's content and metadata in-place.
     """
-    from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import _get_collections_db_for_user_id
+    from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase as _CollectionsDB
     from tldw_Server_API.app.services.outputs_service import (
         _summarize_text_block,
         classify_items_by_topic,
@@ -40,7 +40,7 @@ async def enrich_output(
     )
 
     try:
-        collections_db = _get_collections_db_for_user_id(user_id)
+        collections_db = _CollectionsDB.for_user(user_id)
     except Exception as exc:
         logger.error(f"enrich_output: failed to get collections DB for user {user_id}: {exc}")
         return
@@ -86,24 +86,36 @@ async def enrich_output(
         return
 
     try:
-        # Phase 1: Topic grouping if requested
+        # Phase 1: Grouping
         groups = metadata.get("_groups", [])
-        if grouping_config and grouping_config.get("group_by") == "topic":
-            # We need item data -- reconstruct from metadata
+        if grouping_config and not groups:
+            group_by = grouping_config.get("group_by", "tag")
             items_data = _reconstruct_items_data(collections_db, item_ids)
-            topic_groups = await classify_items_by_topic(
-                items_data,
-                api_name=api_name,
-                model_override=model_override,
-                max_groups=grouping_config.get("max_groups", 7),
-            )
-            if topic_groups:
-                groups = topic_groups
-                metadata["grouping_status"] = "completed"
+
+            if group_by == "topic":
+                topic_groups = await classify_items_by_topic(
+                    items_data,
+                    api_name=api_name,
+                    model_override=model_override,
+                    max_groups=grouping_config.get("max_groups", 7),
+                )
+                if topic_groups:
+                    groups = topic_groups
+                    metadata["grouping_status"] = "completed"
+                else:
+                    # Fallback to tag grouping when topic classification fails
+                    groups = group_items(items_data, group_by="tag")
+                    metadata["grouping_status"] = "fallback_tag"
             else:
-                # Fallback to tag grouping
-                groups = group_items(items_data, group_by="tag")
-                metadata["grouping_status"] = "fallback_tag"
+                # Non-topic modes: tag, source, custom
+                groups = group_items(
+                    items_data,
+                    group_by=group_by,
+                    custom_rules=grouping_config.get("custom_rules"),
+                    source_name_map=grouping_config.get("source_name_map"),
+                )
+                metadata["grouping_status"] = "completed"
+
             metadata["group_count"] = len(groups)
 
         # Phase 2: Per-group summaries

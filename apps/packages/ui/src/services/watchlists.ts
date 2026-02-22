@@ -763,11 +763,13 @@ export const validateWatchlistTemplate = async (
 export const previewWatchlistTemplate = async (
   content: string,
   runId: number,
-  format: "md" | "html" = "md"
+  format: "md" | "html" = "md",
+  signal?: AbortSignal
 ): Promise<TemplatePreviewResult> => {
   return bgRequest<TemplatePreviewResult>({
     path: "/api/v1/watchlists/templates/preview" as any,
     method: "POST",
-    body: { content, format, run_id: runId }
+    body: { content, format, run_id: runId },
+    abortSignal: signal
   })
 }
