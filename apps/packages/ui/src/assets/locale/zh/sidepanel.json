@@ -200,5 +200,16 @@
       "html": "HTML",
       "xml": "XML"
     }
+  },
+  "persona": {
+    "unsavedStateDiscardPrompt": "你有未保存的状态文档更改。要丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptConnect": "你有未保存的状态文档更改。要连接并丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptDisconnect": "你有未保存的状态文档更改。要断开连接并丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptReloadState": "你有未保存的状态文档更改。要加载状态并丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptPersonaSwitch": "你有未保存的状态文档更改。要切换人设并丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptSessionSwitch": "你有未保存的状态文档更改。要切换会话并丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptRestoreState": "你有未保存的状态文档更改。要恢复此状态版本并丢弃本地草稿吗？",
+    "unsavedStateDiscardPromptRouteTransition": "你有未保存的状态文档更改。要离开此页面并丢弃本地草稿吗？",
+    "unsavedStateBeforeUnloadPrompt": "你有未保存的状态文档更改。要在不保存的情况下离开此页面吗？"
   }
 }

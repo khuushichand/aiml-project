@@ -13,6 +13,8 @@ import type {
   PromptRowVM
 } from "./prompt-workspace-types"
 
+export type PromptTableDensity = "comfortable" | "compact" | "dense"
+
 type PromptListTableV1Props = {
   mode?: "v1"
   rows: PromptRowVM[]
@@ -40,6 +42,7 @@ type PromptListTableV1Props = {
   overflowIndicatorTestId?: string
   rowTestIdPrefix?: string
   paginationShowTotal?: (total: number, range: [number, number]) => React.ReactNode
+  tableDensity?: PromptTableDensity
 }
 
 type PromptListTableLegacyProps = {
@@ -118,8 +121,11 @@ export const PromptListTable: React.FC<PromptListTableProps> = (props) => {
     scrollContainerTestId = "prompts-table-scroll-container",
     overflowIndicatorTestId = "prompts-table-overflow-indicator",
     rowTestIdPrefix = "prompt-row-",
-    paginationShowTotal
+    paginationShowTotal,
+    tableDensity = "comfortable"
   } = props
+
+  const tableClassName = `prompts-table prompts-table-density-${tableDensity}`
 
   const columns = React.useMemo(
     () =>
@@ -186,9 +192,10 @@ export const PromptListTable: React.FC<PromptListTableProps> = (props) => {
     <div className="relative" data-testid={tableShellTestId}>
       <div className="overflow-x-auto pb-1" data-testid={scrollContainerTestId}>
         <Table<PromptRowVM>
+          className={tableClassName}
+          size={tableDensity === "comfortable" ? "middle" : "small"}
           data-testid={tableTestId}
           loading={loading}
-          bordered
           columns={columns}
           dataSource={rows}
           rowKey={(record) => record.id}

@@ -1,7 +1,7 @@
 import React from "react"
 import { Button, Checkbox, Input, Select, Tag, Typography } from "antd"
 import { CheckCircle2, Send, XCircle } from "lucide-react"
-import { useNavigate } from "react-router-dom"
+import { useBlocker, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
@@ -91,12 +91,63 @@ type PersonaStateHistoryResponse = {
   entries?: PersonaStateHistoryEntry[]
 }
 
+type UnsavedStateDiscardReason =
+  | "generic"
+  | "connect"
+  | "disconnect"
+  | "reload_state"
+  | "persona_switch"
+  | "session_switch"
+  | "restore_state"
+  | "route_transition"
+  | "before_unload"
+
 const formatMemoryResultsLabel = (count: number) => `Memory results: ${count}`
 const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
   const candidate = String(entry.created_at || entry.last_modified || "").trim()
   if (!candidate) return 0
   const parsed = Date.parse(candidate)
   return Number.isFinite(parsed) ? parsed : 0
+}
+const PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY =
+  "sidepanel:persona:state-editor-expanded"
+const PERSONA_STATE_HISTORY_ORDER_PREF_KEY = "sidepanel:persona:state-history-order"
+
+const _readBoolPreference = (key: string, fallback: boolean): boolean => {
+  if (typeof window === "undefined") return fallback
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw == null) return fallback
+    const normalized = raw.trim().toLowerCase()
+    if (normalized === "true") return true
+    if (normalized === "false") return false
+  } catch {
+    // ignore storage access errors
+  }
+  return fallback
+}
+
+const _readHistoryOrderPreference = (): "newest" | "oldest" => {
+  if (typeof window === "undefined") return "newest"
+  try {
+    const raw = window.localStorage
+      .getItem(PERSONA_STATE_HISTORY_ORDER_PREF_KEY)
+      ?.trim()
+      .toLowerCase()
+    if (raw === "oldest") return "oldest"
+  } catch {
+    // ignore storage access errors
+  }
+  return "newest"
+}
+
+const _confirmWithBrowserPrompt = (message: string): boolean => {
+  if (typeof window === "undefined" || typeof window.confirm !== "function") return true
+  try {
+    return window.confirm(message)
+  } catch {
+    return true
+  }
 }
 
 const SidepanelPersona = () => {
@@ -136,9 +187,11 @@ const SidepanelPersona = () => {
   const [personaStateHistoryLoaded, setPersonaStateHistoryLoaded] =
     React.useState(false)
   const [personaStateHistoryOrder, setPersonaStateHistoryOrder] =
-    React.useState<"newest" | "oldest">("newest")
+    React.useState<"newest" | "oldest">(_readHistoryOrderPreference)
   const [personaStateEditorExpanded, setPersonaStateEditorExpanded] =
-    React.useState(true)
+    React.useState(() =>
+      _readBoolPreference(PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY, true)
+    )
   const [personaStateHistory, setPersonaStateHistory] = React.useState<
     PersonaStateHistoryEntry[]
   >([])
@@ -158,6 +211,79 @@ const SidepanelPersona = () => {
     null
   )
 
+  const getUnsavedStateDiscardPrompt = React.useCallback(
+    (reason: UnsavedStateDiscardReason): string => {
+      switch (reason) {
+        case "connect":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptConnect",
+            "You have unsaved state-doc changes. Connect and discard local drafts?"
+          )
+        case "disconnect":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptDisconnect",
+            "You have unsaved state-doc changes. Disconnect and discard local drafts?"
+          )
+        case "reload_state":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptReloadState",
+            "You have unsaved state-doc changes. Load state and discard local drafts?"
+          )
+        case "persona_switch":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptPersonaSwitch",
+            "You have unsaved state-doc changes. Switch persona and discard local drafts?"
+          )
+        case "session_switch":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptSessionSwitch",
+            "You have unsaved state-doc changes. Switch session and discard local drafts?"
+          )
+        case "restore_state":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptRestoreState",
+            "You have unsaved state-doc changes. Restore this state version and discard local drafts?"
+          )
+        case "route_transition":
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPromptRouteTransition",
+            "You have unsaved state-doc changes. Leave this page and discard local drafts?"
+          )
+        case "before_unload":
+          return t(
+            "sidepanel:persona.unsavedStateBeforeUnloadPrompt",
+            "You have unsaved state-doc changes. Leave this page without saving?"
+          )
+        case "generic":
+        default:
+          return t(
+            "sidepanel:persona.unsavedStateDiscardPrompt",
+            "You have unsaved state-doc changes. Discard local drafts?"
+          )
+      }
+    },
+    [t]
+  )
+
+  const confirmDiscardUnsavedStateDrafts = React.useCallback((reason: UnsavedStateDiscardReason = "generic"): boolean => {
+    if (
+      soulMd === savedSoulMd &&
+      identityMd === savedIdentityMd &&
+      heartbeatMd === savedHeartbeatMd
+    ) {
+      return true
+    }
+    return _confirmWithBrowserPrompt(getUnsavedStateDiscardPrompt(reason))
+  }, [
+    getUnsavedStateDiscardPrompt,
+    heartbeatMd,
+    identityMd,
+    savedHeartbeatMd,
+    savedIdentityMd,
+    savedSoulMd,
+    soulMd,
+  ])
+
   const appendLog = React.useCallback(
     (kind: PersonaLogEntry["kind"], text: string) => {
       const trimmed = String(text || "").trim()
@@ -174,7 +300,10 @@ const SidepanelPersona = () => {
     []
   )
 
-  const disconnect = React.useCallback(() => {
+  const disconnect = React.useCallback((options?: { force?: boolean }) => {
+    if (!options?.force && !confirmDiscardUnsavedStateDrafts("disconnect")) {
+      return false
+    }
     const ws = wsRef.current
     if (!ws) return
     manuallyClosingRef.current = true
@@ -188,7 +317,8 @@ const SidepanelPersona = () => {
     setActiveSessionPersonaId(null)
     setPersonaStateHistory([])
     setPersonaStateHistoryLoaded(false)
-  }, [])
+    return true
+  }, [confirmDiscardUnsavedStateDrafts])
 
   const handleIncomingPayload = React.useCallback(
     (payload: any) => {
@@ -298,6 +428,9 @@ const SidepanelPersona = () => {
       const personaId = getTargetPersonaId(personaIdOverride)
       if (!personaId) return false
       const silent = options?.silent === true
+      if (!silent && !confirmDiscardUnsavedStateDrafts("reload_state")) {
+        return false
+      }
       setPersonaStateLoading(true)
       if (!silent) {
         setError(null)
@@ -325,7 +458,7 @@ const SidepanelPersona = () => {
         setPersonaStateLoading(false)
       }
     },
-    [applyPersonaStatePayload, getTargetPersonaId]
+    [applyPersonaStatePayload, confirmDiscardUnsavedStateDrafts, getTargetPersonaId]
   )
 
   const loadPersonaStateHistory = React.useCallback(
@@ -421,6 +554,9 @@ const SidepanelPersona = () => {
       const personaId = getTargetPersonaId()
       const trimmedEntryId = String(entryId || "").trim()
       if (!personaId || !trimmedEntryId || restoringStateEntryId) return false
+      if (!confirmDiscardUnsavedStateDrafts("restore_state")) {
+        return false
+      }
       setRestoringStateEntryId(trimmedEntryId)
       setError(null)
       try {
@@ -449,6 +585,7 @@ const SidepanelPersona = () => {
     [
       appendLog,
       applyPersonaStatePayload,
+      confirmDiscardUnsavedStateDrafts,
       getTargetPersonaId,
       loadPersonaStateHistory,
       restoringStateEntryId,
@@ -457,11 +594,12 @@ const SidepanelPersona = () => {
 
   const connect = React.useCallback(async () => {
     if (connecting || connected) return
+    if (!confirmDiscardUnsavedStateDrafts("connect")) return
     setConnecting(true)
     setError(null)
 
     try {
-      disconnect()
+      disconnect({ force: true })
       setActiveSessionPersonaId(null)
       setPendingPlan(null)
       setApprovedStepMap({})
@@ -602,6 +740,7 @@ const SidepanelPersona = () => {
     }
   }, [
     appendLog,
+    confirmDiscardUnsavedStateDrafts,
     connected,
     connecting,
     disconnect,
@@ -613,15 +752,24 @@ const SidepanelPersona = () => {
 
   React.useEffect(() => {
     return () => {
-      disconnect()
+      const ws = wsRef.current
+      if (!ws) return
+      manuallyClosingRef.current = true
+      try {
+        ws.close()
+      } catch {
+        // ignore close errors
+      }
+      wsRef.current = null
     }
-  }, [disconnect])
+  }, [])
 
   const canSend = connected && Boolean(sessionId) && Boolean(input.trim())
   const hasUnsavedPersonaStateChanges =
     soulMd !== savedSoulMd ||
     identityMd !== savedIdentityMd ||
     heartbeatMd !== savedHeartbeatMd
+  const routeNavigationBlocker = useBlocker(hasUnsavedPersonaStateChanges)
   const stateDirtyLabel = hasUnsavedPersonaStateChanges
     ? t("sidepanel:persona.stateDirty", "unsaved")
     : t("sidepanel:persona.stateSaved", "saved")
@@ -643,6 +791,53 @@ const SidepanelPersona = () => {
     setIdentityMd(savedIdentityMd)
     setHeartbeatMd(savedHeartbeatMd)
   }, [savedHeartbeatMd, savedIdentityMd, savedSoulMd])
+
+  React.useEffect(() => {
+    if (routeNavigationBlocker.state !== "blocked") return
+    if (confirmDiscardUnsavedStateDrafts("route_transition")) {
+      routeNavigationBlocker.proceed()
+    } else {
+      routeNavigationBlocker.reset()
+    }
+  }, [confirmDiscardUnsavedStateDrafts, routeNavigationBlocker])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !hasUnsavedPersonaStateChanges) return
+    const promptMessage = getUnsavedStateDiscardPrompt("before_unload")
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = promptMessage
+      return promptMessage
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload)
+    }
+  }, [getUnsavedStateDiscardPrompt, hasUnsavedPersonaStateChanges])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY,
+        personaStateEditorExpanded ? "true" : "false"
+      )
+    } catch {
+      // ignore storage access errors
+    }
+  }, [personaStateEditorExpanded])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        PERSONA_STATE_HISTORY_ORDER_PREF_KEY,
+        personaStateHistoryOrder
+      )
+    } catch {
+      // ignore storage access errors
+    }
+  }, [personaStateHistoryOrder])
 
   const updatePersonaStateContextDefault = React.useCallback(
     async (nextDefault: boolean) => {
@@ -688,6 +883,26 @@ const SidepanelPersona = () => {
       personaStateContextProfileDefault,
       updatingPersonaStateContextDefault
     ]
+  )
+
+  const handlePersonaSelectionChange = React.useCallback(
+    (value: string) => {
+      const nextPersonaId = String(value || "").trim()
+      if (!nextPersonaId || nextPersonaId === selectedPersonaId) return
+      if (!confirmDiscardUnsavedStateDrafts("persona_switch")) return
+      setSelectedPersonaId(nextPersonaId)
+    },
+    [confirmDiscardUnsavedStateDrafts, selectedPersonaId]
+  )
+
+  const handleResumeSessionSelectionChange = React.useCallback(
+    (value: string) => {
+      const nextResumeSessionId = value === "__new__" ? "" : String(value)
+      if (nextResumeSessionId === resumeSessionId) return
+      if (!confirmDiscardUnsavedStateDrafts("session_switch")) return
+      setResumeSessionId(nextResumeSessionId)
+    },
+    [confirmDiscardUnsavedStateDrafts, resumeSessionId]
   )
 
   const sendUserMessage = React.useCallback(() => {
@@ -852,7 +1067,7 @@ const SidepanelPersona = () => {
             value={selectedPersonaId}
             disabled={connected}
             aria-label={t("sidepanel:persona.select", "Select persona")}
-            onChange={(value) => setSelectedPersonaId(String(value))}
+            onChange={(value) => handlePersonaSelectionChange(String(value))}
             options={catalog.map((persona) => ({
               label: persona.name || persona.id,
               value: persona.id
@@ -866,9 +1081,7 @@ const SidepanelPersona = () => {
             value={resumeSessionId || "__new__"}
             aria-label={t("sidepanel:persona.resume", "Resume session")}
             disabled={connected}
-            onChange={(value) =>
-              setResumeSessionId(value === "__new__" ? "" : String(value))
-            }
+            onChange={(value) => handleResumeSessionSelectionChange(String(value))}
             options={[
               { label: t("sidepanel:persona.newSession", "New session"), value: "__new__" },
               ...sessionHistory.map((session) => ({

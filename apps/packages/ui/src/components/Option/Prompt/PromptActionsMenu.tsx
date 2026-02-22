@@ -162,7 +162,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
   ]
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1 whitespace-nowrap">
       <Tooltip title={t("managePrompts.tooltip.edit")}>
         <button
           type="button"
@@ -170,7 +170,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
           data-testid={`prompt-edit-${promptId}`}
           onClick={onEdit}
           disabled={disabled}
-          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+          className="inline-flex items-center rounded-md border border-transparent p-1.5 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Pen className="size-4" />
         </button>
@@ -190,7 +190,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
             data-testid={`prompt-use-${promptId}`}
             onClick={onUseInChat}
             disabled={disabled}
-            className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+            className="inline-flex items-center rounded-md border border-transparent p-1.5 text-primary transition motion-reduce:transition-none hover:border-primary/30 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
           >
             <MessageCircle className="size-4" />
           </button>
@@ -207,7 +207,7 @@ export const PromptActionsMenu: React.FC<PromptActionsMenuProps> = ({
           aria-label={t("common:moreActions", { defaultValue: "More actions" })}
           data-testid={`prompt-more-${promptId}`}
           disabled={disabled}
-          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface2 disabled:opacity-50 transition-colors"
+          className="inline-flex items-center rounded-md border border-transparent p-1.5 text-text-muted transition motion-reduce:transition-none hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
         >
           <MoreHorizontal className="size-4" />
         </button>

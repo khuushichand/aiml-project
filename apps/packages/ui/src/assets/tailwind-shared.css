@@ -621,6 +621,49 @@ body {
   padding-bottom: 0.35rem;
 }
 
+/* Prompts table visual parity with characters table */
+.prompts-table .ant-table .ant-table-cell {
+  vertical-align: top;
+}
+
+.prompts-table .ant-table-thead > tr > th {
+  background: rgb(var(--color-surface-2));
+  color: rgb(var(--color-text-muted));
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+
+.prompts-table .ant-table-tbody > tr > td {
+  transition: background-color 0.15s ease;
+}
+
+.prompts-table .ant-table-tbody > tr:hover > td {
+  background: rgb(var(--color-surface-2) / 0.72);
+}
+
+.prompts-table .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: rgb(var(--color-primary) / 0.08) !important;
+}
+
+.prompts-table .ant-table-tbody > tr.ant-table-row-selected:hover > td {
+  background: rgb(var(--color-primary) / 0.14) !important;
+}
+
+.prompts-table-density-comfortable .ant-table .ant-table-cell {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+.prompts-table-density-compact .ant-table .ant-table-cell {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.prompts-table-density-dense .ant-table .ant-table-cell {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
 /* PDF Search Highlights */
 .pdf-search-match {
   background-color: rgba(255, 255, 0, 0.4) !important;

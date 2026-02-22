@@ -1,7 +1,7 @@
 import React from "react"
 import { Tag, Tooltip } from "antd"
 import type { ColumnsType } from "antd/es/table"
-import { Star } from "lucide-react"
+import { MessageCircle, Star } from "lucide-react"
 import { SyncStatusBadge } from "./SyncStatusBadge"
 import type { PromptListSortKey, PromptListSortOrder, PromptRowVM } from "./prompt-workspace-types"
 
@@ -10,6 +10,7 @@ export type PromptTableColumnLabels = {
   preview: string
   tags: string
   updated: string
+  lastUsed: string
   status: string
   actions: string
   author: string
@@ -55,20 +56,53 @@ const renderPreview = (
   labels: Pick<PromptTableColumnLabels, "system" | "user">
 ) => {
   const clampClass = isCompactViewport ? "line-clamp-1" : "line-clamp-2"
+  const labelClassName =
+    "inline-flex items-center rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-muted"
   return (
     <div className={`flex flex-col gap-1 ${isCompactViewport ? "max-w-[14rem]" : "max-w-[24rem]"}`}>
       {record.previewSystem ? (
         <div className="flex items-start gap-2">
-          <Tag color="volcano">{labels.system}</Tag>
-          <span className={clampClass}>{record.previewSystem}</span>
+          <span className={labelClassName}>{labels.system}</span>
+          <span className={`${clampClass} text-sm text-text-muted`}>
+            {record.previewSystem}
+          </span>
         </div>
       ) : null}
       {record.previewUser ? (
         <div className="flex items-start gap-2">
-          <Tag color="blue">{labels.user}</Tag>
-          <span className={clampClass}>{record.previewUser}</span>
+          <span className={labelClassName}>{labels.user}</span>
+          <span className={`${clampClass} text-sm text-text-muted`}>
+            {record.previewUser}
+          </span>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+const MAX_VISIBLE_KEYWORDS = 2
+
+const renderKeywordChips = (
+  keywords: string[],
+  promptId: string
+) => {
+  if (keywords.length === 0) return null
+
+  const visible = keywords.slice(0, MAX_VISIBLE_KEYWORDS)
+  const hidden = keywords.slice(MAX_VISIBLE_KEYWORDS)
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1">
+      {visible.map((keyword) => (
+        <Tag key={`${promptId}-${keyword}`}>{keyword}</Tag>
+      ))}
+      {hidden.length > 0 && (
+        <Tooltip title={hidden.join(", ")}>
+          <span className="cursor-help rounded-sm text-xs text-text-subtle underline-offset-2">
+            +{hidden.length}
+          </span>
+        </Tooltip>
+      )}
     </div>
   )
 }
@@ -96,6 +130,7 @@ export const buildPromptTableColumns = (
     preview: labels?.preview || "Preview",
     tags: labels?.tags || "Tags",
     updated: labels?.updated || "Updated",
+    lastUsed: labels?.lastUsed || "Last used",
     status: labels?.status || "Status",
     actions: labels?.actions || "Actions",
     author: labels?.author || "Author",
@@ -113,7 +148,7 @@ export const buildPromptTableColumns = (
       title: "",
       key: "favorite",
       dataIndex: "favorite",
-      width: 52,
+      width: 48,
       render: (_value, record) => (
         <button
           type="button"
@@ -125,10 +160,10 @@ export const buildPromptTableColumns = (
             event.stopPropagation()
             onToggleFavorite?.(record, !record.favorite)
           }}
-          className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded transition-colors ${
+          className={`inline-flex min-h-10 min-w-10 items-center justify-center rounded-md border border-transparent p-1.5 transition motion-reduce:transition-none focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg ${
             record.favorite
-              ? "text-warn"
-              : "text-text-muted hover:text-warn hover:bg-surface2"
+              ? "text-primary hover:border-primary/30 hover:bg-primary/10"
+              : "text-text-muted hover:border-border hover:bg-surface2"
           }`}
         >
           <Star className={`size-4 ${record.favorite ? "fill-current" : ""}`} />
@@ -139,15 +174,30 @@ export const buildPromptTableColumns = (
       title: resolvedLabels.title,
       dataIndex: "title",
       key: "title",
+      width: 360,
       sorter: true,
       sortOrder: sortKey === "title" ? sortOrder || undefined : undefined,
       render: (_value, record) => (
-        <div className="flex max-w-64 flex-col">
-          <span className="line-clamp-1 font-medium text-text">
-            {record.title}
-          </span>
+        <div className="flex max-w-72 flex-col gap-1">
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="line-clamp-1 min-w-0 flex-1 font-medium text-text">
+              {record.title}
+            </span>
+            {record.usageCount > 0 && (
+              <Tooltip
+                title={`${record.usageCount} ${
+                  record.usageCount === 1 ? "use" : "uses"
+                }`}
+              >
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  <MessageCircle className="size-3" />
+                  {record.usageCount > 99 ? "99+" : record.usageCount}
+                </span>
+              </Tooltip>
+            )}
+          </div>
           {record.author ? (
-            <span className="text-xs text-text-muted">
+            <span className="line-clamp-1 text-xs text-text-muted">
               {resolvedLabels.author}: {record.author}
             </span>
           ) : null}
@@ -161,6 +211,7 @@ export const buildPromptTableColumns = (
     {
       title: resolvedLabels.preview,
       key: "preview",
+      width: 320,
       render: (_value, record) => renderPreview(record, isCompactViewport, resolvedLabels)
     },
     ...(!isCompactViewport
@@ -168,18 +219,17 @@ export const buildPromptTableColumns = (
           {
             title: resolvedLabels.tags,
             key: "keywords",
+            width: 220,
             render: (_value: unknown, record: PromptRowVM) => (
-              <div className="flex max-w-64 flex-wrap gap-1">
-                {(record.keywords || []).map((keyword) => (
-                  <Tag key={`${record.id}-${keyword}`}>{keyword}</Tag>
-                ))}
+              <div className="max-w-64">
+                {renderKeywordChips(record.keywords || [], record.id)}
               </div>
             )
           },
           {
             title: resolvedLabels.updated,
             key: "modifiedAt",
-            width: 132,
+            width: 180,
             sorter: true,
             sortOrder: sortKey === "modifiedAt" ? sortOrder || undefined : undefined,
             render: (_value: unknown, record: PromptRowVM) => (
@@ -190,9 +240,17 @@ export const buildPromptTableColumns = (
                     : resolvedLabels.unknown
                 }
               >
-                <span className="text-xs text-text-muted">
-                  {formatRelativeTime(record.updatedAt)}
-                </span>
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-text">
+                    {formatRelativeTime(record.updatedAt)}
+                  </div>
+                  <div className="line-clamp-1 text-[11px] text-text-subtle">
+                    {resolvedLabels.lastUsed}:{" "}
+                    {record.lastUsedAt
+                      ? formatRelativeTime(record.lastUsedAt)
+                      : resolvedLabels.unknown}
+                  </div>
+                </div>
               </Tooltip>
             )
           },
@@ -229,7 +287,7 @@ export const buildPromptTableColumns = (
     {
       title: resolvedLabels.actions,
       key: "actions",
-      width: isCompactViewport ? 112 : 156,
+      width: 210,
       render: (_value, record) =>
         renderActions ? (
           renderActions(record)

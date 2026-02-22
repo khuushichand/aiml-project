@@ -148,4 +148,30 @@ describe("PromptActionsMenu", () => {
     await user.click(useInChatItem)
     expect(onUseInChat).toHaveBeenCalledTimes(1)
   })
+
+  it("uses characters-like action button spacing classes", () => {
+    render(
+      <PromptActionsMenu
+        promptId="p6"
+        syncStatus="local"
+        onEdit={vi.fn()}
+        onDuplicate={vi.fn()}
+        onUseInChat={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    )
+
+    const editButton = screen.getByTestId("prompt-edit-p6")
+    const useButton = screen.getByTestId("prompt-use-p6")
+    const moreButton = screen.getByTestId("prompt-more-p6")
+    const actionRow = editButton.parentElement
+
+    expect(actionRow).toHaveClass("whitespace-nowrap")
+    expect(editButton.className).toContain("p-1.5")
+    expect(useButton.className).toContain("p-1.5")
+    expect(moreButton.className).toContain("p-1.5")
+    expect(editButton.className).not.toContain("min-h-11")
+    expect(useButton.className).not.toContain("min-h-11")
+    expect(moreButton.className).not.toContain("min-h-11")
+  })
 })

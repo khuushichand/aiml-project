@@ -11,16 +11,24 @@ import {
   Tag,
   Select,
   Alert,
+  Pagination,
   type InputRef
 } from "antd"
-import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard, FolderPlus, Play } from "lucide-react"
+import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard, FolderPlus, Play, LayoutGrid, List } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
 import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
 import { ConflictResolutionModal } from "./ConflictResolutionModal"
 import { PromptBulkActionBar } from "./PromptBulkActionBar"
+import {
+  PromptGalleryCard,
+  type PromptGalleryDensity
+} from "./PromptGalleryCard"
 import { PromptInspectorPanel } from "./PromptInspectorPanel"
-import { PromptListTable } from "./PromptListTable"
+import {
+  PromptListTable,
+  type PromptTableDensity
+} from "./PromptListTable"
 import { PromptListToolbar } from "./PromptListToolbar"
 import type { PromptListQueryState, PromptRowVM } from "./prompt-workspace-types"
 import {
@@ -169,6 +177,9 @@ type LocalQuickTestPrompt = {
 }
 
 const PROMPTS_CUSTOM_SORT_STORAGE_KEY = "tldw-prompts-custom-sort-v1"
+const PROMPTS_TABLE_DENSITY_STORAGE_KEY = "tldw-prompts-table-density-v1"
+const PROMPTS_VIEW_MODE_STORAGE_KEY = "tldw-prompts-view-mode-v1"
+const PROMPTS_GALLERY_DENSITY_STORAGE_KEY = "tldw-prompts-gallery-density-v1"
 const PROMPTS_MOBILE_BREAKPOINT_PX = 768
 
 const readPromptSortState = (): PromptSortState => {
@@ -189,6 +200,45 @@ const readPromptSortState = (): PromptSortState => {
     return parsed
   } catch {
     return { key: null, order: null }
+  }
+}
+
+const readPromptTableDensity = (): PromptTableDensity => {
+  if (typeof window === "undefined") {
+    return "comfortable"
+  }
+  try {
+    const raw = window.localStorage.getItem(PROMPTS_TABLE_DENSITY_STORAGE_KEY)
+    if (raw === "compact" || raw === "dense" || raw === "comfortable") {
+      return raw
+    }
+    return "comfortable"
+  } catch {
+    return "comfortable"
+  }
+}
+
+type PromptViewMode = "table" | "gallery"
+
+const readPromptViewMode = (): PromptViewMode => {
+  if (typeof window === "undefined") return "table"
+  try {
+    const raw = window.localStorage.getItem(PROMPTS_VIEW_MODE_STORAGE_KEY)
+    if (raw === "table" || raw === "gallery") return raw
+    return "table"
+  } catch {
+    return "table"
+  }
+}
+
+const readPromptGalleryDensity = (): PromptGalleryDensity => {
+  if (typeof window === "undefined") return "rich"
+  try {
+    const raw = window.localStorage.getItem(PROMPTS_GALLERY_DENSITY_STORAGE_KEY)
+    if (raw === "rich" || raw === "compact") return raw
+    return "rich"
+  } catch {
+    return "rich"
   }
 }
 
@@ -255,6 +305,15 @@ export const PromptBody = () => {
   const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any")
   const [currentPage, setCurrentPage] = useState(1)
   const [resultsPerPage, setResultsPerPage] = useState(20)
+  const [tableDensity, setTableDensity] = useState<PromptTableDensity>(() =>
+    readPromptTableDensity()
+  )
+  const [viewMode, setViewMode] = useState<PromptViewMode>(() =>
+    readPromptViewMode()
+  )
+  const [galleryDensity, setGalleryDensity] = useState<PromptGalleryDensity>(() =>
+    readPromptGalleryDensity()
+  )
   const [promptSort, setPromptSort] = useState<PromptSortState>(() =>
     readPromptSortState()
   )
@@ -381,6 +440,46 @@ export const PromptBody = () => {
       // Ignore session storage failures in restricted browser modes.
     }
   }, [promptSort])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        PROMPTS_TABLE_DENSITY_STORAGE_KEY,
+        tableDensity
+      )
+    } catch {
+      // Ignore storage failures in restricted browser modes.
+    }
+  }, [tableDensity])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(PROMPTS_VIEW_MODE_STORAGE_KEY, viewMode)
+    } catch {
+      // Ignore storage failures in restricted browser modes.
+    }
+  }, [viewMode])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(
+        PROMPTS_GALLERY_DENSITY_STORAGE_KEY,
+        galleryDensity
+      )
+    } catch {
+      // Ignore storage failures in restricted browser modes.
+    }
+  }, [galleryDensity])
+
+  // Force table view for trash/copilot/studio segments
+  useEffect(() => {
+    if (selectedSegment === "trash" || selectedSegment === "copilot" || selectedSegment === "studio") {
+      setViewMode("table")
+    }
+  }, [selectedSegment])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -3179,8 +3278,8 @@ export const PromptBody = () => {
           />
         )}
         <div className="mb-6 space-y-3">
-          {/* Bulk action bar - shown when rows are selected */}
-          {selectedRowKeys.length > 0 && (
+          {/* Bulk action bar - shown when rows are selected (table view only) */}
+          {viewMode === "table" && selectedRowKeys.length > 0 && (
             <PromptBulkActionBar mode="legacy">
               <span className="text-sm text-primary">
                 {t("managePrompts.bulk.selected", {
@@ -3591,6 +3690,83 @@ export const PromptBody = () => {
                   ]}
                 />
               </div>
+              {selectedSegment === "custom" && (
+                <div className="w-full sm:w-auto">
+                  <Segmented
+                    value={viewMode}
+                    onChange={(value) =>
+                      setViewMode(value as PromptViewMode)
+                    }
+                    size="small"
+                    data-testid="prompts-view-mode"
+                    aria-label="View mode"
+                    options={[
+                      {
+                        value: "table",
+                        icon: <List className="h-3.5 w-3.5" />,
+                        label: "Table"
+                      },
+                      {
+                        value: "gallery",
+                        icon: <LayoutGrid className="h-3.5 w-3.5" />,
+                        label: "Gallery"
+                      }
+                    ]}
+                  />
+                </div>
+              )}
+              {viewMode === "gallery" && selectedSegment === "custom" && (
+                <div className="w-full sm:w-auto">
+                  <Segmented
+                    value={galleryDensity}
+                    onChange={(value) =>
+                      setGalleryDensity(value as PromptGalleryDensity)
+                    }
+                    size="small"
+                    data-testid="prompts-gallery-density"
+                    aria-label="Gallery density"
+                    options={[
+                      { value: "rich", label: "Rich" },
+                      { value: "compact", label: "Compact" }
+                    ]}
+                  />
+                </div>
+              )}
+              {(viewMode === "table" || selectedSegment !== "custom") && (
+                <div className="w-full sm:w-auto">
+                  <Segmented
+                    value={tableDensity}
+                    onChange={(value) =>
+                      setTableDensity(value as PromptTableDensity)
+                    }
+                    size="small"
+                    data-testid="prompts-table-density"
+                    aria-label={t("managePrompts.tableDensity.label", {
+                      defaultValue: "Table density"
+                    })}
+                    options={[
+                      {
+                        value: "comfortable",
+                        label: t("managePrompts.tableDensity.comfortable", {
+                          defaultValue: "Comfortable"
+                        })
+                      },
+                      {
+                        value: "compact",
+                        label: t("managePrompts.tableDensity.compact", {
+                          defaultValue: "Compact"
+                        })
+                      },
+                      {
+                        value: "dense",
+                        label: t("managePrompts.tableDensity.dense", {
+                          defaultValue: "Dense"
+                        })
+                      }
+                    ]}
+                  />
+                </div>
+              )}
             </div>
           </PromptListToolbar>
         </div>
@@ -3639,7 +3815,7 @@ export const PromptBody = () => {
           />
         )}
 
-        {status === "success" && Array.isArray(data) && data.length > 0 && (
+        {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === "table" && (
           <PromptListTable
             rows={customPromptRows}
             total={tableTotal}
@@ -3667,6 +3843,9 @@ export const PromptBody = () => {
               }),
               updated: t("managePrompts.columns.modified", {
                 defaultValue: "Updated"
+              }),
+              lastUsed: t("managePrompts.columns.lastUsed", {
+                defaultValue: "Last used"
               }),
               status: t("managePrompts.columns.sync", {
                 defaultValue: "Sync"
@@ -3698,7 +3877,53 @@ export const PromptBody = () => {
                 total
               })
             }
+            tableDensity={tableDensity}
           />
+        )}
+
+        {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === "gallery" && (
+          <div className="space-y-4" data-testid="prompts-gallery-view">
+            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 ${
+              galleryDensity === "compact" ? "gap-3" : "gap-4"
+            }`}>
+              {customPromptRows.map((prompt) => (
+                <PromptGalleryCard
+                  key={prompt.id}
+                  prompt={prompt}
+                  onClick={() => openPromptInspector(prompt.id)}
+                  density={galleryDensity}
+                  onToggleFavorite={(next) => handleTogglePromptFavorite(prompt.id, next)}
+                />
+              ))}
+            </div>
+            {tableTotal > resultsPerPage && (
+              <div className="flex justify-end">
+                <Pagination
+                  current={currentPage}
+                  pageSize={resultsPerPage}
+                  total={tableTotal}
+                  showSizeChanger
+                  pageSizeOptions={["10", "20", "50", "100"]}
+                  onChange={(page, pageSize) => {
+                    if (pageSize !== resultsPerPage) {
+                      setResultsPerPage(pageSize)
+                      setCurrentPage(1)
+                    } else {
+                      setCurrentPage(page)
+                    }
+                  }}
+                  showTotal={(total, range) =>
+                    t("managePrompts.pagination.summary", {
+                      defaultValue: "{{start}}-{{end}} of {{total}} prompts",
+                      start: range[0],
+                      end: range[1],
+                      total
+                    })
+                  }
+                />
+              </div>
+            )}
+          </div>
         )}
       </div>
     )
@@ -3796,6 +4021,8 @@ export const PromptBody = () => {
               </div>
             ) : (
               <Table
+                className={`prompts-table prompts-table-density-${tableDensity}`}
+                size={tableDensity === "comfortable" ? "middle" : "small"}
                 columns={[
                   {
                     title: t("managePrompts.columns.title"),
@@ -3873,7 +4100,6 @@ export const PromptBody = () => {
                     )
                   }
                 ]}
-                bordered
                 dataSource={filteredCopilotData}
                 rowKey={(record) => record.key}
               />
@@ -4002,6 +4228,8 @@ export const PromptBody = () => {
               </div>
             ) : (
               <Table
+                className={`prompts-table prompts-table-density-${tableDensity}`}
+                size={tableDensity === "comfortable" ? "middle" : "small"}
                 data-testid="prompts-trash-table"
                 columns={[
                   {
@@ -4137,7 +4365,6 @@ export const PromptBody = () => {
                     )
                   }
                 ]}
-                bordered
                 dataSource={filteredTrashData}
                 rowKey={(record) => record.id}
                 rowSelection={{

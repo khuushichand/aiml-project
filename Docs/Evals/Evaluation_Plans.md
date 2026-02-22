@@ -151,7 +151,7 @@ https://huggingface.co/spaces/Tevatron/BrowseComp-Plus
 https://github.com/Alibaba-NLP/DeepResearch
 https://www.kaggle.com/benchmarks/google/dsqa
 
-
+https://gepa-ai.github.io/gepa/blog/2026/02/18/introducing-optimize-anything/
 
 Self-Correction Bench
     https://arxiv.org/pdf/2507.02778
