@@ -114,6 +114,7 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   outputsPage: 1,
   outputsPageSize: 20,
   outputsJobFilter: null,
+  outputsRunFilter: null,
   outputPreviewOpen: false,
   selectedOutputId: null,
   setOutputs: vi.fn(),
@@ -121,6 +122,7 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   setOutputsPage: vi.fn(),
   setOutputsPageSize: vi.fn(),
   setOutputsJobFilter: vi.fn(),
+  setOutputsRunFilter: vi.fn(),
   openOutputPreview: vi.fn(),
   closeOutputPreview: vi.fn(),
   ...overrides
@@ -142,8 +144,10 @@ describe("OutputsTab advanced filters disclosure", () => {
     render(<OutputsTab />)
 
     expect(screen.queryByTestId("watchlists-outputs-job-filter")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("watchlists-outputs-run-filter")).not.toBeInTheDocument()
     fireEvent.click(screen.getByTestId("watchlists-outputs-advanced-toggle"))
     expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
 
     await waitFor(() => {
       expect(localStorage.getItem(STORAGE_KEY)).toBe("1")
@@ -156,5 +160,15 @@ describe("OutputsTab advanced filters disclosure", () => {
     render(<OutputsTab />)
 
     expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
+  })
+
+  it("auto-opens when a run filter is active", () => {
+    mocks.storeStateRef.current = baseState({ outputsRunFilter: 42 })
+
+    render(<OutputsTab />)
+
+    expect(screen.getByTestId("watchlists-outputs-job-filter")).toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-outputs-run-filter")).toBeInTheDocument()
   })
 })

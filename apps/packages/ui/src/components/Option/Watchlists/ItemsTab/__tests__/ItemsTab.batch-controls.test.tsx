@@ -212,6 +212,10 @@ describe("ItemsTab batch throughput controls", () => {
       expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
     })
 
+    expect(screen.getByTestId("watchlists-items-batch-scope-summary")).toHaveTextContent(
+      "Selected: 0 unread"
+    )
+
     const markSelectedButton = screen.getByTestId("watchlists-items-mark-selected")
     expect(markSelectedButton).toBeDisabled()
     expect(screen.getByTestId("watchlists-items-selected-count")).toHaveTextContent("0 selected")
@@ -228,10 +232,14 @@ describe("ItemsTab batch throughput controls", () => {
 
     const confirmConfig = uiMocks.modalConfirm.mock.calls[0]?.[0] as Record<string, unknown>
     expect(confirmConfig?.title).toBe("Mark selected items as reviewed?")
+    expect(confirmConfig?.content).toBe(
+      "Scope: selected item. This will mark 1 item as reviewed."
+    )
 
     await waitFor(() => {
       expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(101, { reviewed: true })
     })
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith("Marked 1 selected item as reviewed.")
   })
 
   it("respects persisted page-size, supports mark-page, and persists changed size", async () => {
@@ -256,11 +264,17 @@ describe("ItemsTab batch throughput controls", () => {
 
     const confirmConfig = uiMocks.modalConfirm.mock.calls[0]?.[0] as Record<string, unknown>
     expect(confirmConfig?.title).toBe("Mark this page as reviewed?")
+    expect(confirmConfig?.content).toBe(
+      "Scope: items on this page. This will mark 2 items as reviewed."
+    )
 
     await waitFor(() => {
       expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(101, { reviewed: true })
       expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(102, { reviewed: true })
     })
+    expect(uiMocks.messageSuccess).toHaveBeenCalledWith(
+      "Marked 2 items on this page as reviewed."
+    )
 
     const pageSizeSelect = screen.getByTestId("watchlists-items-page-size-select")
     fireEvent.mouseDown(pageSizeSelect)
@@ -308,7 +322,10 @@ describe("ItemsTab batch throughput controls", () => {
     fireEvent.click(screen.getByTestId("watchlists-items-view-delete"))
     await waitFor(() => {
       const raw = window.localStorage.getItem(ITEMS_VIEW_PRESETS_STORAGE_KEY)
-      expect(raw).toBe("[]")
+      expect(raw).toContain("system-unread-today")
+      expect(raw).toContain("system-high-priority")
+      expect(raw).toContain("system-needs-review")
+      expect(raw).not.toContain("Triage Alpha")
     })
   })
 })

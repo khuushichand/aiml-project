@@ -7,6 +7,15 @@ export const ITEM_PAGE_SIZE_OPTIONS = [20, 25, 50, 100] as const
 export const ITEMS_PAGE_SIZE_STORAGE_KEY = "watchlists:items:page-size"
 export const ITEMS_VIEW_PRESETS_STORAGE_KEY = "watchlists:items:view-presets"
 
+export const SYSTEM_ITEMS_VIEW_PRESET_IDS = {
+  unreadToday: "system-unread-today",
+  highPriority: "system-high-priority",
+  needsReview: "system-needs-review"
+} as const
+
+export type SystemItemsViewPresetId =
+  typeof SYSTEM_ITEMS_VIEW_PRESET_IDS[keyof typeof SYSTEM_ITEMS_VIEW_PRESET_IDS]
+
 export interface PersistedItemsViewPreset {
   id: string
   name: string
@@ -14,6 +23,82 @@ export interface PersistedItemsViewPreset {
   smartFilter: string
   statusFilter: string
   searchQuery: string
+}
+
+export const buildDefaultItemsViewPresets = (
+  labels?: Partial<Record<SystemItemsViewPresetId, string>>
+): PersistedItemsViewPreset[] => [
+  {
+    id: SYSTEM_ITEMS_VIEW_PRESET_IDS.unreadToday,
+    name: labels?.[SYSTEM_ITEMS_VIEW_PRESET_IDS.unreadToday] || "Unread today",
+    sourceId: null,
+    smartFilter: "todayUnread",
+    statusFilter: "ingested",
+    searchQuery: ""
+  },
+  {
+    id: SYSTEM_ITEMS_VIEW_PRESET_IDS.highPriority,
+    name: labels?.[SYSTEM_ITEMS_VIEW_PRESET_IDS.highPriority] || "High-priority",
+    sourceId: null,
+    smartFilter: "todayUnread",
+    statusFilter: "ingested",
+    searchQuery: "urgent"
+  },
+  {
+    id: SYSTEM_ITEMS_VIEW_PRESET_IDS.needsReview,
+    name: labels?.[SYSTEM_ITEMS_VIEW_PRESET_IDS.needsReview] || "Needs review",
+    sourceId: null,
+    smartFilter: "unread",
+    statusFilter: "all",
+    searchQuery: ""
+  }
+]
+
+const uniquePresetsById = (
+  presets: PersistedItemsViewPreset[]
+): PersistedItemsViewPreset[] => {
+  const seenIds = new Set<string>()
+  const deduped: PersistedItemsViewPreset[] = []
+  for (const preset of presets) {
+    if (seenIds.has(preset.id)) continue
+    seenIds.add(preset.id)
+    deduped.push(preset)
+  }
+  return deduped
+}
+
+export const provisionItemsViewPresets = (
+  persistedPresets: PersistedItemsViewPreset[],
+  defaultPresets: PersistedItemsViewPreset[]
+): PersistedItemsViewPreset[] => {
+  const normalizedPersisted = uniquePresetsById(persistedPresets)
+  const persistedById = new Map(
+    normalizedPersisted.map((preset) => [preset.id, preset] as const)
+  )
+  const defaultIds = new Set(defaultPresets.map((preset) => preset.id))
+
+  const mergedDefaults = defaultPresets.map((preset) => {
+    const persistedMatch = persistedById.get(preset.id)
+    if (!persistedMatch) return preset
+    return { ...preset, ...persistedMatch, id: preset.id }
+  })
+
+  const customPresets = normalizedPersisted
+    .filter((preset) => !defaultIds.has(preset.id))
+    .sort((left, right) => {
+      const byName = left.name.localeCompare(right.name)
+      if (byName !== 0) return byName
+      return left.id.localeCompare(right.id)
+    })
+
+  return [...mergedDefaults, ...customPresets]
+}
+
+export const isSystemItemsViewPresetId = (presetId: string | null | undefined): boolean => {
+  if (!presetId) return false
+  return Object.values(SYSTEM_ITEMS_VIEW_PRESET_IDS).includes(
+    presetId as SystemItemsViewPresetId
+  )
 }
 
 export const normalizeItemPageSize = (value: unknown): number => {
@@ -102,6 +187,47 @@ export const filterSourcesForReader = (
   })
 }
 
+const sourcePriorityTimestamp = (source: WatchlistSource): number => {
+  if (!source.last_scraped_at) return Number.NEGATIVE_INFINITY
+  const parsed = new Date(source.last_scraped_at).getTime()
+  if (Number.isNaN(parsed)) return Number.NEGATIVE_INFINITY
+  return parsed
+}
+
+const sourceHealthBucket = (source: WatchlistSource): number => {
+  const status = source.status?.trim().toLowerCase() || ""
+  if (!status) return 2
+  if (status === "healthy" || status === "ok") return 2
+  return 1
+}
+
+export const orderSourcesForReader = (
+  sources: WatchlistSource[],
+  selectedSourceId: number | null
+): WatchlistSource[] => {
+  return [...sources].sort((left, right) => {
+    const leftSelected = selectedSourceId != null && left.id === selectedSourceId
+    const rightSelected = selectedSourceId != null && right.id === selectedSourceId
+    if (leftSelected !== rightSelected) return leftSelected ? -1 : 1
+
+    const leftActiveBucket = left.active ? 0 : 1
+    const rightActiveBucket = right.active ? 0 : 1
+    if (leftActiveBucket !== rightActiveBucket) {
+      return leftActiveBucket - rightActiveBucket
+    }
+
+    const leftHealth = sourceHealthBucket(left)
+    const rightHealth = sourceHealthBucket(right)
+    if (leftHealth !== rightHealth) return leftHealth - rightHealth
+
+    const leftTimestamp = sourcePriorityTimestamp(left)
+    const rightTimestamp = sourcePriorityTimestamp(right)
+    if (leftTimestamp !== rightTimestamp) return rightTimestamp - leftTimestamp
+
+    return left.name.localeCompare(right.name)
+  })
+}
+
 export const resolveSelectedItemId = (
   currentId: number | null,
   items: ScrapedItem[]
@@ -122,6 +248,16 @@ export const stripHtmlToText = (value: string): string => {
     .replace(/&gt;/gi, ">")
     .replace(/\s+/g, " ")
     .trim()
+}
+
+export const shouldReloadItemsAfterReviewMutation = (
+  smartFilter: string
+): boolean => {
+  return (
+    smartFilter === "unread" ||
+    smartFilter === "reviewed" ||
+    smartFilter === "todayUnread"
+  )
 }
 
 export const extractImageUrl = (value: string | null | undefined): string | null => {

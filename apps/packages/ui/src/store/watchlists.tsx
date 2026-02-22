@@ -85,6 +85,13 @@ interface SettingsState {
   settingsError: string | null
 }
 
+interface ItemsTriageState {
+  itemsSelectedSourceId: number | null
+  itemsStatusFilter: string
+  itemsSmartFilter: string
+  itemsSearchQuery: string
+}
+
 interface OverviewHealthState {
   overviewHealth: WatchlistsOverviewHealthModel | null
   overviewHealthUpdatedAt: string | null
@@ -177,6 +184,13 @@ interface SettingsActions {
   setSettingsError: (error: string | null) => void
 }
 
+interface ItemsTriageActions {
+  setItemsSelectedSourceId: (sourceId: number | null) => void
+  setItemsStatusFilter: (status: string) => void
+  setItemsSmartFilter: (smartFilter: string) => void
+  setItemsSearchQuery: (query: string) => void
+}
+
 interface OverviewHealthActions {
   setOverviewHealth: (
     health: WatchlistsOverviewHealthModel | null,
@@ -209,6 +223,7 @@ export type WatchlistsState = SourcesState &
   OutputsState &
   TemplatesState &
   SettingsState &
+  ItemsTriageState &
   OverviewHealthState &
   UIState &
   SourcesActions &
@@ -217,6 +232,7 @@ export type WatchlistsState = SourcesState &
   OutputsActions &
   TemplatesActions &
   SettingsActions &
+  ItemsTriageActions &
   OverviewHealthActions &
   UIActions
 
@@ -288,6 +304,13 @@ const initialSettingsState: SettingsState = {
   settingsError: null
 }
 
+const initialItemsTriageState: ItemsTriageState = {
+  itemsSelectedSourceId: null,
+  itemsStatusFilter: "all",
+  itemsSmartFilter: "all",
+  itemsSearchQuery: ""
+}
+
 const initialOverviewHealthState: OverviewHealthState = {
   overviewHealth: null,
   overviewHealthUpdatedAt: null
@@ -312,6 +335,7 @@ const initialState = {
   ...initialOutputsState,
   ...initialTemplatesState,
   ...initialSettingsState,
+  ...initialItemsTriageState,
   ...initialOverviewHealthState,
   ...initialUIState
 }
@@ -467,6 +491,12 @@ export const useWatchlistsStore = createWithEqualityFn<WatchlistsState>()((set) 
   setSettings: (settings) => set({ settings }),
   setSettingsLoading: (settingsLoading) => set({ settingsLoading }),
   setSettingsError: (settingsError) => set({ settingsError }),
+
+  setItemsSelectedSourceId: (itemsSelectedSourceId) =>
+    set({ itemsSelectedSourceId }),
+  setItemsStatusFilter: (itemsStatusFilter) => set({ itemsStatusFilter }),
+  setItemsSmartFilter: (itemsSmartFilter) => set({ itemsSmartFilter }),
+  setItemsSearchQuery: (itemsSearchQuery) => set({ itemsSearchQuery }),
 
   setOverviewHealth: (overviewHealth, overviewHealthUpdatedAt = null) =>
     set({ overviewHealth, overviewHealthUpdatedAt }),

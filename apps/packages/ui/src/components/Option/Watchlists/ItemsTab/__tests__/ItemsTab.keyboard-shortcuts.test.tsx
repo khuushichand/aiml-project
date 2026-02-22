@@ -219,4 +219,29 @@ describe("ItemsTab keyboard shortcuts", () => {
     fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-help"))
     expect(await screen.findByTestId("watchlists-items-shortcuts-modal")).toBeInTheDocument()
   })
+
+  it("supports shortcut hint strip dismiss and restore lifecycle", async () => {
+    const { unmount } = render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId("watchlists-items-shortcuts-hint-strip")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-hint-dismiss"))
+    expect(screen.queryByTestId("watchlists-items-shortcuts-hint-strip")).not.toBeInTheDocument()
+    expect(screen.getByTestId("watchlists-items-shortcuts-hint-restore")).toBeInTheDocument()
+    expect(window.localStorage.getItem("watchlists:items:shortcuts-hint-dismissed")).toBe("1")
+
+    unmount()
+    render(<ItemsTab />)
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId("watchlists-items-shortcuts-hint-strip")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("watchlists-items-shortcuts-hint-restore"))
+    expect(screen.getByTestId("watchlists-items-shortcuts-hint-strip")).toBeInTheDocument()
+    expect(window.localStorage.getItem("watchlists:items:shortcuts-hint-dismissed")).toBe("0")
+  })
 })

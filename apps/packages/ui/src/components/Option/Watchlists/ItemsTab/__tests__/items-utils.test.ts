@@ -1,17 +1,22 @@
 import { describe, expect, it, vi } from "vitest"
 import type { ScrapedItem, WatchlistSource } from "@/types/watchlists"
 import {
+  buildDefaultItemsViewPresets,
   extractImageUrl,
   filterSourcesForReader,
+  isSystemItemsViewPresetId,
   ITEM_PAGE_SIZE,
   ITEMS_PAGE_SIZE_STORAGE_KEY,
   ITEMS_VIEW_PRESETS_STORAGE_KEY,
   loadPersistedItemsViewPresets,
   loadPersistedItemPageSize,
   normalizeItemPageSize,
+  orderSourcesForReader,
   persistItemsViewPresets,
   persistItemPageSize,
+  provisionItemsViewPresets,
   resolveSelectedItemId,
+  shouldReloadItemsAfterReviewMutation,
   stripHtmlToText
 } from "../items-utils"
 
@@ -246,5 +251,98 @@ describe("items view preset persistence helpers", () => {
         searchQuery: "alpha"
       }
     ])
+  })
+
+  it("provisions default triage views and keeps deterministic ordering", () => {
+    const defaults = buildDefaultItemsViewPresets()
+    const provisioned = provisionItemsViewPresets([], defaults)
+
+    expect(provisioned.map((preset) => preset.id)).toEqual([
+      "system-unread-today",
+      "system-high-priority",
+      "system-needs-review"
+    ])
+  })
+
+  it("keeps custom presets sorted after system defaults", () => {
+    const defaults = buildDefaultItemsViewPresets()
+    const provisioned = provisionItemsViewPresets(
+      [
+        {
+          id: "custom-z",
+          name: "Zulu",
+          sourceId: null,
+          smartFilter: "all",
+          statusFilter: "all",
+          searchQuery: ""
+        },
+        {
+          id: "custom-a",
+          name: "Alpha",
+          sourceId: null,
+          smartFilter: "all",
+          statusFilter: "all",
+          searchQuery: ""
+        }
+      ],
+      defaults
+    )
+
+    expect(provisioned.map((preset) => preset.id)).toEqual([
+      "system-unread-today",
+      "system-high-priority",
+      "system-needs-review",
+      "custom-a",
+      "custom-z"
+    ])
+  })
+
+  it("detects system preset ids", () => {
+    expect(isSystemItemsViewPresetId("system-unread-today")).toBe(true)
+    expect(isSystemItemsViewPresetId("custom-view")).toBe(false)
+    expect(isSystemItemsViewPresetId(null)).toBe(false)
+  })
+})
+
+describe("orderSourcesForReader", () => {
+  it("prioritizes selected and active sources before inactive sources", () => {
+    const sources = [
+      makeSource({
+        id: 2,
+        name: "Inactive Source",
+        active: false,
+        last_scraped_at: "2026-02-20T00:00:00Z"
+      }),
+      makeSource({
+        id: 3,
+        name: "Active Healthy",
+        active: true,
+        status: "healthy",
+        last_scraped_at: "2026-02-21T00:00:00Z"
+      }),
+      makeSource({
+        id: 1,
+        name: "Selected Source",
+        active: true,
+        status: "error",
+        last_scraped_at: "2026-02-22T00:00:00Z"
+      })
+    ]
+
+    const ordered = orderSourcesForReader(sources, 1)
+    expect(ordered.map((source) => source.id)).toEqual([1, 3, 2])
+  })
+})
+
+describe("shouldReloadItemsAfterReviewMutation", () => {
+  it("reloads when reviewed state can change result membership", () => {
+    expect(shouldReloadItemsAfterReviewMutation("unread")).toBe(true)
+    expect(shouldReloadItemsAfterReviewMutation("reviewed")).toBe(true)
+    expect(shouldReloadItemsAfterReviewMutation("todayUnread")).toBe(true)
+  })
+
+  it("skips reload when reviewed state does not affect current membership", () => {
+    expect(shouldReloadItemsAfterReviewMutation("all")).toBe(false)
+    expect(shouldReloadItemsAfterReviewMutation("today")).toBe(false)
   })
 })

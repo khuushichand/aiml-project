@@ -83,6 +83,7 @@ export const OutputsTab: React.FC = () => {
   const outputsPage = useWatchlistsStore((s) => s.outputsPage)
   const outputsPageSize = useWatchlistsStore((s) => s.outputsPageSize)
   const outputsJobFilter = useWatchlistsStore((s) => s.outputsJobFilter)
+  const outputsRunFilter = useWatchlistsStore((s) => s.outputsRunFilter)
   const outputPreviewOpen = useWatchlistsStore((s) => s.outputPreviewOpen)
   const selectedOutputId = useWatchlistsStore((s) => s.selectedOutputId)
 
@@ -92,6 +93,7 @@ export const OutputsTab: React.FC = () => {
   const setOutputsPage = useWatchlistsStore((s) => s.setOutputsPage)
   const setOutputsPageSize = useWatchlistsStore((s) => s.setOutputsPageSize)
   const setOutputsJobFilter = useWatchlistsStore((s) => s.setOutputsJobFilter)
+  const setOutputsRunFilter = useWatchlistsStore((s) => s.setOutputsRunFilter)
   const openOutputPreview = useWatchlistsStore((s) => s.openOutputPreview)
   const closeOutputPreview = useWatchlistsStore((s) => s.closeOutputPreview)
 
@@ -104,7 +106,7 @@ export const OutputsTab: React.FC = () => {
   const [selectedTemplateVersion, setSelectedTemplateVersion] = useState<number | null>(null)
   const [customTitle, setCustomTitle] = useState("")
   const [regenLoading, setRegenLoading] = useState(false)
-  const hasActiveOutputFilters = Boolean(outputsJobFilter)
+  const hasActiveOutputFilters = Boolean(outputsJobFilter || outputsRunFilter)
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(() => {
     const stored = readStoredDisclosureState(OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY)
     return stored ?? hasActiveOutputFilters
@@ -126,6 +128,7 @@ export const OutputsTab: React.FC = () => {
     try {
       const result = await fetchWatchlistOutputs({
         job_id: outputsJobFilter || undefined,
+        run_id: outputsRunFilter || undefined,
         page: outputsPage,
         size: outputsPageSize
       })
@@ -136,7 +139,15 @@ export const OutputsTab: React.FC = () => {
     } finally {
       setOutputsLoading(false)
     }
-  }, [outputsJobFilter, outputsPage, outputsPageSize, setOutputs, setOutputsLoading, t])
+  }, [
+    outputsJobFilter,
+    outputsRunFilter,
+    outputsPage,
+    outputsPageSize,
+    setOutputs,
+    setOutputsLoading,
+    t
+  ])
 
   // Load jobs for filter dropdown
   const loadJobs = useCallback(async () => {
@@ -191,6 +202,25 @@ export const OutputsTab: React.FC = () => {
     },
     [jobs]
   )
+
+  const activeOutputFilterSummary = useMemo(() => {
+    const parts: string[] = []
+    if (outputsJobFilter) {
+      parts.push(
+        t("watchlists:outputs.activeFiltersJob", "Monitor: {{name}}", {
+          name: getJobName(Number(outputsJobFilter))
+        })
+      )
+    }
+    if (outputsRunFilter) {
+      parts.push(
+        t("watchlists:outputs.activeFiltersRun", "Run: #{{id}}", {
+          id: outputsRunFilter
+        })
+      )
+    }
+    return parts.join(" • ")
+  }, [getJobName, outputsJobFilter, outputsRunFilter, t])
 
   // Handle download
   const handleDownload = async (output: WatchlistOutput) => {
@@ -464,12 +494,15 @@ export const OutputsTab: React.FC = () => {
           {!showAdvancedFilters && hasActiveOutputFilters && (
             <>
               <span className="text-sm text-text-muted" data-testid="watchlists-outputs-active-filters-summary">
-                {t("watchlists:outputs.activeFilters", "Active filters")}: {getJobName(Number(outputsJobFilter))}
+                {t("watchlists:outputs.activeFilters", "Active filters")}: {activeOutputFilterSummary}
               </span>
               <Button
                 size="small"
                 type="text"
-                onClick={() => setOutputsJobFilter(null)}
+                onClick={() => {
+                  setOutputsJobFilter(null)
+                  setOutputsRunFilter(null)
+                }}
               >
                 {t("common:clear", "Clear")}
               </Button>
@@ -487,6 +520,23 @@ export const OutputsTab: React.FC = () => {
                 label: j.name,
                 value: j.id
               }))}
+            />
+          )}
+          {showAdvancedFilters && (
+            <InputNumber
+              data-testid="watchlists-outputs-run-filter"
+              placeholder={t("watchlists:outputs.filterByRun", "Filter by run ID")}
+              value={outputsRunFilter ?? undefined}
+              onChange={(value) =>
+                setOutputsRunFilter(
+                  typeof value === "number" && Number.isInteger(value) && value > 0
+                    ? value
+                    : null
+                )
+              }
+              min={1}
+              precision={0}
+              className="w-40"
             />
           )}
           {!showAdvancedFilters && (
