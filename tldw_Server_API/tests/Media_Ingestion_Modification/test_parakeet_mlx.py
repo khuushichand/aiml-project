@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import tempfile
 import os
+import builtins
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
 import soundfile as sf
@@ -90,6 +91,31 @@ class TestParakeetMLX:
         mock_check.return_value = False
         assert check_mlx_available() == False
 
+    def test_build_decoding_config_uses_loguru_on_import_error(self, monkeypatch):
+        """Decoding config import errors should log through Loguru, not stdlib logging."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+
+        loguru_calls = {"count": 0}
+
+        def _capture_loguru(*args, **kwargs):
+            loguru_calls["count"] += 1
+
+        monkeypatch.setattr(mlx_mod.logger, "debug", _capture_loguru, raising=True)
+        assert not hasattr(mlx_mod, "logging")
+
+        original_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "parakeet_mlx":
+                raise ImportError("boom")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import, raising=True)
+
+        cfg = mlx_mod._build_decoding_config(decoding_mode="beam")
+        assert cfg is None
+        assert loguru_calls["count"] >= 1
+
     def test_model_loading(self, monkeypatch):
 
         """Test Parakeet MLX model loading."""
@@ -143,6 +169,23 @@ class TestParakeetMLX:
         assert model == mock_model
         mock_parakeet_mlx.from_pretrained.assert_called_once()
 
+    def test_model_loading_does_not_runtime_install_when_package_missing(self, monkeypatch):
+        """Runtime requests should fail fast when parakeet-mlx is not installed."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+
+        monkeypatch.setattr(mlx_mod, "IS_MACOS", True)
+        monkeypatch.setattr(mlx_mod, "check_mlx_available", lambda: True)
+        monkeypatch.setattr(mlx_mod, "check_parakeet_mlx_installed", lambda: False)
+
+        def _unexpected_install():
+            raise AssertionError("Runtime installation should not be attempted")
+
+        monkeypatch.setattr(mlx_mod, "install_parakeet_mlx", _unexpected_install)
+        mlx_mod._mlx_model_cache = None
+
+        model = mlx_mod.load_parakeet_mlx_model(force_reload=True)
+        assert model is None
+
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_transcribe_simple(self, mock_check_mlx, mock_load_model, sample_audio_data):
@@ -170,6 +213,93 @@ class TestParakeetMLX:
         # Check that audio was saved to temp file
         call_args = mock_model.transcribe.call_args
         assert call_args[0][0].endswith('.wav')
+
+    @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
+    @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
+    def test_transcribe_returns_structured_artifact_when_requested(self, mock_check_mlx, mock_load_model, sample_audio_data):
+        """MLX wrapper should expose sentence/token timing metadata when requested."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
+            transcribe_with_parakeet_mlx
+        )
+
+        audio_data, sample_rate = sample_audio_data
+        mock_check_mlx.return_value = True
+        mock_model = MagicMock()
+
+        token1 = MagicMock()
+        token1.id = 101
+        token1.text = "Hello"
+        token1.start = 0.5
+        token1.end = 0.8
+        token1.duration = 0.3
+        token1.confidence = 0.93
+
+        token2 = MagicMock()
+        token2.id = 102
+        token2.text = " world"
+        token2.start = 0.8
+        token2.end = 1.2
+        token2.duration = 0.4
+        token2.confidence = 0.91
+
+        sentence = MagicMock()
+        sentence.text = "Hello world"
+        sentence.start = 0.5
+        sentence.end = 1.2
+        sentence.duration = 0.7
+        sentence.confidence = 0.92
+        sentence.tokens = [token1, token2]
+
+        aligned_result = MagicMock()
+        aligned_result.text = "Hello world"
+        aligned_result.sentences = [sentence]
+        aligned_result.tokens = [token1, token2]
+        mock_model.transcribe.return_value = aligned_result
+        mock_load_model.return_value = mock_model
+
+        artifact = transcribe_with_parakeet_mlx(
+            audio_data,
+            sample_rate,
+            return_structured=True,
+        )
+
+        assert isinstance(artifact, dict)
+        assert artifact["text"] == "Hello world"
+        assert len(artifact["sentences"]) == 1
+        assert artifact["sentences"][0]["start"] == pytest.approx(0.5)
+        assert artifact["sentences"][0]["end"] == pytest.approx(1.2)
+        assert artifact["sentences"][0]["confidence"] == pytest.approx(0.92)
+        assert artifact["tokens"][0]["id"] == 101
+        assert artifact["tokens"][0]["text"] == "Hello"
+        assert artifact["tokens"][0]["confidence"] == pytest.approx(0.93)
+
+    def test_model_loading_defaults_to_parakeet_v3(self, monkeypatch):
+        """Default MLX model id should align with upstream parakeet-mlx default."""
+        import sys, types
+        mock_parakeet_mlx = types.ModuleType('parakeet_mlx')
+        mock_model = MagicMock()
+        captured = {}
+
+        def _from_pretrained(model_id, **kwargs):
+            captured["model_id"] = model_id
+            captured["kwargs"] = kwargs
+            return mock_model
+
+        mock_parakeet_mlx.from_pretrained = MagicMock(side_effect=_from_pretrained)
+        monkeypatch.setitem(sys.modules, 'parakeet_mlx', mock_parakeet_mlx)
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+        import tldw_Server_API.app.core.config as config_mod
+
+        monkeypatch.setattr(mlx_mod, 'IS_MACOS', True)
+        monkeypatch.setattr(mlx_mod, 'check_mlx_available', lambda: True)
+        monkeypatch.setattr(config_mod, "get_stt_config", lambda: {})
+        mlx_mod._mlx_model_cache = None
+
+        model = mlx_mod.load_parakeet_mlx_model(force_reload=True)
+
+        assert model == mock_model
+        assert captured["model_id"] == "mlx-community/parakeet-tdt-0.6b-v3"
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')

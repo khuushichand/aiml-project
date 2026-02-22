@@ -193,6 +193,50 @@ class TestBufferedTranscription:
 
         assert lcs_len == 2  # "world" and "test" are common
 
+    def test_merge_longest_contiguous_ignores_missing_timestamp_overlap_tokens(self):
+        """Malformed overlap tokens without timestamps should not drive contiguous-match splicing."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
+            _merge_tokens_longest_contiguous,
+        )
+
+        existing = [
+            {"id": 1, "text": "A", "start": 0.0, "end": 0.4},
+            {"id": 2, "text": "B", "start": 0.4, "end": 0.8},
+            {"id": 3, "text": "C", "start": 0.8, "end": 1.2},
+        ]
+        incoming = [
+            {"id": 10, "text": "X", "start": 0.6, "end": 1.0},
+            {"id": 1, "text": "BAD", "start": None, "end": 1.1},
+            {"id": 11, "text": "Y", "start": 1.0, "end": 1.4},
+        ]
+
+        merged = _merge_tokens_longest_contiguous(existing, incoming, overlap_duration=1.0)
+        merged_texts = [token["text"] for token in merged]
+
+        assert merged_texts == ["A", "B", "Y"]
+
+    def test_merge_lcs_ignores_missing_timestamp_overlap_tokens(self):
+        """Malformed overlap tokens without timestamps should not drive LCS overlap matching."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
+            _merge_tokens_longest_common_subsequence,
+        )
+
+        existing = [
+            {"id": 1, "text": "A", "start": 0.0, "end": 0.4},
+            {"id": 2, "text": "B", "start": 0.4, "end": 0.8},
+            {"id": 3, "text": "C", "start": 0.8, "end": 1.2},
+        ]
+        incoming = [
+            {"id": 10, "text": "X", "start": 0.6, "end": 1.0},
+            {"id": 1, "text": "BAD", "start": None, "end": 1.1},
+            {"id": 11, "text": "Y", "start": 1.0, "end": 1.4},
+        ]
+
+        merged = _merge_tokens_longest_common_subsequence(existing, incoming, overlap_duration=1.0)
+        merged_texts = [token["text"] for token in merged]
+
+        assert merged_texts == ["A", "B", "Y"]
+
     def test_process_audio_with_mock_transcriber(self, sample_audio_data, config):
 
         """Test full audio processing with mocked transcription."""
@@ -257,6 +301,70 @@ class TestBufferedTranscription:
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+    @patch('soundfile.read')
+    @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.transcribe_with_parakeet_mlx')
+    def test_transcribe_long_audio_mlx_structured_resamples_non_16k_audio(self, mock_transcribe_mlx, mock_sf_read):
+        """Structured MLX long-audio path should resample non-16kHz input before chunking."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
+            BufferedTranscriber,
+            transcribe_long_audio,
+        )
+
+        original_audio = np.zeros(22050, dtype=np.float32)
+        resampled_audio = np.ones(16000, dtype=np.float32)
+        mock_sf_read.return_value = (original_audio, 22050)
+        mock_transcribe_mlx.return_value = {
+            "text": "hello",
+            "sentences": [],
+            "tokens": [{"text": "hello", "start": 0.0, "end": 0.5}],
+        }
+
+        captured = {}
+
+        def _fake_create_chunks(_self, audio: np.ndarray):
+            captured["audio"] = audio
+            return [{
+                "audio": audio,
+                "start": 0.0,
+                "end": 1.0,
+                "overlap_start": 0.0,
+                "overlap_end": 0.0,
+            }]
+
+        with patch.object(
+            BufferedTranscriber,
+            "_resample",
+            autospec=True,
+            return_value=resampled_audio,
+        ) as mock_resample, patch.object(
+            BufferedTranscriber,
+            "_create_chunks",
+            autospec=True,
+            side_effect=_fake_create_chunks,
+        ):
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+
+            try:
+                result = transcribe_long_audio(
+                    tmp_path,
+                    variant="mlx",
+                    chunk_duration=1.0,
+                    total_buffer=1.5,
+                    return_structured=True,
+                )
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+        mock_resample.assert_called_once()
+        resample_args = mock_resample.call_args[0]
+        assert resample_args[2] == 22050
+        assert resample_args[3] == 16000
+        assert captured["audio"] is resampled_audio
+        assert mock_transcribe_mlx.call_args.kwargs["sample_rate"] == 16000
+        assert result["tokens"]
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.transcribe_with_parakeet_onnx')
     def test_transcribe_long_audio_onnx(self, mock_transcribe_onnx, long_audio_data):

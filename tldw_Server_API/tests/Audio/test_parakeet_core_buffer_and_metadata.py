@@ -127,7 +127,15 @@ def test_variant_decode_selection(monkeypatch):
     )
 
     mod_mlx = types.ModuleType("Audio_Transcription_Parakeet_MLX")
-    mod_mlx.transcribe_with_parakeet_mlx = lambda audio_np, sample_rate: "mlx:ok"
+    class _FakeMlxSession:
+        def add_audio(self, audio_np, sample_rate=16000):
+            return {"text": "mlx:ok"}
+
+        def close(self):
+            return None
+
+    mod_mlx.create_parakeet_mlx_streaming_session = lambda: _FakeMlxSession()
+    mod_mlx.transcribe_with_parakeet_mlx = lambda audio_np, sample_rate: "mlx:fallback"
     monkeypatch.setitem(
         sys.modules,
         "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX",
@@ -158,6 +166,117 @@ def test_variant_decode_selection(monkeypatch):
     tr_mlx = ParakeetCoreTranscriber(config=StreamingConfig(sample_rate=sr, model_variant="mlx"))
     assert tr_mlx.decode_fn is not None
     assert tr_mlx._decode(audio) == "mlx:ok"
+
+
+@pytest.mark.unit
+def test_mlx_decode_closure_hooks_reset_and_close(monkeypatch):
+    mod_mlx = types.ModuleType("Audio_Transcription_Parakeet_MLX")
+    created_sessions = []
+
+    class _FakeMlxSession:
+        def __init__(self):
+            self.close_calls = 0
+
+        def add_audio(self, audio_np, sample_rate=16000):
+            return {"text": "mlx:hooked"}
+
+        def close(self):
+            self.close_calls += 1
+
+    def _create_session():
+        session = _FakeMlxSession()
+        created_sessions.append(session)
+        return session
+
+    mod_mlx.create_parakeet_mlx_streaming_session = _create_session
+    mod_mlx.transcribe_with_parakeet_mlx = lambda audio_np, sample_rate: "mlx:fallback"
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX",
+        mod_mlx,
+    )
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber import (
+        ParakeetCoreTranscriber,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.config import (
+        StreamingConfig,
+    )
+
+    tr_mlx = ParakeetCoreTranscriber(config=StreamingConfig(sample_rate=10, model_variant="mlx"))
+    assert tr_mlx.decode_fn is not None
+    assert callable(getattr(tr_mlx.decode_fn, "close", None))
+    assert callable(getattr(tr_mlx.decode_fn, "reset_session", None))
+    assert tr_mlx._decode(np.zeros(5, dtype=np.float32)) == "mlx:hooked"
+
+    # reset() should invoke decode reset_session hook and close active session
+    tr_mlx.reset()
+    assert created_sessions
+    assert created_sessions[0].close_calls == 1
+
+    # close() should invoke decode close hook for current session
+    tr_mlx.close()
+    assert sum(s.close_calls for s in created_sessions) >= 2
+
+
+@pytest.mark.unit
+def test_transcriber_close_invokes_decode_close_hook():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber import (
+        ParakeetCoreTranscriber,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.config import (
+        StreamingConfig,
+    )
+
+    calls = {"close": 0}
+
+    def _decode(audio_np, sr):
+        return "ok"
+
+    def _close():
+        calls["close"] += 1
+
+    setattr(_decode, "close", _close)
+    tr = ParakeetCoreTranscriber(config=StreamingConfig(sample_rate=10), decode_fn=_decode)
+    tr.close()
+    assert calls["close"] == 1
+
+
+@pytest.mark.unit
+def test_mlx_decode_falls_back_when_stream_session_creation_fails(monkeypatch):
+    mod_mlx = types.ModuleType("Audio_Transcription_Parakeet_MLX")
+    fallback_calls = {"count": 0}
+
+    def _create_session():
+        raise RuntimeError("session init failed")
+
+    def _fallback_decode(audio_np, sample_rate=16000):
+        fallback_calls["count"] += 1
+        return f"mlx:fallback:{sample_rate}"
+
+    mod_mlx.create_parakeet_mlx_streaming_session = _create_session
+    mod_mlx.transcribe_with_parakeet_mlx = _fallback_decode
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX",
+        mod_mlx,
+    )
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber import (
+        ParakeetCoreTranscriber,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.config import (
+        StreamingConfig,
+    )
+
+    transcriber = ParakeetCoreTranscriber(config=StreamingConfig(sample_rate=10, model_variant="mlx"))
+    assert transcriber.decode_fn is not None
+    assert transcriber._decode(np.zeros(8, dtype=np.float32)) == "mlx:fallback:10"
+    assert fallback_calls["count"] == 1
+
+    # No-op when session could not be initialized.
+    transcriber.reset()
+    transcriber.close()
 
 
 @pytest.mark.asyncio
