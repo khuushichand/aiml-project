@@ -835,6 +835,20 @@ async def generate_briefing_summary(
     """Generate a briefing-level summary. Uses hierarchical/map-reduce for large item sets."""
     loop = asyncio.get_running_loop()
 
+    # Check group summaries first — they may exist even when items is empty
+    if groups:
+        group_summaries = [g.get("summary", "") for g in groups if g.get("summary")]
+        if group_summaries:
+            combined = "\n\n".join(
+                f"**{g.get('name', 'Group')}**: {g['summary']}" for g in groups if g.get("summary")
+            )
+            return await loop.run_in_executor(
+                None,
+                lambda: _summarize_text_block(
+                    combined, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
+                ),
+            )
+
     if len(items) <= max_items_for_direct:
         # Direct: concatenate all summaries, one LLM call
         texts = []
@@ -850,20 +864,6 @@ async def generate_briefing_summary(
                 combined, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
             ),
         )
-
-    # Large set: check if group summaries are available
-    if groups:
-        group_summaries = [g.get("summary", "") for g in groups if g.get("summary")]
-        if group_summaries:
-            combined = "\n\n".join(
-                f"**{g.get('name', 'Group')}**: {g['summary']}" for g in groups if g.get("summary")
-            )
-            return await loop.run_in_executor(
-                None,
-                lambda: _summarize_text_block(
-                    combined, api_name=api_name, model_override=model_override, custom_prompt=custom_prompt,
-                ),
-            )
 
     # Map-reduce: chunk items into batches, summarize each, then summarize batch summaries
     batch_size = max_items_for_direct

@@ -116,9 +116,9 @@ async def enrich_output(
         # Phase 3: Briefing summary
         briefing_summary = ""
         if summary_config and summary_config.get("enabled", True):
-            items_data = _reconstruct_items_data(collections_db, item_ids) if not groups else None
+            items_data = _reconstruct_items_data(collections_db, item_ids)
             briefing_summary = await generate_briefing_summary(
-                items_data or [],
+                items_data,
                 groups=groups if groups else None,
                 api_name=api_name,
                 model_override=model_override,
@@ -148,33 +148,21 @@ async def enrich_output(
 
 
 def _reconstruct_items_data(collections_db, item_ids: list[int]) -> list[dict[str, Any]]:
-    """Reconstruct item data from IDs. Best-effort."""
+    """Reconstruct item data from IDs using DB abstraction. Best-effort."""
     items: list[dict[str, Any]] = []
     for item_id in item_ids:
         try:
-            row = collections_db.backend.execute(
-                "SELECT id, title, url, summary, tags_json FROM content_items WHERE id = ?",
-                (item_id,),
-            ).rows
-            if row:
-                r = row[0] if row else None
-                if r:
-                    data = r if isinstance(r, dict) else {
-                        "id": r[0], "title": r[1], "url": r[2], "summary": r[3], "tags_json": r[4],
-                    }
-                    tags = []
-                    try:
-                        tags = json.loads(data.get("tags_json", "[]") or "[]")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        pass
-                    items.append({
-                        "id": data.get("id"),
-                        "title": data.get("title", "Untitled"),
-                        "url": data.get("url", ""),
-                        "summary": data.get("summary", ""),
-                        "tags": tags if isinstance(tags, list) else [],
-                    })
-        except Exception:
+            row = collections_db.get_content_item(item_id)
+            tags = getattr(row, "tags", []) or []
+            items.append({
+                "id": getattr(row, "id", item_id),
+                "title": getattr(row, "title", "Untitled") or "Untitled",
+                "url": getattr(row, "url", "") or "",
+                "summary": getattr(row, "summary", "") or "",
+                "tags": tags if isinstance(tags, list) else [],
+            })
+        except Exception as exc:
+            logger.warning(f"enrich_output: failed to reconstruct item {item_id}: {exc}")
             items.append({"id": item_id, "title": f"Item {item_id}", "tags": []})
     return items
 
@@ -190,11 +178,10 @@ def _update_enrichment_status(
 
 
 def _update_metadata(collections_db, output_id: int, metadata: dict[str, Any]) -> None:
-    """Persist metadata update to the DB."""
+    """Persist metadata update to the DB via the collections DB abstraction."""
     try:
-        collections_db.backend.execute(
-            "UPDATE outputs SET metadata_json = ? WHERE id = ?",
-            (json.dumps(metadata), output_id),
+        collections_db.update_output_artifact_metadata(
+            output_id, metadata_json=json.dumps(metadata),
         )
     except Exception as exc:
         logger.error(f"enrich_output: failed to update metadata for output {output_id}: {exc}")

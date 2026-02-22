@@ -5067,11 +5067,12 @@ async def list_templates(
     "/templates/validate",
     response_model=TemplateValidationResult,
     summary="Validate Jinja2 template syntax",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
 )
 async def validate_template(
     payload: TemplateValidateRequest,
     current_user: User = Depends(get_request_user),
-):
+) -> TemplateValidationResult:
     """Validate a Jinja2 template for syntax errors without rendering."""
     from jinja2 import TemplateSyntaxError
     from jinja2.sandbox import SandboxedEnvironment
@@ -5088,10 +5089,11 @@ async def validate_template(
             "message": str(exc.message) if hasattr(exc, "message") else str(exc),
         })
     except Exception as exc:
+        logger.warning(f"Template validation unexpected error: {exc}")
         errors.append({
             "line": None,
             "column": None,
-            "message": f"Unexpected error: {exc}",
+            "message": "Template validation failed due to an internal error",
         })
 
     return TemplateValidationResult(
@@ -5104,13 +5106,14 @@ async def validate_template(
     "/templates/preview",
     response_model=TemplatePreviewResponse,
     summary="Preview a template rendered against real run data",
+    dependencies=[Depends(rbac_rate_limit("watchlists.run"))],
 )
 async def preview_template(
     payload: TemplatePreviewRequest,
     current_user: User = Depends(get_request_user),
     db=Depends(get_watchlists_db_for_user),
     collections_db=Depends(get_collections_db_for_user),
-):
+) -> TemplatePreviewResponse:
     """Render a template against real run data for live preview."""
     try:
         run = db.get_run(payload.run_id)
@@ -5134,7 +5137,8 @@ async def preview_template(
     try:
         rendered = _render_template_with_context(payload.content, context)
     except Exception as exc:
-        warnings.append(f"Render error: {exc}")
+        logger.warning(f"Template preview render error: {exc}")
+        warnings.append("Template rendering failed")
         rendered = payload.content
 
     return TemplatePreviewResponse(

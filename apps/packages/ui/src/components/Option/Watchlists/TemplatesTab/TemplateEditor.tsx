@@ -15,6 +15,7 @@ import {
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistTemplate,
+  fetchWatchlistRuns,
   getWatchlistTemplate,
   getWatchlistTemplateVersions,
   validateWatchlistTemplate
@@ -52,6 +53,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [loadedContentBaseline, setLoadedContentBaseline] = useState("")
   const editorRef = useRef<TemplateCodeEditorHandle>(null)
   const [validationErrors, setValidationErrors] = useState<Array<{ line?: number | null; column?: number | null; message: string }>>([])
+  const [availableRuns, setAvailableRuns] = useState<Array<{ id: number; label: string }>>([])
 
   const isEditing = !!template
   const formatValue = Form.useWatch("format", form)
@@ -110,6 +112,26 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     }
   }, [open, template, form, t])
 
+  // Fetch recent completed runs for live preview
+  useEffect(() => {
+    if (!open) {
+      setAvailableRuns([])
+      return
+    }
+    fetchWatchlistRuns({ q: "completed", size: 20 })
+      .then((res) => {
+        setAvailableRuns(
+          (res.items || []).map((r) => ({
+            id: r.id,
+            label: `Run #${r.id}${r.started_at ? ` - ${r.started_at}` : ""}`,
+          }))
+        )
+      })
+      .catch(() => {
+        setAvailableRuns([])
+      })
+  }, [open])
+
   const handleLoadSelectedVersion = async () => {
     if (!template || !selectedVersion) return
     try {
@@ -147,8 +169,10 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           return
         }
         setValidationErrors([])
-      } catch {
-        // Validation endpoint unavailable, proceed anyway
+      } catch (validationErr) {
+        // Validation endpoint unavailable — clear stale markers and proceed
+        console.warn("Template validation endpoint unavailable:", validationErr)
+        setValidationErrors([])
       }
       setSaving(true)
       const payload: WatchlistTemplateCreate = {
@@ -261,6 +285,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         <TemplatePreviewPane
           content={contentValue || ""}
           format={formatValue === "md" ? "md" : "html"}
+          runs={availableRuns}
         />
       )
     },

@@ -1,14 +1,38 @@
-import React, { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react"
+import React, { Component, useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react"
+import type { ReactNode } from "react"
 import dynamic from "next/dynamic"
+import type { editor as MonacoEditor } from "monaco-editor"
+import type { Monaco } from "@monaco-editor/react"
 
-const Monaco = dynamic(() => import("@monaco-editor/react"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex items-center justify-center rounded border border-border bg-bg p-4 text-xs text-text-muted" style={{ height: 400 }}>
-      Loading editor…
-    </div>
-  ),
-})
+const Monaco = dynamic(
+  () => import("@monaco-editor/react"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center rounded border border-border bg-bg p-4 text-xs text-text-muted" style={{ height: 400 }}>
+        Loading editor…
+      </div>
+    ),
+  },
+)
+
+/** Error boundary that catches Monaco load/render failures and triggers fallback. */
+class MonacoErrorBoundary extends Component<
+  { onError: () => void; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  componentDidCatch() {
+    this.props.onError()
+  }
+  render() {
+    if (this.state.hasError) return null
+    return this.props.children
+  }
+}
 
 export interface TemplateCodeEditorHandle {
   insertSnippet: (snippet: string) => void
@@ -26,8 +50,8 @@ interface TemplateCodeEditorProps {
 
 export const TemplateCodeEditor = forwardRef<TemplateCodeEditorHandle, TemplateCodeEditorProps>(
   ({ value, onChange, format, height = 400, readOnly, validationErrors }, ref) => {
-    const editorRef = useRef<any>(null)
-    const monacoRef = useRef<any>(null)
+    const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
+    const monacoRef = useRef<Monaco | null>(null)
     const [useFallback, setUseFallback] = useState(false)
 
     useImperativeHandle(ref, () => ({
@@ -88,7 +112,7 @@ export const TemplateCodeEditor = forwardRef<TemplateCodeEditorHandle, TemplateC
     )
 
     const handleEditorMount = useCallback(
-      (editor: any, monaco: any) => {
+      (editor: MonacoEditor.IStandaloneCodeEditor, monaco: Monaco) => {
         editorRef.current = editor
         monacoRef.current = monaco
       },
@@ -121,29 +145,30 @@ export const TemplateCodeEditor = forwardRef<TemplateCodeEditorHandle, TemplateC
         : "light"
 
     return (
-      <Monaco
-        defaultLanguage={language}
-        language={language}
-        value={value}
-        onChange={handleEditorChange}
-        height={height}
-        theme={theme as string}
-        options={{
-          readOnly: !!readOnly,
-          minimap: { enabled: false },
-          scrollBeyondLastLine: false,
-          wordWrap: "on",
-          fontSize: 13,
-          lineNumbers: "on",
-          renderLineHighlight: "line",
-          tabSize: 2,
-          bracketPairColorization: { enabled: true },
-          autoClosingBrackets: "always",
-          suggest: { showWords: false },
-        }}
-        onMount={handleEditorMount}
-        onValidate={handleError}
-      />
+      <MonacoErrorBoundary onError={handleError}>
+        <Monaco
+          defaultLanguage={language}
+          language={language}
+          value={value}
+          onChange={handleEditorChange}
+          height={height}
+          theme={theme as string}
+          options={{
+            readOnly: !!readOnly,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            wordWrap: "on",
+            fontSize: 13,
+            lineNumbers: "on",
+            renderLineHighlight: "line",
+            tabSize: 2,
+            bracketPairColorization: { enabled: true },
+            autoClosingBrackets: "always",
+            suggest: { showWords: false },
+          }}
+          onMount={handleEditorMount}
+        />
+      </MonacoErrorBoundary>
     )
   },
 )
