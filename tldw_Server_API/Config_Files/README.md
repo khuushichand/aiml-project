@@ -278,6 +278,7 @@ Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry
 - `transcript_cache_max_total_mb` (float): Cap total transcript cache size (MB) per directory; oldest files are evicted when exceeded. Leave empty for defaults or set 0/negative to disable.
 - `skip_audio_prevalidation` (bool): When true, skip `ffprobe`-based audio validation and rely on `ffmpeg` + STT to surface bad files (useful for high-throughput deployments).
 - Runtime transcription requests do not auto-install `parakeet-mlx`; install dependencies during setup/deployment.
+- Design reference: `Docs/Design/STT_Parakeet_MLX_Parity.md`
 
 ## [external_providers]
 - Reserved for plugging in external providers (YAML/INI sub-configs).

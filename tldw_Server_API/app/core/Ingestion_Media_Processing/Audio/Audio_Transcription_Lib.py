@@ -67,7 +67,11 @@ from tldw_Server_API.app.core.config import (
     loaded_config_data,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.exceptions import CancelCheckError, TranscriptionCancelled
+from tldw_Server_API.app.core.exceptions import (
+    CancelCheckError,
+    STTTranscriptionError,
+    TranscriptionCancelled,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
 from tldw_Server_API.app.core.testing import is_truthy
@@ -189,7 +193,6 @@ def _looks_like_error_text(text: Any) -> bool:
     if not isinstance(text, str):
         return False
     return text.strip().startswith("[Error:")
-
 
 # Conservative defaults to prevent unbounded cache growth unless explicitly
 # disabled via `disable_transcript_cache_pruning` or environment variables.
@@ -2893,7 +2896,7 @@ def speech_to_text_parakeet(
                             )
 
                     if isinstance(mlx_result, str) and _looks_like_error_text(mlx_result):
-                        raise RuntimeError(mlx_result)
+                        raise STTTranscriptionError(mlx_result)
 
                     return create_segments_from_parakeet_mlx_artifact(mlx_result, audio_duration)
 
@@ -2918,7 +2921,7 @@ def speech_to_text_parakeet(
 
     except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Parakeet transcription failed: {e}")
-        raise RuntimeError(f"Parakeet transcription error: {str(e)}") from e
+        raise STTTranscriptionError(f"Parakeet transcription error: {str(e)}") from e
 
 def speech_to_text_canary(
     audio_file_path: str,

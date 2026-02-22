@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -84,12 +85,33 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
                 create_parakeet_mlx_streaming_session as _create_mlx_stream,
+            )
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
                 transcribe_with_parakeet_mlx as _tx_mlx,
             )
 
-            session = _create_mlx_stream()
+            session = None
+            try:
+                session = _create_mlx_stream()
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as session_err:
+                logger.debug("MLX streaming session unavailable; using stateless fallback decode: {}", session_err)
             last_audio = np.array([], dtype=np.float32)
             last_text = ""
+
+            def _close_session() -> None:
+                nonlocal session, last_audio, last_text
+                if session is not None:
+                    with contextlib.suppress(_PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS):
+                        session.close()
+                session = None
+                last_audio = np.array([], dtype=np.float32)
+                last_text = ""
+
+            def _reset_session() -> None:
+                nonlocal session
+                _close_session()
+                with contextlib.suppress(_PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS):
+                    session = _create_mlx_stream()
 
             def _fn(audio_np: np.ndarray, sr: int) -> str:
                 """
@@ -119,11 +141,7 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
                 else:
                     # Audio buffer was rewound/trimmed (final chunk consume path).
                     # Reset session and continue from current window.
-                    try:
-                        session.close()
-                    except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
-                        pass
-                    session = _create_mlx_stream()
+                    _reset_session()
                     if session is None:
                         return _tx_mlx(audio_arr, sample_rate=sr)
                     delta = audio_arr
@@ -136,6 +154,8 @@ def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
                 last_text = str((artifact or {}).get("text", "")).strip()
                 return last_text
 
+            _fn.close = _close_session
+            _fn.reset_session = _reset_session
             return _fn
         except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import MLX backend: {}", e)
@@ -197,6 +217,22 @@ class ParakeetCoreTranscriber:
         self._last_partial_time = 0.0
         self._total_processed_seconds = 0.0
         self._segment_index = 0
+        reset_hook = getattr(self.decode_fn, "reset_session", None)
+        if callable(reset_hook):
+            with contextlib.suppress(_PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS):
+                reset_hook()
+
+    def close(self) -> None:
+        """
+        Release decoder-associated resources, if the active decode function exposes a close hook.
+
+        This is primarily used by long-lived streaming backends (for example MLX)
+        that hold session-level resources beyond a single decode call.
+        """
+        close_hook = getattr(self.decode_fn, "close", None)
+        if callable(close_hook):
+            with contextlib.suppress(_PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS):
+                close_hook()
 
     def get_full_transcript(self) -> str:
         """

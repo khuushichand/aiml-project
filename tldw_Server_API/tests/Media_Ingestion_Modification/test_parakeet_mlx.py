@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import tempfile
 import os
+import builtins
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
 import soundfile as sf
@@ -89,6 +90,31 @@ class TestParakeetMLX:
         # Test when MLX is not available
         mock_check.return_value = False
         assert check_mlx_available() == False
+
+    def test_build_decoding_config_uses_loguru_on_import_error(self, monkeypatch):
+        """Decoding config import errors should log through Loguru, not stdlib logging."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+
+        loguru_calls = {"count": 0}
+
+        def _capture_loguru(*args, **kwargs):
+            loguru_calls["count"] += 1
+
+        monkeypatch.setattr(mlx_mod.logger, "debug", _capture_loguru, raising=True)
+        assert not hasattr(mlx_mod, "logging")
+
+        original_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "parakeet_mlx":
+                raise ImportError("boom")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import, raising=True)
+
+        cfg = mlx_mod._build_decoding_config(decoding_mode="beam")
+        assert cfg is None
+        assert loguru_calls["count"] >= 1
 
     def test_model_loading(self, monkeypatch):
 
@@ -263,8 +289,11 @@ class TestParakeetMLX:
         monkeypatch.setitem(sys.modules, 'parakeet_mlx', mock_parakeet_mlx)
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Parakeet_MLX as mlx_mod
+        import tldw_Server_API.app.core.config as config_mod
+
         monkeypatch.setattr(mlx_mod, 'IS_MACOS', True)
         monkeypatch.setattr(mlx_mod, 'check_mlx_available', lambda: True)
+        monkeypatch.setattr(config_mod, "get_stt_config", lambda: {})
         mlx_mod._mlx_model_cache = None
 
         model = mlx_mod.load_parakeet_mlx_model(force_reload=True)

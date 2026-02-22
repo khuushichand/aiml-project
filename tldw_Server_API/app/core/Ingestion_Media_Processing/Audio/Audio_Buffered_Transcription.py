@@ -28,6 +28,7 @@ logger = logger
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Safely coerce a value to float, returning ``default`` on failure."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -35,6 +36,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _safe_int(value: Any, default: int = -1) -> int:
+    """Safely coerce a value to int, returning ``default`` on failure."""
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -42,6 +44,7 @@ def _safe_int(value: Any, default: int = -1) -> int:
 
 
 def _token_from_mapping(token: Any) -> Optional[dict[str, Any]]:
+    """Normalize a token-like mapping into the internal token schema."""
     if not isinstance(token, dict):
         return None
     text = str(token.get("text", "") or "")
@@ -64,6 +67,7 @@ def _token_from_mapping(token: Any) -> Optional[dict[str, Any]]:
 
 
 def _extract_tokens_from_mlx_artifact(artifact: Any) -> list[dict[str, Any]]:
+    """Extract normalized token dictionaries from a Parakeet MLX artifact payload."""
     if not isinstance(artifact, dict):
         return []
     tokens: list[dict[str, Any]] = []
@@ -89,6 +93,7 @@ def _extract_tokens_from_mlx_artifact(artifact: Any) -> list[dict[str, Any]]:
 
 
 def _token_match(a: dict[str, Any], b: dict[str, Any], overlap_duration: float) -> bool:
+    """Return ``True`` when two tokens are considered the same overlap token."""
     return (
         _safe_int(a.get("id"), -1) >= 0
         and _safe_int(a.get("id"), -1) == _safe_int(b.get("id"), -1)
@@ -100,6 +105,7 @@ def _merge_tokens_midpoint(
     existing: list[dict[str, Any]],
     incoming: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Merge token lists by splitting at the midpoint of overlap boundaries."""
     if not existing:
         return incoming
     if not incoming:
@@ -117,19 +123,24 @@ def _merge_tokens_longest_contiguous(
     *,
     overlap_duration: float,
 ) -> list[dict[str, Any]]:
+    """Merge token lists using the longest contiguous overlap run."""
     if not existing or not incoming:
-        return incoming if not existing else existing
+        return existing if existing else incoming
 
-    existing_end = _safe_float(existing[-1].get("end"))
-    incoming_start = _safe_float(incoming[0].get("start"))
+    existing_end = _safe_float(existing[-1].get("end"), float("-inf"))
+    incoming_start = _safe_float(incoming[0].get("start"), float("inf"))
     if existing_end <= incoming_start:
         return existing + incoming
 
     overlap_existing = [
-        token for token in existing if _safe_float(token.get("end")) > incoming_start - overlap_duration
+        token
+        for token in existing
+        if _safe_float(token.get("end"), float("-inf")) > incoming_start - overlap_duration
     ]
     overlap_incoming = [
-        token for token in incoming if _safe_float(token.get("start")) < existing_end + overlap_duration
+        token
+        for token in incoming
+        if _safe_float(token.get("start"), float("inf")) < existing_end + overlap_duration
     ]
     enough_pairs = len(overlap_existing) // 2
     if len(overlap_existing) < 2 or len(overlap_incoming) < 2:
@@ -140,15 +151,15 @@ def _merge_tokens_longest_contiguous(
         for j in range(len(overlap_incoming)):
             if _token_match(overlap_existing[i], overlap_incoming[j], overlap_duration):
                 current: list[tuple[int, int]] = []
-                k, l = i, j
+                k, incoming_idx = i, j
                 while (
                     k < len(overlap_existing)
-                    and l < len(overlap_incoming)
-                    and _token_match(overlap_existing[k], overlap_incoming[l], overlap_duration)
+                    and incoming_idx < len(overlap_incoming)
+                    and _token_match(overlap_existing[k], overlap_incoming[incoming_idx], overlap_duration)
                 ):
-                    current.append((k, l))
+                    current.append((k, incoming_idx))
                     k += 1
-                    l += 1
+                    incoming_idx += 1
                 if len(current) > len(best_contiguous):
                     best_contiguous = current
 
@@ -181,19 +192,24 @@ def _merge_tokens_longest_common_subsequence(
     *,
     overlap_duration: float,
 ) -> list[dict[str, Any]]:
+    """Merge token lists by aligning the overlap region with LCS matching."""
     if not existing or not incoming:
-        return incoming if not existing else existing
+        return existing if existing else incoming
 
-    existing_end = _safe_float(existing[-1].get("end"))
-    incoming_start = _safe_float(incoming[0].get("start"))
+    existing_end = _safe_float(existing[-1].get("end"), float("-inf"))
+    incoming_start = _safe_float(incoming[0].get("start"), float("inf"))
     if existing_end <= incoming_start:
         return existing + incoming
 
     overlap_existing = [
-        token for token in existing if _safe_float(token.get("end")) > incoming_start - overlap_duration
+        token
+        for token in existing
+        if _safe_float(token.get("end"), float("-inf")) > incoming_start - overlap_duration
     ]
     overlap_incoming = [
-        token for token in incoming if _safe_float(token.get("start")) < existing_end + overlap_duration
+        token
+        for token in incoming
+        if _safe_float(token.get("start"), float("inf")) < existing_end + overlap_duration
     ]
     if len(overlap_existing) < 2 or len(overlap_incoming) < 2:
         return _merge_tokens_midpoint(existing, incoming)
@@ -244,6 +260,7 @@ def _merge_tokens_longest_common_subsequence(
 
 
 def _tokens_to_sentence_dicts(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group token timing into sentence-like segments with aggregate confidence."""
     if not tokens:
         return []
     sentences: list[list[dict[str, Any]]] = []
@@ -731,6 +748,10 @@ def transcribe_long_audio(
             )
 
     if variant == "mlx" and return_structured:
+        if sample_rate != 16000:
+            audio_data = transcriber._resample(audio_data, sample_rate, 16000)
+            sample_rate = 16000
+
         chunks = transcriber._create_chunks(audio_data)
         total_chunks = len(chunks)
         merged_tokens: list[dict[str, Any]] = []

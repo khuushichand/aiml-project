@@ -177,6 +177,26 @@ def _stt_provider_availability(
 
 
 def _normalize_timed_segments(raw_segments: Optional[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Normalize provider segment payloads into a canonical timed-segment schema.
+
+    Args:
+        raw_segments: Optional provider segment list. Each element is expected to
+            be a mapping with text and timing fields (`Text`/`text`,
+            `start_seconds`/`start`, `end_seconds`/`end`).
+
+    Returns:
+        A list of normalized segment dictionaries. Every returned segment
+        includes `text`, `start_seconds`, and `end_seconds`; optional `words`
+        are preserved when provided as a list.
+
+    Notes:
+        - Non-dict entries and empty-text segments are dropped.
+        - Start/end values are parsed defensively and default to `0.0` / start
+          time when parsing fails.
+        - End time is clamped so `end_seconds >= start_seconds`.
+        - Numeric coercion failures are handled via
+          `_AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS`.
+    """
     normalized: list[dict[str, Any]] = []
     if not isinstance(raw_segments, list):
         return normalized

@@ -17,7 +17,6 @@
 
 import importlib.util
 import inspect
-import logging
 import os
 import subprocess
 import sys
@@ -38,6 +37,7 @@ _DEFAULT_MLX_MODEL_ID = "mlx-community/parakeet-tdt-0.6b-v3"
 
 
 def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    """Safely coerce a value to ``float`` and return ``default`` on failure."""
     if value is None:
         return default
     try:
@@ -47,6 +47,7 @@ def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
 
 
 def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    """Safely coerce a value to ``int`` and return ``default`` on failure."""
     if value is None:
         return default
     try:
@@ -56,6 +57,7 @@ def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
 
 
 def _supports_kwarg(callable_obj: Any, kwarg_name: str) -> bool:
+    """Return ``True`` when a callable accepts a keyword argument."""
     try:
         return kwarg_name in inspect.signature(callable_obj).parameters
     except (TypeError, ValueError):
@@ -63,6 +65,7 @@ def _supports_kwarg(callable_obj: Any, kwarg_name: str) -> bool:
 
 
 def _token_to_dict(token: Any) -> dict[str, Any]:
+    """Normalize a Parakeet token object to the server token schema."""
     start = _safe_float(getattr(token, "start", None), 0.0) or 0.0
     duration = _safe_float(getattr(token, "duration", None), None)
     end_from_attr = _safe_float(getattr(token, "end", None), None)
@@ -80,6 +83,7 @@ def _token_to_dict(token: Any) -> dict[str, Any]:
 
 
 def _sentence_to_dict(sentence: Any) -> dict[str, Any]:
+    """Normalize a Parakeet sentence object to a serializable sentence dictionary."""
     tokens_raw = getattr(sentence, "tokens", None)
     token_dicts: list[dict[str, Any]] = []
     if isinstance(tokens_raw, list):
@@ -110,6 +114,7 @@ def _sentence_to_dict(sentence: Any) -> dict[str, Any]:
 
 
 def _as_structured_artifact(result: Any) -> dict[str, Any]:
+    """Convert MLX transcription output into a normalized structured artifact."""
     if isinstance(result, dict):
         text = str(result.get("text", "") or "")
         raw_sentences = result.get("sentences") if isinstance(result.get("sentences"), list) else []
@@ -162,6 +167,7 @@ def _build_decoding_config(
     sentence_silence_gap: Optional[float] = None,
     sentence_max_duration: Optional[float] = None,
 ) -> Optional[Any]:
+    """Build an optional ``parakeet_mlx.DecodingConfig`` from user/config overrides."""
     has_sentence_overrides = any(
         value is not None
         for value in (sentence_max_words, sentence_silence_gap, sentence_max_duration)
@@ -176,7 +182,7 @@ def _build_decoding_config(
     try:
         import parakeet_mlx
     except Exception as exc:
-        logging.debug(f"Unable to import parakeet_mlx for decoding config construction: {exc}")
+        logger.debug("Unable to import parakeet_mlx for decoding config construction: {}", exc)
         return None
 
     SentenceConfig = getattr(parakeet_mlx, "SentenceConfig", None)
@@ -184,7 +190,7 @@ def _build_decoding_config(
     Greedy = getattr(parakeet_mlx, "Greedy", None)
     Beam = getattr(parakeet_mlx, "Beam", None)
     if SentenceConfig is None or DecodingConfig is None or Greedy is None or Beam is None:
-        logging.debug("parakeet_mlx decoding classes unavailable; skipping decoding config")
+        logger.debug("parakeet_mlx decoding classes unavailable; skipping decoding config")
         return None
 
     sentence_obj = SentenceConfig()
@@ -293,6 +299,7 @@ def install_parakeet_mlx() -> bool:
 #
 
 def load_parakeet_mlx_model(
+    *,
     force_reload: bool = False,
     model_path: Optional[str] = None,
     cache_dir: Optional[str] = None,
@@ -318,12 +325,12 @@ def load_parakeet_mlx_model(
 
     # Check MLX availability (tests may monkeypatch this to True)
     if not check_mlx_available():
-        logging.error("MLX is not available. Install with: pip install mlx")
+        logger.error("MLX is not available. Install with: pip install mlx")
         return None
 
     # Check parakeet-mlx
     if not check_parakeet_mlx_installed():
-        logging.error(
+        logger.error(
             "parakeet-mlx is not installed. Install during setup/deploy (runtime auto-install is disabled)."
         )
         return None
@@ -345,7 +352,7 @@ def load_parakeet_mlx_model(
         except Exception:
             _dtype = None
 
-        logging.info("Loading Parakeet MLX model...")
+        logger.info("Loading Parakeet MLX model...")
 
         # Initialize the model
         # The parakeet-mlx library handles model downloading and caching
@@ -365,32 +372,32 @@ def load_parakeet_mlx_model(
 
         try:
             # Try to load the model from Hugging Face
-            logging.info(f"Loading model from: {model_id}")
+            logger.info(f"Loading model from: {model_id}")
             model = parakeet_mlx.from_pretrained(model_id, **from_pretrained_kwargs)
         except FileNotFoundError:
             # Model might need to be downloaded first
-            logging.info("Model not found locally, downloading from Hugging Face...")
+            logger.info("Model not found locally, downloading from Hugging Face...")
             try:
                 # The model will be downloaded automatically
                 model = parakeet_mlx.from_pretrained(model_id, **from_pretrained_kwargs)
             except Exception as e2:
-                logging.exception(f"Failed to download/load model: {e2}")
+                logger.exception(f"Failed to download/load model: {e2}")
                 return None
         except Exception as e:
-            logging.exception(f"Failed to load model {model_id}: {e}")
+            logger.exception(f"Failed to load model {model_id}: {e}")
             return None
 
         _mlx_model_cache = model
-        logging.info("Successfully loaded Parakeet MLX model")
+        logger.info("Successfully loaded Parakeet MLX model")
 
         return model
 
     except ImportError as e:
-        logging.exception(f"Failed to import parakeet: {e}")
-        logging.info("Try installing manually: pip install git+https://github.com/senstella/parakeet-mlx.git")
+        logger.exception(f"Failed to import parakeet: {e}")
+        logger.info("Try installing manually: pip install git+https://github.com/senstella/parakeet-mlx.git")
         return None
     except Exception as e:
-        logging.exception(f"Failed to load Parakeet MLX model: {e}")
+        logger.exception(f"Failed to load Parakeet MLX model: {e}")
         return None
 
 
@@ -486,9 +493,9 @@ def transcribe_with_parakeet_mlx(
         # Transcribe using parakeet-mlx
         if verbose:
             if isinstance(audio_np, np.ndarray):
-                logging.info(f"Transcribing audio of length {len(audio_np)/16000:.2f} seconds")
+                logger.info(f"Transcribing audio of length {len(audio_np)/16000:.2f} seconds")
             else:
-                logging.info("Transcribing audio file")
+                logger.info("Transcribing audio file")
 
         try:
             from tldw_Server_API.app.core.config import get_stt_config
@@ -562,25 +569,25 @@ def transcribe_with_parakeet_mlx(
                 try:
                     os.remove(temp_audio_path)
                 except Exception as rm_err:
-                    logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
+                    logger.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
 
         artifact = _as_structured_artifact(result)
         text = artifact["text"]
 
         if verbose:
-            logging.info(f"Transcription complete: {text[:100]}...")
+            logger.info(f"Transcription complete: {text[:100]}...")
 
         if return_structured:
             return artifact
         return text
 
     except ImportError as e:
-        logging.exception(f"Missing required library: {e}")
+        logger.exception(f"Missing required library: {e}")
         return f"[Error: Missing required library: {e}]"
     except Exception as e:
         import traceback
-        logging.exception(f"Error during Parakeet MLX transcription: {e}")
-        logging.exception(f"Traceback: {traceback.format_exc()}")
+        logger.exception(f"Error during Parakeet MLX transcription: {e}")
+        logger.exception(f"Traceback: {traceback.format_exc()}")
         return f"[Error: Transcription failed: {str(e)}]"
 
 
@@ -620,7 +627,7 @@ class ParakeetMLXStreamingSession:
         try:
             self.streamer.__exit__(None, None, None)
         except Exception as exc:
-            logging.debug(f"Parakeet MLX streaming session close warning: {exc}")
+            logger.debug(f"Parakeet MLX streaming session close warning: {exc}")
 
 
 def create_parakeet_mlx_streaming_session(
@@ -643,7 +650,7 @@ def create_parakeet_mlx_streaming_session(
     if model is None:
         return None
     if not hasattr(model, "transcribe_stream"):
-        logging.warning("Loaded Parakeet MLX model does not expose transcribe_stream; streaming session unavailable")
+        logger.warning("Loaded Parakeet MLX model does not expose transcribe_stream; streaming session unavailable")
         return None
 
     try:
@@ -671,7 +678,7 @@ def create_parakeet_mlx_streaming_session(
             streamer = streamer.__enter__()
         return ParakeetMLXStreamingSession(model=model, streamer=streamer)
     except Exception as exc:
-        logging.warning(f"Failed to create Parakeet MLX streaming session: {exc}")
+        logger.warning(f"Failed to create Parakeet MLX streaming session: {exc}")
         return None
 
 
@@ -749,7 +756,7 @@ def transcribe_streaming_mlx(
                 yield text
 
     except Exception as e:
-        logging.exception(f"Error in streaming transcription: {e}")
+        logger.exception(f"Error in streaming transcription: {e}")
         yield f"[Error: {str(e)}]"
     finally:
         if session is not None:
@@ -771,15 +778,15 @@ def unload_parakeet_mlx_model():
                 import mlx.core as mx
                 mx.metal.clear_cache()
             except Exception as cache_err:
-                logging.debug(f"Failed to clear MLX cache: error={cache_err}")
+                logger.debug(f"Failed to clear MLX cache: error={cache_err}")
 
             # Force garbage collection
             import gc
             gc.collect()
 
-            logging.info("Unloaded Parakeet MLX model from memory")
+            logger.info("Unloaded Parakeet MLX model from memory")
         except Exception as e:
-            logging.exception(f"Error unloading model: {e}")
+            logger.exception(f"Error unloading model: {e}")
 
 
 #######################################################################################################################
@@ -813,7 +820,7 @@ def get_mlx_device_info() -> dict[str, Any]:
     except ImportError:
         pass
     except Exception as e:
-        logging.debug(f"Error getting MLX device info: {e}")
+        logger.debug(f"Error getting MLX device info: {e}")
 
     return info
 
@@ -892,11 +899,11 @@ def integrate_with_nemo_module():
         # Patch the function
         Audio_Transcription_Nemo._load_parakeet_mlx = _load_parakeet_mlx_patched
 
-        logging.info("Successfully integrated Parakeet MLX with main Nemo module")
+        logger.info("Successfully integrated Parakeet MLX with main Nemo module")
         return True
 
     except Exception as e:
-        logging.exception(f"Failed to integrate with Nemo module: {e}")
+        logger.exception(f"Failed to integrate with Nemo module: {e}")
         return False
 
 
@@ -905,8 +912,6 @@ def integrate_with_nemo_module():
 #
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
     print("Parakeet MLX Module Information:")
     print("-" * 40)
 

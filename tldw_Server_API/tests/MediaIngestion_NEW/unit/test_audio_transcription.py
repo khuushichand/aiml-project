@@ -644,6 +644,7 @@ def test_speech_to_text_qwen2audio_disabled_skips_audio_decode(monkeypatch, tmp_
         load=_unexpected_decode,
         get_duration=lambda **_kwargs: 0.0,
     )
+    monkeypatch.setattr(atlib, "librosa", fake_librosa, raising=False)
     monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
 
     segments = atlib.speech_to_text(

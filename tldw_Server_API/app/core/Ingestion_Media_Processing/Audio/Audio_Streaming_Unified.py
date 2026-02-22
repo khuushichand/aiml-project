@@ -51,11 +51,15 @@ try:  # pragma: no cover - optional on non-macOS or minimal test envs
         create_parakeet_mlx_streaming_session,
         transcribe_with_parakeet_mlx,
     )
-except Exception:  # pragma: no cover - provide safe fallbacks
-    def create_parakeet_mlx_streaming_session(*_args, **_kwargs):  # type: ignore[override]
+except ImportError as exc:  # pragma: no cover - provide safe fallbacks
+    logger.debug("Parakeet MLX import unavailable; using no-op fallbacks: {}", exc)
+
+    def create_parakeet_mlx_streaming_session(*_args: Any, **_kwargs: Any) -> None:  # type: ignore[override]
+        """Return no streaming session when the MLX backend is unavailable."""
         return None
 
-    def transcribe_with_parakeet_mlx(*_args, **_kwargs):  # type: ignore[override]
+    def transcribe_with_parakeet_mlx(*_args: Any, **_kwargs: Any) -> str:  # type: ignore[override]
+        """Return an empty transcription when the MLX backend is unavailable."""
         return ""
 
 from .model_utils import normalize_model_and_variant
@@ -1286,6 +1290,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     stt_cfg = {}
 
                 def _cfg_int(key: str, default: int) -> int:
+                    """Return an integer config value with safe fallback coercion."""
                     try:
                         value = stt_cfg.get(key, default)
                         return int(value)
@@ -1293,6 +1298,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         return default
 
                 def _cfg_float(key: str, default: float) -> float:
+                    """Return a float config value with safe fallback coercion."""
                     try:
                         value = stt_cfg.get(key, default)
                         return float(value)
@@ -1300,13 +1306,15 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         return default
 
                 def _cfg_str(key: str) -> Optional[str]:
+                    """Return a non-empty string config value or ``None``."""
                     value = stt_cfg.get(key)
                     if value is None:
                         return None
                     value_str = str(value).strip()
                     return value_str if value_str else None
 
-                def _cfg_bool(key: str, default: bool = False) -> bool:
+                def _cfg_bool(key: str, *, default: bool = False) -> bool:
+                    """Return a boolean config value with string/number normalization."""
                     value = stt_cfg.get(key)
                     if value is None:
                         return default
@@ -1327,7 +1335,10 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         _cfg_int("mlx_stream_context_right", 256),
                     ),
                     depth=max(_cfg_int("mlx_stream_depth", 1), 1),
-                    keep_original_attention=_cfg_bool("mlx_stream_keep_original_attention", False),
+                    keep_original_attention=_cfg_bool(
+                        "mlx_stream_keep_original_attention",
+                        default=False,
+                    ),
                     decoding_mode=_cfg_str("mlx_decoding_mode"),
                     beam_size=_cfg_int("mlx_beam_size", 0) or None,
                     length_penalty=_cfg_float("mlx_length_penalty", 0.0) if stt_cfg.get("mlx_length_penalty") is not None else None,

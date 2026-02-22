@@ -70,6 +70,10 @@ class CancelCheckError(RuntimeError):
     """Raised when a cancellation check fails unexpectedly."""
 
 
+class STTTranscriptionError(RuntimeError):
+    """Raised when an STT backend fails to produce a valid transcription."""
+
+
 class SecurityAlertWebhookError(Exception):
     """Raised when delivery of a security alert to a webhook fails.
 

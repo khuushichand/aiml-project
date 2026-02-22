@@ -3527,6 +3527,7 @@ def load_and_log_configs():
             return s if s != "" else default
 
         def _to_optional_int(raw: str | None) -> int | None:
+            """Parse an optional integer config value, returning ``None`` when absent/invalid."""
             if raw is None:
                 return None
             try:
@@ -3535,6 +3536,7 @@ def load_and_log_configs():
                 return None
 
         def _to_optional_float(raw: str | None) -> float | None:
+            """Parse an optional float config value, returning ``None`` when absent/invalid."""
             if raw is None:
                 return None
             try:
@@ -3549,8 +3551,12 @@ def load_and_log_configs():
         mlx_overlap_duration = _get_float('STT-Settings', 'mlx_overlap_duration', 5.0)
         buffered_chunk_duration = _get_float('STT-Settings', 'buffered_chunk_duration', mlx_chunk_duration)
         buffered_total_buffer = _to_optional_float(_get_str('STT-Settings', 'buffered_total_buffer', None))
-        buffered_merge_algo = _get_str('STT-Settings', 'buffered_merge_algo', 'middle')
-        streaming_fallback_to_whisper = _get_bool('STT-Settings', 'streaming_fallback_to_whisper', True)
+        buffered_merge_algo = _get_str('STT-Settings', 'buffered_merge_algo', 'middle') or 'middle'
+        streaming_fallback_to_whisper = _get_bool(
+            'STT-Settings',
+            'streaming_fallback_to_whisper',
+            default=True,
+        )
 
         mlx_decoding_mode = _get_str('STT-Settings', 'mlx_decoding_mode', '') or ''
         mlx_beam_size = _to_optional_int(_get_str('STT-Settings', 'mlx_beam_size', None))
@@ -3563,7 +3569,11 @@ def load_and_log_configs():
         mlx_stream_context_left = _get_int('STT-Settings', 'mlx_stream_context_left', 256)
         mlx_stream_context_right = _get_int('STT-Settings', 'mlx_stream_context_right', 256)
         mlx_stream_depth = _get_int('STT-Settings', 'mlx_stream_depth', 1)
-        mlx_stream_keep_original_attention = _get_bool('STT-Settings', 'mlx_stream_keep_original_attention', False)
+        mlx_stream_keep_original_attention = _get_bool(
+            'STT-Settings',
+            'mlx_stream_keep_original_attention',
+            default=False,
+        )
 
         def _env_or_cfg_bool(env_key: str, section: str, key: str, default: bool) -> bool:
             env_val = os.getenv(env_key)
@@ -3588,13 +3598,13 @@ def load_and_log_configs():
             return _get_str(section, key, default)
 
         # VibeVoice-ASR settings (local inference + optional vLLM HTTP path)
-        vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', False)
+        vibevoice_enabled = _get_bool('STT-Settings', 'vibevoice_enabled', default=False)
         vibevoice_model_id = _get_str('STT-Settings', 'vibevoice_model_id', 'microsoft/VibeVoice-ASR') or 'microsoft/VibeVoice-ASR'
         vibevoice_device = _get_str('STT-Settings', 'vibevoice_device', 'cuda') or 'cuda'
         vibevoice_dtype = _get_str('STT-Settings', 'vibevoice_dtype', 'bfloat16') or 'bfloat16'
         vibevoice_cache_dir = _get_str('STT-Settings', 'vibevoice_cache_dir', './models/vibevoice') or './models/vibevoice'
-        vibevoice_allow_download = _get_bool('STT-Settings', 'vibevoice_allow_download', True)
-        vibevoice_vllm_enabled = _get_bool('STT-Settings', 'vibevoice_vllm_enabled', False)
+        vibevoice_allow_download = _get_bool('STT-Settings', 'vibevoice_allow_download', default=True)
+        vibevoice_vllm_enabled = _get_bool('STT-Settings', 'vibevoice_vllm_enabled', default=False)
         vibevoice_vllm_base_url = _get_str('STT-Settings', 'vibevoice_vllm_base_url', '') or ''
         vibevoice_vllm_model_id = _get_str('STT-Settings', 'vibevoice_vllm_model_id', vibevoice_model_id) or vibevoice_model_id
         vibevoice_vllm_api_key = _get_str('STT-Settings', 'vibevoice_vllm_api_key', None)
