@@ -3543,7 +3543,7 @@ def load_and_log_configs():
                 return None
 
         # Parakeet MLX settings
-        mlx_model_id = _get_str('STT-Settings', 'mlx_model_id', 'mlx-community/parakeet-tdt-0.6b-v3') or 'mlx-community/parakeet-tdt-0.6b-v3'
+        mlx_model_id = _get_str('STT-Settings', 'mlx_model_id', 'mlx-community/parakeet-tdt-0.6b-v3')
         mlx_cache_dir = _get_str('STT-Settings', 'mlx_cache_dir', '') or ''
         mlx_chunk_duration = _get_float('STT-Settings', 'mlx_chunk_duration', 30.0)
         mlx_overlap_duration = _get_float('STT-Settings', 'mlx_overlap_duration', 5.0)
