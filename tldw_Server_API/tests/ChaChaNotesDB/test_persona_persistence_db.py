@@ -235,3 +235,73 @@ def test_persona_persistence_crud_and_user_scoping(db_instance: CharactersRAGDB)
     assert db_instance.get_persona_session(session_id, user_id="user-2") is None
     assert db_instance.list_persona_sessions(user_id="user-2") == []
     assert not db_instance.set_persona_memory_archived(entry_id=memory_id, user_id="user-2", archived=False)
+
+
+def test_backfill_persona_memory_scope_namespace_updates_only_missing_scope(db_instance: CharactersRAGDB):
+    persona_id = db_instance.create_persona_profile(
+        {
+            "id": "persona-backfill",
+            "user_id": "user-1",
+            "name": "Backfill Persona",
+            "mode": "persistent_scoped",
+            "system_prompt": "",
+            "is_active": True,
+        }
+    )
+
+    missing_scope_entry_id = db_instance.add_persona_memory_entry(
+        {
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "memory_type": "summary",
+            "content": "legacy-unscoped",
+            "scope_snapshot_id": None,
+            "session_id": None,
+            "salience": 0.4,
+        }
+    )
+    existing_scope_entry_id = db_instance.add_persona_memory_entry(
+        {
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "memory_type": "summary",
+            "content": "already-scoped",
+            "scope_snapshot_id": "scope_already",
+            "session_id": None,
+            "salience": 0.4,
+        }
+    )
+    session_scoped_entry_id = db_instance.add_persona_memory_entry(
+        {
+            "persona_id": persona_id,
+            "user_id": "user-1",
+            "memory_type": "summary",
+            "content": "session-scoped",
+            "scope_snapshot_id": None,
+            "session_id": "sess_1",
+            "salience": 0.4,
+        }
+    )
+
+    updated_count = db_instance.backfill_persona_memory_scope_namespace(
+        user_id="user-1",
+        persona_id=persona_id,
+        scope_snapshot_id="persistent_legacy_pid_example",
+        require_missing_session_id=True,
+        include_archived=False,
+        include_deleted=False,
+    )
+    assert updated_count == 1
+
+    rows = db_instance.list_persona_memory_entries(
+        user_id="user-1",
+        persona_id=persona_id,
+        include_archived=True,
+        include_deleted=True,
+        limit=50,
+        offset=0,
+    )
+    by_id = {str(row.get("id")): row for row in rows}
+    assert by_id[missing_scope_entry_id]["scope_snapshot_id"] == "persistent_legacy_pid_example"
+    assert by_id[existing_scope_entry_id]["scope_snapshot_id"] == "scope_already"
+    assert by_id[session_scoped_entry_id]["scope_snapshot_id"] in (None, "")

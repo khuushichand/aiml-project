@@ -23,8 +23,6 @@ const REQUIRED_PERSONA_PROMPT_KEYS = [
   "persona.unsavedStateBeforeUnloadPrompt"
 ] as const
 
-const PRIORITY_LOCALIZED_LOCALES = ["es", "fr", "de", "zh", "ja-JP"] as const
-
 const resolveLocaleRoot = (): string | undefined => {
   const candidateRoots: string[] = [
     path.resolve(process.cwd(), "src/assets/locale"),
@@ -80,13 +78,20 @@ describe("Sidepanel persona locale keys", () => {
     }
   })
 
-  it("uses localized (non-English) persona prompt copy for priority locales", () => {
+  it("uses localized (non-English) persona prompt copy for all non-English locales", () => {
     const localeRoot = resolveLocaleRoot()
     expect(localeRoot, "Unable to locate locale root directory").toBeDefined()
     if (!localeRoot) return
 
     const englishSidepanel = sidepanel as JsonObject
-    for (const locale of PRIORITY_LOCALIZED_LOCALES) {
+    const localeDirs = fs
+      .readdirSync(localeRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((locale) => locale !== "en")
+      .sort()
+
+    for (const locale of localeDirs) {
       const sidepanelPath = path.join(localeRoot, locale, "sidepanel.json")
       expect(
         fs.existsSync(sidepanelPath),

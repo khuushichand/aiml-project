@@ -202,14 +202,14 @@
     }
   },
   "persona": {
-    "unsavedStateDiscardPrompt": "You have unsaved state-doc changes. Discard local drafts?",
-    "unsavedStateDiscardPromptConnect": "You have unsaved state-doc changes. Connect and discard local drafts?",
-    "unsavedStateDiscardPromptDisconnect": "You have unsaved state-doc changes. Disconnect and discard local drafts?",
-    "unsavedStateDiscardPromptReloadState": "You have unsaved state-doc changes. Load state and discard local drafts?",
-    "unsavedStateDiscardPromptPersonaSwitch": "You have unsaved state-doc changes. Switch persona and discard local drafts?",
-    "unsavedStateDiscardPromptSessionSwitch": "You have unsaved state-doc changes. Switch session and discard local drafts?",
-    "unsavedStateDiscardPromptRestoreState": "You have unsaved state-doc changes. Restore this state version and discard local drafts?",
-    "unsavedStateDiscardPromptRouteTransition": "You have unsaved state-doc changes. Leave this page and discard local drafts?",
-    "unsavedStateBeforeUnloadPrompt": "You have unsaved state-doc changes. Leave this page without saving?"
+    "unsavedStateDiscardPrompt": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptConnect": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. കണക്റ്റ് ചെയ്ത് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptDisconnect": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ഡിസ്കണക്റ്റ് ചെയ്ത് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptReloadState": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. സ്റ്റേറ്റ് ലോഡ് ചെയ്ത് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptPersonaSwitch": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. പെർസോണ മാറ്റി ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptSessionSwitch": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. സെഷൻ മാറ്റി ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptRestoreState": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ഈ സ്റ്റേറ്റ് വേർഷൻ പുനഃസ്ഥാപിച്ച് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateDiscardPromptRouteTransition": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. ഈ പേജ് വിട്ട് ലോക്കൽ ഡ്രാഫ്റ്റുകൾ ഉപേക്ഷിക്കണോ?",
+    "unsavedStateBeforeUnloadPrompt": "സ്റ്റേറ്റ് ഡോക്കിൽ സേവ് ചെയ്യാത്ത മാറ്റങ്ങൾ ഉണ്ട്. സേവ് ചെയ്യാതെ ഈ പേജ് വിടണോ?"
   }
 }

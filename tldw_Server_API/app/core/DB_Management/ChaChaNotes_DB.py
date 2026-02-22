@@ -6941,6 +6941,50 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(update_params), commit=True)
         return bool(cursor.rowcount and cursor.rowcount > 0)
 
+    def backfill_persona_memory_scope_namespace(
+        self,
+        *,
+        user_id: str,
+        persona_id: str,
+        scope_snapshot_id: str,
+        require_missing_session_id: bool = True,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """
+        Backfill missing scope namespace for persona memory entries.
+
+        This updates entries owned by (`user_id`, `persona_id`) that currently have no
+        `scope_snapshot_id` (NULL/empty string), setting them to `scope_snapshot_id`
+        and bumping `version/last_modified`.
+        """
+        scope_value = str(scope_snapshot_id or "").strip()
+        if not scope_value:
+            raise InputError("scope_snapshot_id is required for namespace backfill.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        clauses = [
+            "user_id = ?",
+            "persona_id = ?",
+            "(scope_snapshot_id IS NULL OR scope_snapshot_id = '')",
+        ]
+        params: list[Any] = [user_id, persona_id]
+        if require_missing_session_id:
+            clauses.append("(session_id IS NULL OR session_id = '')")
+        if not include_archived:
+            clauses.append("archived = 0")
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        where_sql = " AND ".join(clauses)
+        query = (
+            "UPDATE persona_memory_entries "
+            "SET scope_snapshot_id = ?, last_modified = ?, version = version + 1 "
+            f"WHERE {where_sql}"  # nosec B608
+        )
+        update_params = [scope_value, now, *params]
+        cursor = self.execute_query(query, tuple(update_params), commit=True)
+        return int(cursor.rowcount or 0)
+
     def soft_delete_persona_memory_entry(
         self,
         *,

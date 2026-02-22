@@ -115,6 +115,28 @@ def _normalize_namespace_value(value: Any) -> str | None:
     return text or None
 
 
+def _persistent_scope_fallback_namespace_from_session(session_id: str | None) -> str | None:
+    normalized_session_id = _normalize_namespace_value(session_id)
+    if not normalized_session_id:
+        return None
+    digest = hashlib.sha256(normalized_session_id.encode("utf-8")).hexdigest()[:24]
+    return f"persistent_fallback_sid_{digest}"
+
+
+def _legacy_persistent_scope_namespace_for_persona(
+    *,
+    normalized_user_id: str,
+    persona_id: str | None,
+) -> str | None:
+    normalized_persona_id = _normalize_namespace_value(persona_id)
+    if not normalized_persona_id:
+        return None
+    digest = hashlib.sha256(
+        f"{normalized_user_id}:{normalized_persona_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"persistent_legacy_pid_{digest}"
+
+
 def _resolve_persona_memory_namespace(
     *,
     runtime_mode: str | None,
@@ -125,7 +147,9 @@ def _resolve_persona_memory_namespace(
     normalized_scope_snapshot_id = _normalize_namespace_value(scope_snapshot_id)
     normalized_session_id = _normalize_namespace_value(session_id)
     if mode == "persistent_scoped":
-        return normalized_scope_snapshot_id, None
+        if normalized_scope_snapshot_id:
+            return normalized_scope_snapshot_id, None
+        return _persistent_scope_fallback_namespace_from_session(normalized_session_id), None
     if mode == "session_scoped":
         return normalized_scope_snapshot_id, normalized_session_id
     return None, None
@@ -421,6 +445,11 @@ def _read_chacha_memories(
     try:
         chacha_db, _ = _open_chacha_db_for_user(user_id)
         normalized_runtime_mode = str(runtime_mode or "").strip().lower()
+        normalized_persona_id = str(persona_id).strip() if persona_id else None
+        missing_scope_requested = (
+            normalized_runtime_mode == "persistent_scoped"
+            and _normalize_namespace_value(scope_snapshot_id) is None
+        )
         namespace_scope_snapshot_id, namespace_session_id = _resolve_persona_memory_namespace(
             runtime_mode=normalized_runtime_mode,
             scope_snapshot_id=scope_snapshot_id,
@@ -430,17 +459,62 @@ def _read_chacha_memories(
             return []
         if normalized_runtime_mode == "session_scoped" and not namespace_session_id:
             return []
+
+        def _query_rows(
+            *,
+            scope_id: str | None,
+            sid: str | None,
+        ) -> list[dict[str, Any]]:
+            return chacha_db.list_persona_memory_entries(
+                user_id=str(normalized_user_id),
+                persona_id=normalized_persona_id,
+                scope_snapshot_id=scope_id,
+                session_id=sid,
+                include_archived=False,
+                include_deleted=False,
+                limit=candidate_limit,
+                offset=0,
+            )
+
         candidate_limit = max(25, min(500, int(top_k) * 25))
-        rows = chacha_db.list_persona_memory_entries(
-            user_id=str(normalized_user_id),
-            persona_id=(str(persona_id).strip() if persona_id else None),
-            scope_snapshot_id=namespace_scope_snapshot_id,
-            session_id=namespace_session_id,
-            include_archived=False,
-            include_deleted=False,
-            limit=candidate_limit,
-            offset=0,
-        )
+        rows = _query_rows(scope_id=namespace_scope_snapshot_id, sid=namespace_session_id)
+
+        if missing_scope_requested and normalized_persona_id:
+            legacy_scope_namespace = _legacy_persistent_scope_namespace_for_persona(
+                normalized_user_id=str(normalized_user_id),
+                persona_id=normalized_persona_id,
+            )
+            if legacy_scope_namespace:
+                legacy_rows = _query_rows(scope_id=legacy_scope_namespace, sid=None)
+                if not legacy_rows:
+                    migrated_count = chacha_db.backfill_persona_memory_scope_namespace(
+                        user_id=str(normalized_user_id),
+                        persona_id=normalized_persona_id,
+                        scope_snapshot_id=legacy_scope_namespace,
+                        require_missing_session_id=True,
+                        include_archived=False,
+                        include_deleted=False,
+                    )
+                    if migrated_count > 0:
+                        logger.debug(
+                            "persona persistent scope namespace backfilled rows={} user={} persona={}",
+                            migrated_count,
+                            normalized_user_id,
+                            normalized_persona_id,
+                        )
+                        legacy_rows = _query_rows(scope_id=legacy_scope_namespace, sid=None)
+                if legacy_rows:
+                    seen_ids: set[str] = set()
+                    merged_rows: list[dict[str, Any]] = []
+                    for row in [*rows, *legacy_rows]:
+                        row_id = str(row.get("id") or "").strip()
+                        if row_id and row_id in seen_ids:
+                            continue
+                        if row_id:
+                            seen_ids.add(row_id)
+                        merged_rows.append(row)
+                    rows = merged_rows
+
         query = str(query_text or "").strip().lower()
         retrievable_rows = [
             row for row in rows

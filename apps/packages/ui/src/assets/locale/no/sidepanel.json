@@ -202,14 +202,14 @@
     }
   },
   "persona": {
-    "unsavedStateDiscardPrompt": "You have unsaved state-doc changes. Discard local drafts?",
-    "unsavedStateDiscardPromptConnect": "You have unsaved state-doc changes. Connect and discard local drafts?",
-    "unsavedStateDiscardPromptDisconnect": "You have unsaved state-doc changes. Disconnect and discard local drafts?",
-    "unsavedStateDiscardPromptReloadState": "You have unsaved state-doc changes. Load state and discard local drafts?",
-    "unsavedStateDiscardPromptPersonaSwitch": "You have unsaved state-doc changes. Switch persona and discard local drafts?",
-    "unsavedStateDiscardPromptSessionSwitch": "You have unsaved state-doc changes. Switch session and discard local drafts?",
-    "unsavedStateDiscardPromptRestoreState": "You have unsaved state-doc changes. Restore this state version and discard local drafts?",
-    "unsavedStateDiscardPromptRouteTransition": "You have unsaved state-doc changes. Leave this page and discard local drafts?",
-    "unsavedStateBeforeUnloadPrompt": "You have unsaved state-doc changes. Leave this page without saving?"
+    "unsavedStateDiscardPrompt": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forkaste lokale utkast?",
+    "unsavedStateDiscardPromptConnect": "Du har ulagrede endringer i tilstandsdokumentet. Vil du koble til og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptDisconnect": "Du har ulagrede endringer i tilstandsdokumentet. Vil du koble fra og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptReloadState": "Du har ulagrede endringer i tilstandsdokumentet. Vil du laste inn tilstand og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Du har ulagrede endringer i tilstandsdokumentet. Vil du bytte persona og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptSessionSwitch": "Du har ulagrede endringer i tilstandsdokumentet. Vil du bytte økt og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptRestoreState": "Du har ulagrede endringer i tilstandsdokumentet. Vil du gjenopprette denne tilstandsversjonen og forkaste lokale utkast?",
+    "unsavedStateDiscardPromptRouteTransition": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forlate denne siden og forkaste lokale utkast?",
+    "unsavedStateBeforeUnloadPrompt": "Du har ulagrede endringer i tilstandsdokumentet. Vil du forlate denne siden uten å lagre?"
   }
 }

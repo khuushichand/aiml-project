@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+## [0.1.24] 2026-02-22
+
+### Added
+
+- Persona memory namespace resilience improvements:
+  - Added deterministic persistent fallback namespace keying when `scope_snapshot_id` is missing:
+    - `persistent_fallback_sid_<sha256(session_id)>` in persona memory integration.
+  - Added deterministic legacy persistent namespace mapping for older null-scope entries:
+    - `persistent_legacy_pid_<sha256(user_id:persona_id)>`.
+  - Added DB-level namespace backfill helper:
+    - `backfill_persona_memory_scope_namespace(...)` on `CharactersRAGDB`.
+- Persona regression coverage additions:
+  - Added persistent fallback namespace isolation test for missing-scope persistent sessions.
+  - Added retrieval-triggered legacy null-scope backfill test for persistent persona memory entries.
+  - Added DB unit test verifying selective backfill behavior (only missing-scope rows, optional missing-session gate).
+- Locale rollout completion for persona unsaved-draft prompts:
+  - Added localized `persona.unsavedState*` prompt copy for remaining non-English sidepanel locales:
+    - `ar`, `da`, `fa`, `it`, `ko`, `ml`, `no`, `pt-BR`, `ru`, `sv`, `uk`, `zh-TW`.
+- Added implementation-plan docs for this session’s persona slices:
+  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_unsaved_draft_locale_rollout_stage23_2026_02_22.md`
+  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_memory_namespace_fallback_stage24_2026_02_22.md`
+  - `Docs/Plans/IMPLEMENTATION_PLAN_persona_namespace_legacy_backfill_stage25_2026_02_22.md`
+
+### Changed
+
+- Persona locale parity test enforcement:
+  - Updated sidepanel persona locale test to require non-English localized copy for all non-English locale bundles (not only priority locales).
+- Persona WS auth test harness/runtime stability:
+  - Updated Persona WS auth tests to mount a local `FastAPI` app with persona router instead of importing `app.main`.
+  - Updated API key manager test doubles to align with current auth validation call signature (`required_scope` support).
+- Persona persistent-memory retrieval behavior:
+  - Retrieval path now performs legacy namespace reconciliation/backfill for persistent mode when runtime scope is missing, while preserving explicit scope/session namespace behavior.
+
+### Removed
+
+- No removals in this session.
+
+### Fixed
+
+- Fixed persistent-scoped persona memory retrieval blackhole cases when `scope_snapshot_id` is absent by introducing deterministic fallback namespace keying.
+- Fixed backward compatibility for older persistent persona memory rows with null `scope_snapshot_id` by adding deterministic legacy namespace mapping and scoped backfill.
+- Fixed Persona full-suite runtime instability caused by heavy app import side effects in auth tests.
+- Fixed Persona auth test contract drift with API key validation scope handling.
+
 ## [0.1.23] 2026-02-22
 
 ### Added

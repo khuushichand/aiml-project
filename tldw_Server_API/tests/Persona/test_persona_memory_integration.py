@@ -507,6 +507,124 @@ def test_chacha_memory_retrieval_is_session_namespaced_for_session_mode(tmp_path
     assert missing_session == []
 
 
+def test_persistent_scope_namespace_falls_back_to_session_hash_when_scope_missing(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    user_id = "303"
+    persona_id = "research_assistant"
+    _ = _seed_memory_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    monkeypatch.setattr(mem, "_get_persona_memory_write_mode", lambda: "chacha_only")
+    monkeypatch.setattr(mem, "_get_persona_memory_read_mode", lambda: "chacha_only")
+
+    assert persist_persona_turn(
+        user_id=user_id,
+        session_id="sess_persistent_fallback_a",
+        persona_id=persona_id,
+        role="assistant",
+        content="persistent-fallback-a",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id=None,
+    )
+    assert persist_persona_turn(
+        user_id=user_id,
+        session_id="sess_persistent_fallback_b",
+        persona_id=persona_id,
+        role="assistant",
+        content="persistent-fallback-b",
+        turn_type="assistant_delta",
+        store_as_memory=True,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id=None,
+    )
+
+    scope_a_memories = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="persistent-fallback-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id=None,
+        session_id="sess_persistent_fallback_a",
+    )
+    scope_b_memories = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="persistent-fallback-",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id=None,
+        session_id="sess_persistent_fallback_b",
+    )
+
+    assert [item.content for item in scope_a_memories] == ["persistent-fallback-a"]
+    assert [item.content for item in scope_b_memories] == ["persistent-fallback-b"]
+
+    chacha_entries = _chacha_entries_for_user(tmp_path, monkeypatch, user_id=user_id, persona_id=persona_id)
+    summary_entries = [entry for entry in chacha_entries if str(entry.get("memory_type")) == "summary"]
+    assert len(summary_entries) >= 2
+    scope_values = {str(entry.get("scope_snapshot_id") or "") for entry in summary_entries}
+    assert all(value.startswith("persistent_fallback_sid_") for value in scope_values)
+    assert len(scope_values) >= 2
+    assert all(entry.get("session_id") in (None, "") for entry in summary_entries)
+
+
+def test_persistent_scope_missing_backfills_legacy_unscoped_entries(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Persona import memory_integration as mem
+
+    user_id = "304"
+    persona_id = "research_assistant"
+    _ = _seed_memory_db(tmp_path, monkeypatch, user_id=user_id, enabled=True)
+    monkeypatch.setattr(mem, "_get_persona_memory_write_mode", lambda: "chacha_only")
+    monkeypatch.setattr(mem, "_get_persona_memory_read_mode", lambda: "chacha_only")
+
+    db_path = DatabasePaths.get_chacha_db_path(int(user_id))
+    chacha_db = CharactersRAGDB(str(db_path), client_id="persona-memory-legacy-unscoped-test")
+    try:
+        _ = chacha_db.create_persona_profile(
+            {
+                "id": persona_id,
+                "user_id": user_id,
+                "name": "Legacy Unscoped Persona",
+                "mode": "persistent_scoped",
+                "system_prompt": "",
+                "is_active": True,
+            }
+        )
+        _ = chacha_db.add_persona_memory_entry(
+            {
+                "persona_id": persona_id,
+                "user_id": user_id,
+                "memory_type": "summary",
+                "content": "legacy-unscoped-memory",
+                "scope_snapshot_id": None,
+                "session_id": None,
+                "salience": 0.6,
+            }
+        )
+    finally:
+        chacha_db.close_connection()
+
+    retrieved = retrieve_top_memories(
+        user_id=user_id,
+        persona_id=persona_id,
+        query_text="legacy-unscoped-memory",
+        top_k=10,
+        runtime_mode="persistent_scoped",
+        scope_snapshot_id=None,
+        session_id="sess_backfill_lookup",
+    )
+    assert [item.content for item in retrieved] == ["legacy-unscoped-memory"]
+
+    post_rows = _chacha_entries_for_user(tmp_path, monkeypatch, user_id=user_id, persona_id=persona_id)
+    target_rows = [row for row in post_rows if str(row.get("content")) == "legacy-unscoped-memory"]
+    assert len(target_rows) == 1
+    target_row = target_rows[0]
+    assert str(target_row.get("scope_snapshot_id") or "").startswith("persistent_legacy_pid_")
+    assert target_row.get("session_id") in (None, "")
+
+
 def test_non_numeric_user_ids_use_collision_safe_mapping(tmp_path, monkeypatch):
     from tldw_Server_API.app.core.Persona import memory_integration as mem
 

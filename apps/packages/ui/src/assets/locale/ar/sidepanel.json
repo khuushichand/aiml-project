@@ -202,14 +202,14 @@
     }
   },
   "persona": {
-    "unsavedStateDiscardPrompt": "You have unsaved state-doc changes. Discard local drafts?",
-    "unsavedStateDiscardPromptConnect": "You have unsaved state-doc changes. Connect and discard local drafts?",
-    "unsavedStateDiscardPromptDisconnect": "You have unsaved state-doc changes. Disconnect and discard local drafts?",
-    "unsavedStateDiscardPromptReloadState": "You have unsaved state-doc changes. Load state and discard local drafts?",
-    "unsavedStateDiscardPromptPersonaSwitch": "You have unsaved state-doc changes. Switch persona and discard local drafts?",
-    "unsavedStateDiscardPromptSessionSwitch": "You have unsaved state-doc changes. Switch session and discard local drafts?",
-    "unsavedStateDiscardPromptRestoreState": "You have unsaved state-doc changes. Restore this state version and discard local drafts?",
-    "unsavedStateDiscardPromptRouteTransition": "You have unsaved state-doc changes. Leave this page and discard local drafts?",
-    "unsavedStateBeforeUnloadPrompt": "You have unsaved state-doc changes. Leave this page without saving?"
+    "unsavedStateDiscardPrompt": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptConnect": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد الاتصال وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptDisconnect": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد قطع الاتصال وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptReloadState": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تحميل الحالة وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptPersonaSwitch": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تبديل الشخصية وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptSessionSwitch": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد تبديل الجلسة وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptRestoreState": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد استعادة هذا الإصدار من الحالة وتجاهل المسودات المحلية؟",
+    "unsavedStateDiscardPromptRouteTransition": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد مغادرة هذه الصفحة وتجاهل المسودات المحلية؟",
+    "unsavedStateBeforeUnloadPrompt": "لديك تغييرات غير محفوظة في مستند الحالة. هل تريد مغادرة هذه الصفحة بدون حفظ؟"
   }
 }

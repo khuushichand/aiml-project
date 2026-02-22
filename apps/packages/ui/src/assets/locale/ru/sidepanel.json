@@ -202,14 +202,14 @@
     }
   },
   "persona": {
-    "unsavedStateDiscardPrompt": "You have unsaved state-doc changes. Discard local drafts?",
-    "unsavedStateDiscardPromptConnect": "You have unsaved state-doc changes. Connect and discard local drafts?",
-    "unsavedStateDiscardPromptDisconnect": "You have unsaved state-doc changes. Disconnect and discard local drafts?",
-    "unsavedStateDiscardPromptReloadState": "You have unsaved state-doc changes. Load state and discard local drafts?",
-    "unsavedStateDiscardPromptPersonaSwitch": "You have unsaved state-doc changes. Switch persona and discard local drafts?",
-    "unsavedStateDiscardPromptSessionSwitch": "You have unsaved state-doc changes. Switch session and discard local drafts?",
-    "unsavedStateDiscardPromptRestoreState": "You have unsaved state-doc changes. Restore this state version and discard local drafts?",
-    "unsavedStateDiscardPromptRouteTransition": "You have unsaved state-doc changes. Leave this page and discard local drafts?",
-    "unsavedStateBeforeUnloadPrompt": "You have unsaved state-doc changes. Leave this page without saving?"
+    "unsavedStateDiscardPrompt": "У вас есть несохраненные изменения в документе состояния. Отменить локальные черновики?",
+    "unsavedStateDiscardPromptConnect": "У вас есть несохраненные изменения в документе состояния. Подключиться и отменить локальные черновики?",
+    "unsavedStateDiscardPromptDisconnect": "У вас есть несохраненные изменения в документе состояния. Отключиться и отменить локальные черновики?",
+    "unsavedStateDiscardPromptReloadState": "У вас есть несохраненные изменения в документе состояния. Загрузить состояние и отменить локальные черновики?",
+    "unsavedStateDiscardPromptPersonaSwitch": "У вас есть несохраненные изменения в документе состояния. Переключить персону и отменить локальные черновики?",
+    "unsavedStateDiscardPromptSessionSwitch": "У вас есть несохраненные изменения в документе состояния. Переключить сессию и отменить локальные черновики?",
+    "unsavedStateDiscardPromptRestoreState": "У вас есть несохраненные изменения в документе состояния. Восстановить эту версию состояния и отменить локальные черновики?",
+    "unsavedStateDiscardPromptRouteTransition": "У вас есть несохраненные изменения в документе состояния. Покинуть эту страницу и отменить локальные черновики?",
+    "unsavedStateBeforeUnloadPrompt": "У вас есть несохраненные изменения в документе состояния. Покинуть эту страницу без сохранения?"
   }
 }

@@ -202,14 +202,14 @@
     }
   },
   "persona": {
-    "unsavedStateDiscardPrompt": "You have unsaved state-doc changes. Discard local drafts?",
-    "unsavedStateDiscardPromptConnect": "You have unsaved state-doc changes. Connect and discard local drafts?",
-    "unsavedStateDiscardPromptDisconnect": "You have unsaved state-doc changes. Disconnect and discard local drafts?",
-    "unsavedStateDiscardPromptReloadState": "You have unsaved state-doc changes. Load state and discard local drafts?",
-    "unsavedStateDiscardPromptPersonaSwitch": "You have unsaved state-doc changes. Switch persona and discard local drafts?",
-    "unsavedStateDiscardPromptSessionSwitch": "You have unsaved state-doc changes. Switch session and discard local drafts?",
-    "unsavedStateDiscardPromptRestoreState": "You have unsaved state-doc changes. Restore this state version and discard local drafts?",
-    "unsavedStateDiscardPromptRouteTransition": "You have unsaved state-doc changes. Leave this page and discard local drafts?",
-    "unsavedStateBeforeUnloadPrompt": "You have unsaved state-doc changes. Leave this page without saving?"
+    "unsavedStateDiscardPrompt": "Você tem alterações não salvas no documento de estado. Descartar rascunhos locais?",
+    "unsavedStateDiscardPromptConnect": "Você tem alterações não salvas no documento de estado. Conectar e descartar rascunhos locais?",
+    "unsavedStateDiscardPromptDisconnect": "Você tem alterações não salvas no documento de estado. Desconectar e descartar rascunhos locais?",
+    "unsavedStateDiscardPromptReloadState": "Você tem alterações não salvas no documento de estado. Carregar estado e descartar rascunhos locais?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Você tem alterações não salvas no documento de estado. Trocar de persona e descartar rascunhos locais?",
+    "unsavedStateDiscardPromptSessionSwitch": "Você tem alterações não salvas no documento de estado. Trocar de sessão e descartar rascunhos locais?",
+    "unsavedStateDiscardPromptRestoreState": "Você tem alterações não salvas no documento de estado. Restaurar esta versão do estado e descartar rascunhos locais?",
+    "unsavedStateDiscardPromptRouteTransition": "Você tem alterações não salvas no documento de estado. Sair desta página e descartar rascunhos locais?",
+    "unsavedStateBeforeUnloadPrompt": "Você tem alterações não salvas no documento de estado. Sair desta página sem salvar?"
   }
 }

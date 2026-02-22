@@ -202,14 +202,14 @@
     }
   },
   "persona": {
-    "unsavedStateDiscardPrompt": "You have unsaved state-doc changes. Discard local drafts?",
-    "unsavedStateDiscardPromptConnect": "You have unsaved state-doc changes. Connect and discard local drafts?",
-    "unsavedStateDiscardPromptDisconnect": "You have unsaved state-doc changes. Disconnect and discard local drafts?",
-    "unsavedStateDiscardPromptReloadState": "You have unsaved state-doc changes. Load state and discard local drafts?",
-    "unsavedStateDiscardPromptPersonaSwitch": "You have unsaved state-doc changes. Switch persona and discard local drafts?",
-    "unsavedStateDiscardPromptSessionSwitch": "You have unsaved state-doc changes. Switch session and discard local drafts?",
-    "unsavedStateDiscardPromptRestoreState": "You have unsaved state-doc changes. Restore this state version and discard local drafts?",
-    "unsavedStateDiscardPromptRouteTransition": "You have unsaved state-doc changes. Leave this page and discard local drafts?",
-    "unsavedStateBeforeUnloadPrompt": "You have unsaved state-doc changes. Leave this page without saving?"
+    "unsavedStateDiscardPrompt": "Hai modifiche non salvate nel documento di stato. Vuoi scartare le bozze locali?",
+    "unsavedStateDiscardPromptConnect": "Hai modifiche non salvate nel documento di stato. Vuoi connetterti e scartare le bozze locali?",
+    "unsavedStateDiscardPromptDisconnect": "Hai modifiche non salvate nel documento di stato. Vuoi disconnetterti e scartare le bozze locali?",
+    "unsavedStateDiscardPromptReloadState": "Hai modifiche non salvate nel documento di stato. Vuoi caricare lo stato e scartare le bozze locali?",
+    "unsavedStateDiscardPromptPersonaSwitch": "Hai modifiche non salvate nel documento di stato. Vuoi cambiare persona e scartare le bozze locali?",
+    "unsavedStateDiscardPromptSessionSwitch": "Hai modifiche non salvate nel documento di stato. Vuoi cambiare sessione e scartare le bozze locali?",
+    "unsavedStateDiscardPromptRestoreState": "Hai modifiche non salvate nel documento di stato. Vuoi ripristinare questa versione dello stato e scartare le bozze locali?",
+    "unsavedStateDiscardPromptRouteTransition": "Hai modifiche non salvate nel documento di stato. Vuoi lasciare questa pagina e scartare le bozze locali?",
+    "unsavedStateBeforeUnloadPrompt": "Hai modifiche non salvate nel documento di stato. Vuoi lasciare questa pagina senza salvare?"
   }
 }
