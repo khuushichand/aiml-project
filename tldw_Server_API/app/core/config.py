@@ -3549,7 +3549,7 @@ def load_and_log_configs():
         mlx_overlap_duration = _get_float('STT-Settings', 'mlx_overlap_duration', 5.0)
         buffered_chunk_duration = _get_float('STT-Settings', 'buffered_chunk_duration', mlx_chunk_duration)
         buffered_total_buffer = _to_optional_float(_get_str('STT-Settings', 'buffered_total_buffer', None))
-        buffered_merge_algo = _get_str('STT-Settings', 'buffered_merge_algo', 'middle') or 'middle'
+        buffered_merge_algo = _get_str('STT-Settings', 'buffered_merge_algo', 'middle')
         streaming_fallback_to_whisper = _get_bool('STT-Settings', 'streaming_fallback_to_whisper', True)
 
         mlx_decoding_mode = _get_str('STT-Settings', 'mlx_decoding_mode', '') or ''
