@@ -146,6 +146,52 @@ def test_destroy_session_cancels_and_drains_when_active_runs_exist(monkeypatch, 
     assert killed.phase == RunPhase.killed
 
 
+def test_destroy_session_cleans_snapshots_artifacts_and_usage(monkeypatch, tmp_path: Path) -> None:
+    _configure_sqlite_store(monkeypatch, tmp_path)
+
+    svc = SandboxService()
+    session = svc.create_session(
+        user_id="user-77",
+        spec=SessionSpec(runtime=RuntimeType.docker, base_image="python:3.11-slim"),
+        spec_version="1.0",
+        idem_key=None,
+        raw_body={"spec_version": "1.0", "runtime": "docker"},
+    )
+    ws = svc._orch.get_session_workspace_path(session.id)
+    assert ws is not None
+    (Path(str(ws)) / "state.txt").write_text("snapshot me", encoding="utf-8")
+    snap = svc.create_snapshot(session.id)
+    assert snap.get("snapshot_id")
+
+    run = svc._orch.enqueue_run(
+        user_id="user-77",
+        spec=RunSpec(
+            session_id=session.id,
+            runtime=RuntimeType.docker,
+            base_image="python:3.11-slim",
+            command=["python", "-c", "print('queued')"],
+        ),
+        spec_version="1.0",
+        idem_key=None,
+        body={"command": ["python", "-c", "print('queued')"], "session_id": session.id},
+    )
+    svc._orch.store_artifacts(run.id, {"out.txt": b"hello"})
+    snapshot_dir = Path(tmp_path) / "snapshots" / session.id
+    artifact_dir = Path(tmp_path) / "sandbox_root" / "user-77" / "runs" / run.id / "artifacts"
+    assert snapshot_dir.exists()
+    assert artifact_dir.exists()
+    assert svc._orch._store.get_user_artifact_bytes("user-77") == 5  # type: ignore[attr-defined]
+
+    assert svc.destroy_session(session.id) is True
+
+    killed = svc._orch.get_run(run.id)
+    assert killed is not None
+    assert killed.phase == RunPhase.killed
+    assert not snapshot_dir.exists()
+    assert not artifact_dir.exists()
+    assert svc._orch._store.get_user_artifact_bytes("user-77") == 0  # type: ignore[attr-defined]
+
+
 def test_session_tenancy_metadata_roundtrips_across_orchestrators(monkeypatch, tmp_path: Path) -> None:
     _configure_sqlite_store(monkeypatch, tmp_path)
 
