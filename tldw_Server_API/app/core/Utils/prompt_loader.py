@@ -29,6 +29,26 @@ def _norm_key(key: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", key.strip().lower())
 
 
+def _prompt_env_file_key(module: str, key: str) -> str:
+    module_token = re.sub(r"[^A-Za-z0-9]+", "_", module.strip().upper()).strip("_")
+    key_token = re.sub(r"[^A-Za-z0-9]+", "_", key.strip().upper()).strip("_")
+    return f"TLDW_PROMPT_FILE_{module_token}__{key_token}"
+
+
+def _load_env_prompt_file(module: str, key: str) -> Optional[str]:
+    env_name = _prompt_env_file_key(module, key)
+    raw_path = os.getenv(env_name)
+    if not raw_path or not str(raw_path).strip():
+        return None
+
+    path = os.path.expanduser(str(raw_path).strip())
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
 def _load_yaml(path: str) -> Optional[dict[str, Any]]:
     try:
         import yaml  # type: ignore
@@ -61,6 +81,10 @@ def load_prompt(module: str, key: str) -> Optional[str]:
     Searches for a markdown heading containing the key, then returns the
     first fenced code block following that heading. If not found, returns None.
     """
+    env_override = _load_env_prompt_file(module, key)
+    if env_override is not None:
+        return env_override
+
     base = _module_file_base(module)
     norm = _norm_key(key)
 

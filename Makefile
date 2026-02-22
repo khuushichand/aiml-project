@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui verify pypi-build pypi-check
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui verify pypi-build pypi-check tooling-install tooling-smoke
 
 PYTHON ?= python3
 VENV_DIR ?= .venv
@@ -58,6 +58,17 @@ quickstart: quickstart-prereqs
 	@echo "[quickstart] Verify with: curl http://localhost:8000/health"
 	@echo "[quickstart] API docs at: http://127.0.0.1:8000/docs"
 	$(PYTHON) -m uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
+
+tooling-install:
+	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[tooling-install] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)
+	@$(PYTHON) -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || (echo "[tooling-install] Python 3.10+ is required." && exit 1)
+	@if [ ! -x "$(VENV_PYTHON)" ]; then \
+		echo "[tooling-install] Creating virtualenv at $(VENV_DIR)"; \
+		$(PYTHON) -m venv $(VENV_DIR); \
+	fi
+	@echo "[tooling-install] Installing tooling extras into $(VENV_DIR)..."
+	@$(VENV_PYTHON) -m pip install --upgrade pip setuptools wheel
+	@$(VENV_PYTHON) -m pip install -e ".[tooling]"
 
 quickstart-docker-bootstrap:
 	@echo "[quickstart-docker-bootstrap] Ensuring $(TLDW_ENV_FILE) has safe first-use auth defaults..."
@@ -174,6 +185,19 @@ watchlists-audio-smoke:
 		--base-url "$(WATCHLISTS_BASE_URL)" \
 		--api-key "$(WATCHLISTS_API_KEY)" \
 		$(WATCHLISTS_AUDIO_SMOKE_ARGS)
+
+# -----------------------------------------------------------------------------
+# Unified tooling smoke (streaming + watchlists audio)
+# -----------------------------------------------------------------------------
+
+TOOLING_SMOKE_BASE_URL ?= http://127.0.0.1:8000
+TOOLING_SMOKE_API_KEY ?= $(SINGLE_USER_API_KEY)
+
+tooling-smoke:
+	@echo "[tooling-smoke] Running unified tooling smoke checks against $(TOOLING_SMOKE_BASE_URL)"
+	$(PYTHON) Helper_Scripts/tooling_smoke.py \
+		--base-url "$(TOOLING_SMOKE_BASE_URL)" \
+		--api-key "$(TOOLING_SMOKE_API_KEY)"
 
 # -----------------------------------------------------------------------------
 # Prompt Studio tests

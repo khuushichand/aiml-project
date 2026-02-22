@@ -344,7 +344,8 @@ curl http://localhost:8000/health
 ```bash
 # Optional pip extras
 pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
-pip install -e ".[dev]"           # tests, linters, tooling
+pip install -e ".[tooling]"       # unified tooling smoke helpers/scripts
+pip install -e ".[dev]"           # tests and linters
 pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 
 # pyaudio (needed for audio capture and some processing paths)
@@ -939,6 +940,7 @@ All limits are designed to be conservative by default and can be tuned using the
 - `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
+- `make tooling-smoke` - runs unified tooling smoke checks (`streaming_unified_smoke.py` + `watchlists_audio_smoke.py`) against a running local API (`http://127.0.0.1:8000` by default).
 
 </details>
 
