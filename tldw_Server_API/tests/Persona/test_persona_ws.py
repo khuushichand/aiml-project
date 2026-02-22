@@ -96,6 +96,44 @@ def _seed_persona_session(
         db.close_connection()
 
 
+def _seed_persona_state_docs(
+    tmp_path,
+    monkeypatch,
+    *,
+    user_id: str,
+    persona_id: str,
+    soul_md: str | None = None,
+    identity_md: str | None = None,
+    heartbeat_md: str | None = None,
+) -> None:
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    base = tmp_path / "user_db"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base))
+    db_path = DatabasePaths.get_chacha_db_path(int(user_id))
+    db = CharactersRAGDB(str(db_path), client_id=f"persona-ws-state-{user_id}-{persona_id}")
+    state_values = {
+        "persona_state_soul": soul_md,
+        "persona_state_identity": identity_md,
+        "persona_state_heartbeat": heartbeat_md,
+    }
+    try:
+        for memory_type, value in state_values.items():
+            if value is None:
+                continue
+            _ = db.add_persona_memory_entry(
+                {
+                    "persona_id": persona_id,
+                    "user_id": str(user_id),
+                    "memory_type": memory_type,
+                    "content": str(value),
+                    "salience": 0.0,
+                }
+            )
+    finally:
+        db.close_connection()
+
+
 def _assert_event_meta_fields(event: dict, *, session_id: str) -> None:
     assert event.get("session_id") == session_id
     assert isinstance(event.get("timestamp_ms"), int)
@@ -1861,6 +1899,95 @@ def test_persona_persistent_scoped_persisted_session_applies_memory_context(tmp_
     assert memory_payload.get("applied_count") >= 1
     query_value = str(plan["steps"][0]["args"]["query"])
     assert memory_text in query_value
+
+
+def test_persona_persistent_scoped_identity_query_uses_state_docs(tmp_path, monkeypatch):
+    identity_marker = "Identity marker from persistent state"
+    soul_marker = "Soul marker from persistent state"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_state_identity_persistent",
+        mode="persistent_scoped",
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md=identity_marker,
+        soul_md=soul_marker,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_state_identity_persistent",
+                        "text": "who are you?",
+                    }
+                )
+            )
+            state_notice = _recv_until(
+                ws,
+                lambda d: d.get("event") == "notice"
+                and d.get("reason_code") == "PERSONA_STATE_HINTS_APPLIED",
+            )
+            assert "Applied" in str(state_notice.get("message"))
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_step = plan["steps"][0]
+    assert first_step["step_type"] == "final_answer"
+    answer_text = str((first_step.get("args") or {}).get("text") or "")
+    assert identity_marker in answer_text
+    assert soul_marker in answer_text
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("persona_state_applied_count", 0) >= 1
+    assert "identity" in list(memory_payload.get("persona_state_fields") or [])
+
+
+def test_persona_session_scoped_identity_query_does_not_use_state_docs(tmp_path, monkeypatch):
+    identity_marker = "Identity marker should not appear in session mode"
+    _seed_persona_session(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        session_id="sess_state_identity_session",
+        mode="session_scoped",
+    )
+    _seed_persona_state_docs(
+        tmp_path,
+        monkeypatch,
+        user_id="1",
+        persona_id="research_assistant",
+        identity_md=identity_marker,
+    )
+
+    with TestClient(fastapi_app) as c:
+        with c.websocket_connect("/api/v1/persona/stream") as ws:
+            _ = json.loads(ws.receive_text())
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "user_message",
+                        "session_id": "sess_state_identity_session",
+                        "text": "who are you?",
+                    }
+                )
+            )
+            plan = _recv_until(ws, lambda d: d.get("event") == "tool_plan")
+
+    first_step = plan["steps"][0]
+    assert first_step["step_type"] == "rag_query"
+    query_text = str((first_step.get("args") or {}).get("query") or "")
+    assert identity_marker not in query_text
+    memory_payload = plan.get("memory") or {}
+    assert memory_payload.get("persona_state_applied_count") == 0
+    assert list(memory_payload.get("persona_state_fields") or []) == []
 
 
 @pytest.mark.parametrize(

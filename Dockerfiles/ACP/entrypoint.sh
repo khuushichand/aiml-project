@@ -34,6 +34,10 @@ if [ -z "${USER_HOME}" ]; then
   USER_HOME="/home/${USER_NAME}"
 fi
 RUNTIME_HOME="${ACP_RUNTIME_HOME:-${USER_HOME}}"
+if [ "${ACP_RUNTIME_HOME:-}" = "/" ]; then
+  echo "ACP runtime home cannot be '/'." >&2
+  exit 64
+fi
 RUNTIME_HOME="${RUNTIME_HOME%/}"
 if [ -z "${RUNTIME_HOME}" ]; then
   RUNTIME_HOME="/workspace/.acp-home"

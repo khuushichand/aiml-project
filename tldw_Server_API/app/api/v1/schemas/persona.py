@@ -126,3 +126,17 @@ class PersonaPolicyRulesResponse(BaseModel):
 class PersonaDeleteResponse(BaseModel):
     status: str
     persona_id: str
+
+
+class PersonaStateUpdateRequest(BaseModel):
+    soul_md: str | None = Field(default=None, max_length=200_000)
+    identity_md: str | None = Field(default=None, max_length=200_000)
+    heartbeat_md: str | None = Field(default=None, max_length=200_000)
+
+
+class PersonaStateResponse(BaseModel):
+    persona_id: str
+    soul_md: str | None = None
+    identity_md: str | None = None
+    heartbeat_md: str | None = None
+    last_modified: str | None = None

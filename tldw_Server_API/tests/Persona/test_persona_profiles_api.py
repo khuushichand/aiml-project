@@ -162,6 +162,179 @@ def test_persona_session_response_includes_scope_audit(persona_db: CharactersRAG
     fastapi_app.dependency_overrides.clear()
 
 
+def test_persona_profile_state_docs_roundtrip_and_archives_previous_version(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Persistent Companion", "mode": "persistent_scoped"},
+        )
+        assert created.status_code == 201, created.text
+        persona_id = created.json()["id"]
+
+        initial_state = client.get(f"/api/v1/persona/profiles/{persona_id}/state")
+        assert initial_state.status_code == 200, initial_state.text
+        assert initial_state.json()["soul_md"] is None
+        assert initial_state.json()["identity_md"] is None
+        assert initial_state.json()["heartbeat_md"] is None
+
+        put_first = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={
+                "soul_md": "You are curious and kind.",
+                "identity_md": "Name: Ava",
+            },
+        )
+        assert put_first.status_code == 200, put_first.text
+        first_payload = put_first.json()
+        assert first_payload["soul_md"] == "You are curious and kind."
+        assert first_payload["identity_md"] == "Name: Ava"
+        assert first_payload["heartbeat_md"] is None
+        assert first_payload["last_modified"]
+
+        put_second = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={"soul_md": "You are calm and reflective."},
+        )
+        assert put_second.status_code == 200, put_second.text
+        second_payload = put_second.json()
+        assert second_payload["soul_md"] == "You are calm and reflective."
+        assert second_payload["identity_md"] == "Name: Ava"
+
+        soul_active = persona_db.list_persona_memory_entries(
+            user_id="1",
+            persona_id=persona_id,
+            memory_type="persona_state_soul",
+            include_archived=False,
+            include_deleted=False,
+            limit=20,
+            offset=0,
+        )
+        assert len(soul_active) == 1
+        assert soul_active[0]["content"] == "You are calm and reflective."
+
+        soul_all = persona_db.list_persona_memory_entries(
+            user_id="1",
+            persona_id=persona_id,
+            memory_type="persona_state_soul",
+            include_archived=True,
+            include_deleted=False,
+            limit=20,
+            offset=0,
+        )
+        assert len(soul_all) >= 2
+        assert any(
+            bool(row.get("archived"))
+            and str(row.get("content")) == "You are curious and kind."
+            for row in soul_all
+        )
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_profile_state_update_rejects_empty_payload(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "State Empty Payload", "mode": "persistent_scoped"},
+        )
+        assert created.status_code == 201, created.text
+        persona_id = created.json()["id"]
+
+        empty_update = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={},
+        )
+        assert empty_update.status_code == 400
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_profile_state_is_user_scoped(persona_db: CharactersRAGDB):
+    with _client_for_user(1, persona_db) as user_one_client:
+        created = user_one_client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Private State Persona", "mode": "persistent_scoped"},
+        )
+        assert created.status_code == 201, created.text
+        persona_id = created.json()["id"]
+        set_state = user_one_client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={"identity_md": "Visible only to owner"},
+        )
+        assert set_state.status_code == 200, set_state.text
+
+    fastapi_app.dependency_overrides.clear()
+
+    with _client_for_user(2, persona_db) as user_two_client:
+        fetched = user_two_client.get(f"/api/v1/persona/profiles/{persona_id}/state")
+        assert fetched.status_code == 404
+        updated = user_two_client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={"identity_md": "forged"},
+        )
+        assert updated.status_code == 404
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_profile_state_update_rejects_oversized_doc_with_413(persona_db: CharactersRAGDB, monkeypatch):
+    monkeypatch.setattr(persona_ep, "_get_persona_state_doc_max_chars", lambda: 16)
+
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Oversize Guard Persona", "mode": "persistent_scoped"},
+        )
+        assert created.status_code == 201, created.text
+        persona_id = created.json()["id"]
+
+        oversized = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={"identity_md": "x" * 48},
+        )
+        assert oversized.status_code == 413
+        detail = str(oversized.json().get("detail") or "")
+        assert "identity_md exceeds max chars" in detail
+
+    fastapi_app.dependency_overrides.clear()
+
+
+def test_persona_profile_state_metrics_smoke(persona_db: CharactersRAGDB, monkeypatch):
+    captured_metrics: list[tuple[str, dict[str, str]]] = []
+
+    def _fake_increment(metric_name, value=1, labels=None):
+        captured_metrics.append((str(metric_name), {str(k): str(v) for k, v in dict(labels or {}).items()}))
+        return None
+
+    monkeypatch.setattr(persona_ep, "increment_counter", _fake_increment)
+
+    with _client_for_user(1, persona_db) as client:
+        created = client.post(
+            "/api/v1/persona/profiles",
+            json={"name": "Metric Persona", "mode": "persistent_scoped"},
+        )
+        assert created.status_code == 201, created.text
+        persona_id = created.json()["id"]
+
+        write_resp = client.put(
+            f"/api/v1/persona/profiles/{persona_id}/state",
+            json={"soul_md": "metric state"},
+        )
+        assert write_resp.status_code == 200, write_resp.text
+
+        read_resp = client.get(f"/api/v1/persona/profiles/{persona_id}/state")
+        assert read_resp.status_code == 200, read_resp.text
+
+    persona_state_metrics = [
+        (name, labels) for name, labels in captured_metrics if name == "persona_state_docs_total"
+    ]
+    assert persona_state_metrics
+    assert any(labels.get("action") == "write" and labels.get("result") == "success" for _, labels in persona_state_metrics)
+    assert any(labels.get("action") == "read" and labels.get("result") == "success" for _, labels in persona_state_metrics)
+
+    fastapi_app.dependency_overrides.clear()
+
+
 def test_persona_profiles_are_user_scoped(persona_db: CharactersRAGDB):
     with _client_for_user(1, persona_db) as user_one_client:
         created = user_one_client.post(
