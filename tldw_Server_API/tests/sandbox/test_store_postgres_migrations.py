@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import random
 import string
+import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -27,7 +29,7 @@ def test_postgres_store_adds_missing_columns(monkeypatch):
     # Prepare a clean slate: drop tables if exist and create old schema without new columns
     with psycopg.connect(dsn, autocommit=True) as con:
         with con.cursor() as cur:
-            for tbl in ("sandbox_runs", "sandbox_idempotency", "sandbox_usage"):
+            for tbl in ("sandbox_runs", "sandbox_idempotency", "sandbox_usage", "sandbox_sessions", "sandbox_acp_sessions"):
                 try:
                     cur.execute(f"DROP TABLE IF EXISTS {tbl}")
                 except Exception:
@@ -90,3 +92,73 @@ def test_postgres_store_adds_missing_columns(monkeypatch):
             cols = {r[0] for r in cur.fetchall()}
             assert "runtime_version" in cols
             assert "resource_usage" in cols
+            assert "session_id" in cols
+            assert "persona_id" in cols
+            assert "workspace_id" in cols
+            assert "workspace_group_id" in cols
+            assert "scope_snapshot_id" in cols
+
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='sandbox_acp_sessions'
+                """
+            )
+            acp_cols = {r[0] for r in cur.fetchall()}
+            assert "id" in acp_cols
+            assert "user_id" in acp_cols
+            assert "sandbox_session_id" in acp_cols
+            assert "run_id" in acp_cols
+            assert "ssh_private_key" in acp_cols
+            assert "persona_id" in acp_cols
+            assert "workspace_id" in acp_cols
+            assert "workspace_group_id" in acp_cols
+            assert "scope_snapshot_id" in acp_cols
+
+
+@pytest.mark.integration
+def test_postgres_update_run_preserves_owner(monkeypatch):
+    dsn = os.getenv("SANDBOX_TEST_PG_DSN")
+    if not dsn or not _has_psycopg():
+        pytest.skip("Postgres DSN not provided or psycopg not installed")
+
+    from tldw_Server_API.app.core.Sandbox.models import RunPhase, RunStatus, RuntimeType
+    from tldw_Server_API.app.core.Sandbox.store import PostgresStore
+
+    run_id = f"owner-preserve-{uuid.uuid4().hex[:12]}"
+    owner = "owner-42"
+    st = PostgresStore(dsn=dsn)
+    initial = RunStatus(
+        id=run_id,
+        phase=RunPhase.queued,
+        spec_version="1.0",
+        runtime=RuntimeType.docker,
+        base_image="python:3.11-slim",
+    )
+    st.put_run(owner, initial)
+
+    updated = RunStatus(
+        id=run_id,
+        phase=RunPhase.running,
+        spec_version="1.0",
+        runtime=RuntimeType.docker,
+        base_image="python:3.11-slim",
+        started_at=datetime.now(timezone.utc),
+        message="started",
+    )
+    st.update_run(updated)
+
+    assert st.get_run_owner(run_id) == owner
+
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT user_id FROM sandbox_runs WHERE id = %s", (run_id,))
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] == owner
+
+    with psycopg.connect(dsn, autocommit=True) as con:
+        with con.cursor() as cur:
+            cur.execute("DELETE FROM sandbox_runs WHERE id = %s", (run_id,))

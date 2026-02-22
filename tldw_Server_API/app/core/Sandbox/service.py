@@ -697,16 +697,24 @@ class SandboxService:
             status.policy_hash = compute_policy_hash(self.policy.cfg)
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             status.policy_hash = None  # type: ignore[assignment]
-        # Timestamps in scaffold
+        # Keep phase/status fields contract-safe and persist before returning so
+        # POST response fields match subsequent GET/cross-node reads.
         now = datetime.utcnow()
-        if not status.started_at:
-            status.started_at = now
-        if not status.finished_at and status.phase in (RunPhase.completed, RunPhase.failed, RunPhase.killed, RunPhase.timed_out):
-            status.finished_at = now
-        if status.exit_code is None and status.phase == RunPhase.completed:
-            status.exit_code = 0
-        if not status.message:
-            status.message = "Sandbox scaffold: execution not implemented"
+        if status.phase == RunPhase.queued:
+            status.started_at = None
+            status.finished_at = None
+            status.exit_code = None
+        elif status.phase in (RunPhase.completed, RunPhase.failed, RunPhase.killed, RunPhase.timed_out):
+            if not status.started_at:
+                status.started_at = now
+            if not status.finished_at:
+                status.finished_at = now
+            if status.exit_code is None and status.phase == RunPhase.completed:
+                status.exit_code = 0
+        try:
+            self._orch.update_run(status.id, status)
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
+            logger.debug(f"sandbox: update_run(final) skipped: {_e}")
         return status
 
     def get_run(self, run_id: str) -> RunStatus | None:
@@ -808,9 +816,8 @@ class SandboxService:
         if not source_owner:
             raise ValueError("Source session owner not found")
 
-        # Get source session details
-        with self._orch._lock:
-            source_sess = self._orch._sessions.get(session_id)
+        # Resolve source session details from orchestrator cache/store.
+        source_sess = self._orch.get_session(session_id)
 
         if not source_sess:
             raise ValueError("Source session not found")
@@ -819,6 +826,10 @@ class SandboxService:
         spec = SessionSpec(
             runtime=source_sess.runtime,
             base_image=source_sess.base_image,
+            persona_id=source_sess.persona_id,
+            workspace_id=source_sess.workspace_id,
+            workspace_group_id=source_sess.workspace_group_id,
+            scope_snapshot_id=source_sess.scope_snapshot_id,
         )
         new_sess = self._orch.create_session(
             user_id=source_owner,

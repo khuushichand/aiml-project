@@ -105,14 +105,21 @@ runtime = docker
 # Base image for ACP sandbox (must include sshd + tldw-agent-acp).
 base_image = tldw/acp-agent:latest
 # Network policy for ACP sandbox (allow_all|allowlist|deny_all).
-network_policy = allow_all
+network_policy = deny_all
+# Security hardening defaults (override only for trusted debug workflows).
+run_as_root = false
+read_only_root = true
 # SSH settings
 ssh_enabled = true
 ssh_user = acp
 ssh_host = 127.0.0.1
+# Container-internal SSH listen port (host port remains allocated from ssh_port_min/max).
+ssh_container_port = 2222
 ssh_port_min = 2222
 ssh_port_max = 2299
 # Downstream agent command (inside container)
+# IMPORTANT: This must be the coding agent executable (e.g. claude, codex, opencode),
+# not tldw-agent-acp itself.
 agent_command =
 # JSON array or shell-style args
 agent_args = []
@@ -1446,6 +1453,8 @@ default_persona = Research Assistant
 voice = default
 stt = faster_whisper
 max_tool_steps = 3
+persona_memory_read_mode = legacy_only
+persona_memory_write_mode = legacy_only
 
 [persona.rbac]
 allow_export = false

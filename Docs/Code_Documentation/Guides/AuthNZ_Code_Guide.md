@@ -446,7 +446,7 @@ References:
 Operator references:
 - JWT rotation runbook: `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`
 - AuthNZ settings/env vars (AuthNZ section): `Docs/Operations/Env_Vars.md`
-- Authentication setup guide: `Docs/Published/User_Guides/Authentication_Setup.md`
+- Authentication setup guide: `Docs/Published/User_Guides/Server/Authentication_Setup.md`
 
 ## Database Backends
 

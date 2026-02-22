@@ -46,7 +46,12 @@ import {
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
-import type { DictationModePreference } from "@/hooks/useDictationStrategy"
+import type {
+  DictationErrorClass,
+  DictationModePreference,
+  DictationResolvedMode,
+  DictationServerErrorTransition
+} from "@/hooks/useDictationStrategy"
 import { useDictationStrategy } from "@/hooks/useDictationStrategy"
 import { useServerDictation } from "@/hooks/useServerDictation"
 import type { SttSettings } from "@/hooks/useSttSettings"
@@ -138,11 +143,20 @@ import { useStoreMessageOption } from "@/store/option"
 import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { withTemplateFallback } from "@/utils/template-guards"
+import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
   normalizeChatModelId
 } from "@/utils/chat-model-availability"
+import {
+  DEFAULT_CHARACTER_STORAGE_KEY,
+  defaultCharacterStorage,
+  isFreshChatState,
+  resolveCharacterSelectionId,
+  shouldApplyDefaultCharacter,
+  shouldResetDefaultCharacterBootstrap
+} from "@/utils/default-character-preference"
 import { resolveStartupSelectedModel } from "@/utils/model-startup-selection"
 import {
   useModelSelector,
@@ -216,6 +230,10 @@ import {
 
 type Props = {
   droppedFiles: File[]
+}
+
+type DefaultCharacterPreferenceQueryResult = {
+  defaultCharacterId: string | null
 }
 
 const CONTEXT_FOOTPRINT_THRESHOLD_PERCENT = 40
@@ -552,6 +570,23 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
   const [selectedCharacter, setSelectedCharacter] =
     useSelectedCharacter<Character | null>(null)
+  const [defaultCharacter, setDefaultCharacter] = useStorage<Character | null>(
+    {
+      key: DEFAULT_CHARACTER_STORAGE_KEY,
+      instance: defaultCharacterStorage
+    },
+    null
+  )
+  const { data: defaultCharacterPreference } = useQuery<DefaultCharacterPreferenceQueryResult>({
+    queryKey: ["tldw:defaultCharacterPreference:playground"],
+    queryFn: async () => {
+      await tldwClient.initialize()
+      const defaultCharacterId = await tldwClient.getDefaultCharacterPreference()
+      return { defaultCharacterId }
+    },
+    staleTime: 60 * 1000,
+    throwOnError: false
+  })
   const [showMoodConfidence, setShowMoodConfidence] = useStorage(
     "chatShowMoodConfidence",
     Boolean(selectedCharacter?.id) && !compareMode
@@ -609,6 +644,98 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         .filter(Boolean)
         .join(" ")
     : ""
+
+  const storedCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(selectedCharacter),
+    [selectedCharacter]
+  )
+  const localDefaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(defaultCharacter),
+    [defaultCharacter]
+  )
+  const serverDefaultCharacterId = defaultCharacterPreference?.defaultCharacterId
+  const effectiveDefaultCharacter = React.useMemo<Character | null>(() => {
+    if (typeof serverDefaultCharacterId === "undefined") {
+      return defaultCharacter
+    }
+    if (!serverDefaultCharacterId) {
+      return null
+    }
+    if (
+      localDefaultCharacterId === serverDefaultCharacterId &&
+      defaultCharacter
+    ) {
+      return defaultCharacter
+    }
+    return { id: serverDefaultCharacterId } as Character
+  }, [defaultCharacter, localDefaultCharacterId, serverDefaultCharacterId])
+  const effectiveDefaultCharacterId = React.useMemo(
+    () => resolveCharacterSelectionId(effectiveDefaultCharacter),
+    [effectiveDefaultCharacter]
+  )
+  const isFreshChat = React.useMemo(
+    () => isFreshChatState(serverChatId, messages.length),
+    [messages.length, serverChatId]
+  )
+  const defaultCharacterBootstrapAppliedRef = React.useRef(false)
+  const previousFreshChatRef = React.useRef(isFreshChat)
+
+  React.useEffect(() => {
+    if (typeof serverDefaultCharacterId === "undefined") return
+
+    if (!serverDefaultCharacterId) {
+      if (localDefaultCharacterId) {
+        void setDefaultCharacter(null)
+      }
+      return
+    }
+
+    if (localDefaultCharacterId === serverDefaultCharacterId) return
+    void setDefaultCharacter({ id: serverDefaultCharacterId } as Character)
+  }, [
+    localDefaultCharacterId,
+    serverDefaultCharacterId,
+    setDefaultCharacter
+  ])
+
+  React.useEffect(() => {
+    defaultCharacterBootstrapAppliedRef.current = false
+  }, [effectiveDefaultCharacterId])
+
+  React.useEffect(() => {
+    if (
+      shouldResetDefaultCharacterBootstrap(
+        previousFreshChatRef.current,
+        isFreshChat
+      )
+    ) {
+      defaultCharacterBootstrapAppliedRef.current = false
+    }
+    previousFreshChatRef.current = isFreshChat
+  }, [isFreshChat])
+
+  React.useEffect(() => {
+    if (!effectiveDefaultCharacter || !effectiveDefaultCharacterId) return
+    if (
+      !shouldApplyDefaultCharacter({
+        defaultCharacterId: effectiveDefaultCharacterId,
+        selectedCharacterId: storedCharacterId,
+        isFreshChat,
+        hasAppliedInSession: defaultCharacterBootstrapAppliedRef.current
+      })
+    ) {
+      return
+    }
+
+    defaultCharacterBootstrapAppliedRef.current = true
+    void setSelectedCharacter(effectiveDefaultCharacter)
+  }, [
+    effectiveDefaultCharacter,
+    effectiveDefaultCharacterId,
+    isFreshChat,
+    setSelectedCharacter,
+    storedCharacterId
+  ])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -2675,15 +2802,60 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       }
     }
   })
-  const serverDictationErrorBridgeRef = React.useRef<(error: unknown) => void>(
-    () => {}
+  const dictationDiagnosticsSnapshotRef = React.useRef<{
+    requestedMode: DictationModePreference
+    resolvedMode: DictationResolvedMode
+    speechAvailable: boolean
+    speechUsesServer: boolean
+    fallbackReason: DictationErrorClass | null
+  }>({
+    requestedMode: "auto",
+    resolvedMode: "unavailable",
+    speechAvailable: false,
+    speechUsesServer: false,
+    fallbackReason: null
+  })
+  const serverDictationErrorBridgeRef = React.useRef<
+    (error: unknown) => DictationServerErrorTransition
+  >(
+    () => ({
+      errorClass: "unknown_error",
+      appliedFallback: false,
+      requestedMode: "auto",
+      resolvedModeBeforeError: "unavailable",
+      speechAvailableBeforeError: false,
+      speechUsesServerBeforeError: false,
+      browserSupportsSpeechRecognition: false,
+      autoFallbackEnabled: false
+    })
   )
   const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
   const handleServerDictationError = React.useCallback((error: unknown) => {
-    serverDictationErrorBridgeRef.current(error)
+    const transition = serverDictationErrorBridgeRef.current(error)
+    emitDictationDiagnostics({
+      surface: "playground",
+      kind: "server_error",
+      requestedMode: transition.requestedMode,
+      resolvedMode: transition.resolvedModeBeforeError,
+      speechAvailable: transition.speechAvailableBeforeError,
+      speechUsesServer: transition.speechUsesServerBeforeError,
+      errorClass: transition.errorClass,
+      fallbackApplied: transition.appliedFallback,
+      fallbackReason: transition.appliedFallback ? transition.errorClass : null
+    })
   }, [])
   const handleServerDictationSuccess = React.useCallback(() => {
     serverDictationSuccessBridgeRef.current()
+    const snapshot = dictationDiagnosticsSnapshotRef.current
+    emitDictationDiagnostics({
+      surface: "playground",
+      kind: "server_success",
+      requestedMode: snapshot.requestedMode,
+      resolvedMode: snapshot.resolvedMode,
+      speechAvailable: snapshot.speechAvailable,
+      speechUsesServer: snapshot.speechUsesServer,
+      fallbackReason: snapshot.fallbackReason
+    })
   }, [])
   const sttSettings = React.useMemo<SttSettings>(
     () => ({
@@ -2743,6 +2915,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const speechAvailable = dictationStrategy.speechAvailable
   const speechUsesServer = dictationStrategy.speechUsesServer
   const dictationToggleIntent = dictationStrategy.toggleIntent
+  dictationDiagnosticsSnapshotRef.current = {
+    requestedMode: dictationStrategy.requestedMode,
+    resolvedMode: dictationStrategy.resolvedMode,
+    speechAvailable: dictationStrategy.speechAvailable,
+    speechUsesServer: dictationStrategy.speechUsesServer,
+    fallbackReason: dictationStrategy.autoFallbackErrorClass
+  }
   serverDictationErrorBridgeRef.current = dictationStrategy.recordServerError
   serverDictationSuccessBridgeRef.current = dictationStrategy.recordServerSuccess
 
@@ -3866,6 +4045,17 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       default:
         break
     }
+    const snapshot = dictationDiagnosticsSnapshotRef.current
+    emitDictationDiagnostics({
+      surface: "playground",
+      kind: "toggle",
+      requestedMode: snapshot.requestedMode,
+      resolvedMode: snapshot.resolvedMode,
+      speechAvailable: snapshot.speechAvailable,
+      speechUsesServer: snapshot.speechUsesServer,
+      toggleIntent: dictationToggleIntent,
+      fallbackReason: snapshot.fallbackReason
+    })
   }, [
     dictationToggleIntent,
     startBrowserDictation,

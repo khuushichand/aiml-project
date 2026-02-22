@@ -184,6 +184,7 @@ export interface ACPSession {
   id: string
   cwd: string
   name?: string
+  forkParentSessionId?: string | null
   agentType?: ACPAgentType
   tags?: string[]
   mcpServers?: ACPMCPServerConfig[]

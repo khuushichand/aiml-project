@@ -50,6 +50,10 @@ class IdempotencyConflict(Exception):
         self.created_at = created_at
 
 
+class ClusterStoreUnavailable(RuntimeError):
+    """Raised when cluster store backend is requested but unavailable."""
+
+
 class SandboxStore:
     """Abstract store for runs, idempotency, and usage counters."""
 
@@ -71,6 +75,57 @@ class SandboxStore:
     def get_run_owner(self, run_id: str) -> str | None:
         raise NotImplementedError
 
+    # Session metadata APIs (owner/runtime/workspace) for cross-process durability.
+    def put_session(
+        self,
+        user_id: Any,
+        *,
+        session_id: str,
+        runtime: str | None,
+        base_image: str | None,
+        expires_at_iso: str | None,
+        workspace_path: str | None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        raise NotImplementedError
+
+    def delete_session(self, session_id: str) -> bool:
+        raise NotImplementedError
+
+    # ACP control-plane metadata for cross-process/cross-node session rehydration.
+    def put_acp_session_control(
+        self,
+        *,
+        session_id: str,
+        user_id: Any,
+        sandbox_session_id: str | None,
+        run_id: str | None,
+        ssh_host: str | None = None,
+        ssh_port: int | None = None,
+        ssh_user: str | None = None,
+        ssh_private_key: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def get_acp_session_control(self, session_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    def delete_acp_session_control(self, session_id: str) -> bool:
+        raise NotImplementedError
+
     def get_user_artifact_bytes(self, user_id: str) -> int:
         return 0
 
@@ -83,6 +138,10 @@ class SandboxStore:
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -92,7 +151,8 @@ class SandboxStore:
     ) -> list[dict]:
         """Return a list of run summary rows as dicts suitable for admin list endpoints.
 
-        Each dict contains: id, user_id, spec_version, runtime, base_image, phase,
+        Each dict contains: id, user_id, spec_version, runtime, base_image, session_id,
+        persona_id, workspace_id, workspace_group_id, scope_snapshot_id, phase,
         exit_code, started_at, finished_at, message, image_digest, policy_hash
         """
         raise NotImplementedError
@@ -102,6 +162,10 @@ class SandboxStore:
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -168,6 +232,8 @@ class InMemoryStore(SandboxStore):
         self._idem: dict[tuple[str, str, str], tuple[float, str, dict[str, Any], str]] = {}
         self._runs: dict[str, RunStatus] = {}
         self._owners: dict[str, str] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
+        self._acp_sessions: dict[str, dict[str, Any]] = {}
         self._user_bytes: dict[str, int] = {}
         self._lock = threading.RLock()
 
@@ -237,6 +303,97 @@ class InMemoryStore(SandboxStore):
         with self._lock:
             return self._owners.get(run_id)
 
+    def put_session(
+        self,
+        user_id: Any,
+        *,
+        session_id: str,
+        runtime: str | None,
+        base_image: str | None,
+        expires_at_iso: str | None,
+        workspace_path: str | None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._sessions[str(session_id)] = {
+                "id": str(session_id),
+                "user_id": self._user_key(user_id),
+                "runtime": runtime,
+                "base_image": base_image,
+                "expires_at": expires_at_iso,
+                "workspace_path": workspace_path,
+                "persona_id": (str(persona_id) if persona_id is not None else None),
+                "workspace_id": (str(workspace_id) if workspace_id is not None else None),
+                "workspace_group_id": (str(workspace_group_id) if workspace_group_id is not None else None),
+                "scope_snapshot_id": (str(scope_snapshot_id) if scope_snapshot_id is not None else None),
+            }
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._sessions.get(str(session_id))
+            return dict(row) if isinstance(row, dict) else None
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        with self._lock:
+            row = self._sessions.get(str(session_id))
+            if not isinstance(row, dict):
+                return None
+            owner = row.get("user_id")
+            return str(owner) if owner is not None else None
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            return self._sessions.pop(str(session_id), None) is not None
+
+    def put_acp_session_control(
+        self,
+        *,
+        session_id: str,
+        user_id: Any,
+        sandbox_session_id: str | None,
+        run_id: str | None,
+        ssh_host: str | None = None,
+        ssh_port: int | None = None,
+        ssh_user: str | None = None,
+        ssh_private_key: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        now_ts = time.time()
+        with self._lock:
+            existing = self._acp_sessions.get(str(session_id), {})
+            created_at = existing.get("created_at", now_ts)
+            self._acp_sessions[str(session_id)] = {
+                "id": str(session_id),
+                "user_id": self._user_key(user_id),
+                "sandbox_session_id": (str(sandbox_session_id) if sandbox_session_id is not None else None),
+                "run_id": (str(run_id) if run_id is not None else None),
+                "ssh_host": (str(ssh_host) if ssh_host is not None else None),
+                "ssh_port": (int(ssh_port) if ssh_port is not None else None),
+                "ssh_user": (str(ssh_user) if ssh_user is not None else None),
+                "ssh_private_key": (str(ssh_private_key) if ssh_private_key is not None else None),
+                "persona_id": (str(persona_id) if persona_id is not None else None),
+                "workspace_id": (str(workspace_id) if workspace_id is not None else None),
+                "workspace_group_id": (str(workspace_group_id) if workspace_group_id is not None else None),
+                "scope_snapshot_id": (str(scope_snapshot_id) if scope_snapshot_id is not None else None),
+                "created_at": float(created_at),
+                "updated_at": float(now_ts),
+            }
+
+    def get_acp_session_control(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._acp_sessions.get(str(session_id))
+            return dict(row) if isinstance(row, dict) else None
+
+    def delete_acp_session_control(self, session_id: str) -> bool:
+        with self._lock:
+            return self._acp_sessions.pop(str(session_id), None) is not None
+
     def get_user_artifact_bytes(self, user_id: str) -> int:
         with self._lock:
             return int(self._user_bytes.get(user_id, 0))
@@ -250,6 +407,10 @@ class InMemoryStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -264,6 +425,14 @@ class InMemoryStore(SandboxStore):
                 if image_digest and (st.image_digest or None) != image_digest:
                     continue
                 if user_id and self._owners.get(st.id) != user_id:
+                    continue
+                if persona_id and (getattr(st, "persona_id", None) != persona_id):
+                    continue
+                if workspace_id and (getattr(st, "workspace_id", None) != workspace_id):
+                    continue
+                if workspace_group_id and (getattr(st, "workspace_group_id", None) != workspace_group_id):
+                    continue
+                if scope_snapshot_id and (getattr(st, "scope_snapshot_id", None) != scope_snapshot_id):
                     continue
                 if phase and st.phase.value != phase:
                     continue
@@ -289,6 +458,11 @@ class InMemoryStore(SandboxStore):
                     "runtime": (st.runtime.value if st.runtime else None),
                     "runtime_version": getattr(st, "runtime_version", None),
                     "base_image": st.base_image,
+                    "session_id": getattr(st, "session_id", None),
+                    "persona_id": getattr(st, "persona_id", None),
+                    "workspace_id": getattr(st, "workspace_id", None),
+                    "workspace_group_id": getattr(st, "workspace_group_id", None),
+                    "scope_snapshot_id": getattr(st, "scope_snapshot_id", None),
                     "phase": st.phase.value,
                     "exit_code": st.exit_code,
                     "started_at": (st.started_at.isoformat() if st.started_at else None),
@@ -307,6 +481,10 @@ class InMemoryStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -314,6 +492,10 @@ class InMemoryStore(SandboxStore):
         return len(self.list_runs(
             image_digest=image_digest,
             user_id=user_id,
+            persona_id=persona_id,
+            workspace_id=workspace_id,
+            workspace_group_id=workspace_group_id,
+            scope_snapshot_id=scope_snapshot_id,
             phase=phase,
             started_at_from=started_at_from,
             started_at_to=started_at_to,
@@ -470,6 +652,11 @@ class SQLiteStore(SandboxStore):
                     runtime TEXT,
                     runtime_version TEXT,
                     base_image TEXT,
+                    session_id TEXT,
+                    persona_id TEXT,
+                    workspace_id TEXT,
+                    workspace_group_id TEXT,
+                    scope_snapshot_id TEXT,
                     phase TEXT,
                     exit_code INTEGER,
                     started_at TEXT,
@@ -493,46 +680,83 @@ class SQLiteStore(SandboxStore):
                     user_id TEXT PRIMARY KEY,
                     artifact_bytes INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS sandbox_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    runtime TEXT,
+                    base_image TEXT,
+                    persona_id TEXT,
+                    workspace_id TEXT,
+                    workspace_group_id TEXT,
+                    scope_snapshot_id TEXT,
+                    expires_at TEXT,
+                    workspace_path TEXT,
+                    created_at REAL,
+                    updated_at REAL
+                );
+                CREATE TABLE IF NOT EXISTS sandbox_acp_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    sandbox_session_id TEXT,
+                    run_id TEXT,
+                    ssh_host TEXT,
+                    ssh_port INTEGER,
+                    ssh_user TEXT,
+                    ssh_private_key TEXT,
+                    persona_id TEXT,
+                    workspace_id TEXT,
+                    workspace_group_id TEXT,
+                    scope_snapshot_id TEXT,
+                    created_at REAL,
+                    updated_at REAL
+                );
                 """
             )
-            # Backfill migrations for older schemas: add resource_usage if missing
-            # Only ignore the specific case where the column already exists.
-            try:
-                con.execute("ALTER TABLE sandbox_runs ADD COLUMN resource_usage TEXT")
-            except sqlite3.OperationalError as e:
-                msg = str(e).lower()
-                if (
-                    "duplicate" in msg
-                    or "already exists" in msg
-                    or "duplicate column" in msg
-                ):
-                    logger.debug(
-                        "SQLite migration: resource_usage column already exists; skipping ALTER TABLE"
-                    )
-                else:
-                    # Log full exception (with stack trace) and re-raise to avoid masking real issues
+            # Backfill migrations for older schemas.
+            def _ensure_sqlite_column(table: str, column: str, coltype: str) -> None:
+                try:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+                except sqlite3.OperationalError as e:
+                    msg = str(e).lower()
+                    if (
+                        "duplicate" in msg
+                        or "already exists" in msg
+                        or "duplicate column" in msg
+                    ):
+                        logger.debug(
+                            "SQLite migration: {}.{} already exists; skipping ALTER TABLE",
+                            table,
+                            column,
+                        )
+                        return
                     logger.exception(
-                        "SQLite migration failed adding resource_usage column to sandbox_runs"
+                        "SQLite migration failed adding {}.{}",
+                        table,
+                        column,
                     )
                     raise
-            # Migration: add runtime_version if missing
-            try:
-                con.execute("ALTER TABLE sandbox_runs ADD COLUMN runtime_version TEXT")
-            except sqlite3.OperationalError as e:
-                msg = str(e).lower()
-                if (
-                    "duplicate" in msg
-                    or "already exists" in msg
-                    or "duplicate column" in msg
-                ):
-                    logger.debug(
-                        "SQLite migration: runtime_version column already exists; skipping ALTER TABLE"
-                    )
-                else:
-                    logger.exception(
-                        "SQLite migration failed adding runtime_version column to sandbox_runs"
-                    )
-                    raise
+
+            _ensure_sqlite_column("sandbox_runs", "resource_usage", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "runtime_version", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "session_id", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "persona_id", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "workspace_id", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "workspace_group_id", "TEXT")
+            _ensure_sqlite_column("sandbox_runs", "scope_snapshot_id", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "persona_id", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "workspace_id", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "workspace_group_id", "TEXT")
+            _ensure_sqlite_column("sandbox_sessions", "scope_snapshot_id", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "sandbox_session_id", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "run_id", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "ssh_host", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "ssh_port", "INTEGER")
+            _ensure_sqlite_column("sandbox_acp_sessions", "ssh_user", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "ssh_private_key", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "persona_id", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "workspace_id", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "workspace_group_id", "TEXT")
+            _ensure_sqlite_column("sandbox_acp_sessions", "scope_snapshot_id", "TEXT")
 
     def _coerce_created_at(self, value: str | int | float) -> float:
         """Coerce created_at filter to epoch seconds.
@@ -657,7 +881,13 @@ class SQLiteStore(SandboxStore):
         """
         with self._lock, self._conn() as con:
             con.execute(
-                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "REPLACE INTO sandbox_runs("
+                    "id,user_id,spec_version,runtime,runtime_version,base_image,"
+                    "session_id,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ),
                 (
                     st.id,
                     self._user_key(user_id),
@@ -665,6 +895,11 @@ class SQLiteStore(SandboxStore):
                     (st.runtime.value if st.runtime else None),
                     (st.runtime_version if getattr(st, "runtime_version", None) else None),
                     st.base_image,
+                    (str(st.session_id) if getattr(st, "session_id", None) is not None else None),
+                    (str(st.persona_id) if getattr(st, "persona_id", None) is not None else None),
+                    (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
+                    (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
+                    (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
                     st.phase.value,
                     st.exit_code,
                     (st.started_at.isoformat() if st.started_at else None),
@@ -690,40 +925,253 @@ class SQLiteStore(SandboxStore):
             row = cur.fetchone()
             if not row:
                 return None
+            row_dict = dict(row)
             try:
                 ru = None
                 try:
-                    ru = json.loads(row["resource_usage"]) if row["resource_usage"] else None
+                    ru = json.loads(row_dict.get("resource_usage")) if row_dict.get("resource_usage") else None
                 except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                     ru = None
                 st = RunStatus(
-                    id=row["id"],
-                    phase=RunPhase(row["phase"]),
-                    spec_version=row["spec_version"],
-                    runtime=(RuntimeType(row["runtime"]) if row["runtime"] else None),
-                    runtime_version=(row.get("runtime_version", None)),
-                    base_image=row["base_image"],
-                    image_digest=row["image_digest"],
-                    policy_hash=row["policy_hash"],
-                    exit_code=row["exit_code"],
-                    started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
-                    finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
-                    message=row["message"],
+                    id=row_dict.get("id"),
+                    phase=RunPhase(row_dict.get("phase")),
+                    spec_version=row_dict.get("spec_version"),
+                    runtime=(RuntimeType(row_dict.get("runtime")) if row_dict.get("runtime") else None),
+                    runtime_version=row_dict.get("runtime_version"),
+                    base_image=row_dict.get("base_image"),
+                    image_digest=row_dict.get("image_digest"),
+                    policy_hash=row_dict.get("policy_hash"),
+                    exit_code=row_dict.get("exit_code"),
+                    started_at=(datetime.fromisoformat(row_dict.get("started_at")) if row_dict.get("started_at") else None),
+                    finished_at=(datetime.fromisoformat(row_dict.get("finished_at")) if row_dict.get("finished_at") else None),
+                    message=row_dict.get("message"),
                     resource_usage=ru,
+                    session_id=row_dict.get("session_id"),
+                    persona_id=row_dict.get("persona_id"),
+                    workspace_id=row_dict.get("workspace_id"),
+                    workspace_group_id=row_dict.get("workspace_group_id"),
+                    scope_snapshot_id=row_dict.get("scope_snapshot_id"),
                 )
                 return st
             except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
                 return None
 
     def update_run(self, st: RunStatus) -> None:
-        # Use same REPLACE logic
-        self.put_run(self.get_run_owner(st.id), st)  # type: ignore[arg-type]
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                (
+                    "UPDATE sandbox_runs SET "
+                    "spec_version=?, runtime=?, runtime_version=?, base_image=?, phase=?, exit_code=?, "
+                    "session_id=?, persona_id=?, workspace_id=?, workspace_group_id=?, scope_snapshot_id=?, "
+                    "started_at=?, finished_at=?, message=?, image_digest=?, policy_hash=?, resource_usage=? "
+                    "WHERE id=?"
+                ),
+                (
+                    st.spec_version,
+                    (st.runtime.value if st.runtime else None),
+                    (st.runtime_version if getattr(st, "runtime_version", None) else None),
+                    st.base_image,
+                    st.phase.value,
+                    st.exit_code,
+                    (str(st.session_id) if getattr(st, "session_id", None) is not None else None),
+                    (str(st.persona_id) if getattr(st, "persona_id", None) is not None else None),
+                    (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
+                    (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
+                    (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
+                    (st.started_at.isoformat() if st.started_at else None),
+                    (st.finished_at.isoformat() if st.finished_at else None),
+                    st.message,
+                    st.image_digest,
+                    st.policy_hash,
+                    (json.dumps(st.resource_usage) if isinstance(st.resource_usage, dict) else None),
+                    st.id,
+                ),
+            )
+            try:
+                updated = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                updated = 0
+            if updated <= 0:
+                logger.debug("SQLiteStore.update_run skipped missing run_id={}", st.id)
 
     def get_run_owner(self, run_id: str) -> str | None:
         with self._lock, self._conn() as con:
             cur = con.execute("SELECT user_id FROM sandbox_runs WHERE id=?", (run_id,))
             row = cur.fetchone()
             return (row["user_id"] if row else None)
+
+    def put_session(
+        self,
+        user_id: Any,
+        *,
+        session_id: str,
+        runtime: str | None,
+        base_image: str | None,
+        expires_at_iso: str | None,
+        workspace_path: str | None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        now_ts = time.time()
+        with self._lock, self._conn() as con:
+            con.execute(
+                (
+                    "INSERT INTO sandbox_sessions("
+                    "id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "expires_at,workspace_path,created_at,updated_at"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET "
+                    "user_id=excluded.user_id,"
+                    "runtime=excluded.runtime,"
+                    "base_image=excluded.base_image,"
+                    "persona_id=excluded.persona_id,"
+                    "workspace_id=excluded.workspace_id,"
+                    "workspace_group_id=excluded.workspace_group_id,"
+                    "scope_snapshot_id=excluded.scope_snapshot_id,"
+                    "expires_at=excluded.expires_at,"
+                    "workspace_path=excluded.workspace_path,"
+                    "updated_at=excluded.updated_at"
+                ),
+                (
+                    str(session_id),
+                    self._user_key(user_id),
+                    (str(runtime) if runtime is not None else None),
+                    (str(base_image) if base_image is not None else None),
+                    (str(persona_id) if persona_id is not None else None),
+                    (str(workspace_id) if workspace_id is not None else None),
+                    (str(workspace_group_id) if workspace_group_id is not None else None),
+                    (str(scope_snapshot_id) if scope_snapshot_id is not None else None),
+                    (str(expires_at_iso) if expires_at_iso is not None else None),
+                    (str(workspace_path) if workspace_path is not None else None),
+                    float(now_ts),
+                    float(now_ts),
+                ),
+            )
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                (
+                    "SELECT id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "expires_at,workspace_path,created_at,updated_at "
+                    "FROM sandbox_sessions WHERE id=?"
+                ),
+                (str(session_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            row_dict = dict(row)
+            return {
+                "id": row_dict.get("id"),
+                "user_id": row_dict.get("user_id"),
+                "runtime": row_dict.get("runtime"),
+                "base_image": row_dict.get("base_image"),
+                "persona_id": row_dict.get("persona_id"),
+                "workspace_id": row_dict.get("workspace_id"),
+                "workspace_group_id": row_dict.get("workspace_group_id"),
+                "scope_snapshot_id": row_dict.get("scope_snapshot_id"),
+                "expires_at": row_dict.get("expires_at"),
+                "workspace_path": row_dict.get("workspace_path"),
+                "created_at": row_dict.get("created_at"),
+                "updated_at": row_dict.get("updated_at"),
+            }
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        row = self.get_session(str(session_id))
+        if not isinstance(row, dict):
+            return None
+        owner = row.get("user_id")
+        return str(owner) if owner is not None else None
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock, self._conn() as con:
+            cur = con.execute("DELETE FROM sandbox_sessions WHERE id=?", (str(session_id),))
+            try:
+                deleted = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                deleted = 0
+            return deleted > 0
+
+    def put_acp_session_control(
+        self,
+        *,
+        session_id: str,
+        user_id: Any,
+        sandbox_session_id: str | None,
+        run_id: str | None,
+        ssh_host: str | None = None,
+        ssh_port: int | None = None,
+        ssh_user: str | None = None,
+        ssh_private_key: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        now_ts = time.time()
+        with self._lock, self._conn() as con:
+            con.execute(
+                (
+                    "INSERT INTO sandbox_acp_sessions("
+                    "id,user_id,sandbox_session_id,run_id,ssh_host,ssh_port,ssh_user,ssh_private_key,"
+                    "persona_id,workspace_id,workspace_group_id,scope_snapshot_id,created_at,updated_at"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET "
+                    "user_id=excluded.user_id,"
+                    "sandbox_session_id=excluded.sandbox_session_id,"
+                    "run_id=excluded.run_id,"
+                    "ssh_host=excluded.ssh_host,"
+                    "ssh_port=excluded.ssh_port,"
+                    "ssh_user=excluded.ssh_user,"
+                    "ssh_private_key=excluded.ssh_private_key,"
+                    "persona_id=excluded.persona_id,"
+                    "workspace_id=excluded.workspace_id,"
+                    "workspace_group_id=excluded.workspace_group_id,"
+                    "scope_snapshot_id=excluded.scope_snapshot_id,"
+                    "updated_at=excluded.updated_at"
+                ),
+                (
+                    str(session_id),
+                    self._user_key(user_id),
+                    (str(sandbox_session_id) if sandbox_session_id is not None else None),
+                    (str(run_id) if run_id is not None else None),
+                    (str(ssh_host) if ssh_host is not None else None),
+                    (int(ssh_port) if ssh_port is not None else None),
+                    (str(ssh_user) if ssh_user is not None else None),
+                    (str(ssh_private_key) if ssh_private_key is not None else None),
+                    (str(persona_id) if persona_id is not None else None),
+                    (str(workspace_id) if workspace_id is not None else None),
+                    (str(workspace_group_id) if workspace_group_id is not None else None),
+                    (str(scope_snapshot_id) if scope_snapshot_id is not None else None),
+                    float(now_ts),
+                    float(now_ts),
+                ),
+            )
+
+    def get_acp_session_control(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as con:
+            cur = con.execute(
+                (
+                    "SELECT id,user_id,sandbox_session_id,run_id,ssh_host,ssh_port,ssh_user,ssh_private_key,"
+                    "persona_id,workspace_id,workspace_group_id,scope_snapshot_id,created_at,updated_at "
+                    "FROM sandbox_acp_sessions WHERE id=?"
+                ),
+                (str(session_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def delete_acp_session_control(self, session_id: str) -> bool:
+        with self._lock, self._conn() as con:
+            cur = con.execute("DELETE FROM sandbox_acp_sessions WHERE id=?", (str(session_id),))
+            try:
+                deleted = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                deleted = 0
+            return deleted > 0
 
     def get_user_artifact_bytes(self, user_id: str) -> int:
         with self._lock, self._conn() as con:
@@ -747,6 +1195,10 @@ class SQLiteStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -763,6 +1215,18 @@ class SQLiteStore(SandboxStore):
         if user_id:
             where.append("user_id = ?")
             params.append(user_id)
+        if persona_id:
+            where.append("persona_id = ?")
+            params.append(persona_id)
+        if workspace_id:
+            where.append("workspace_id = ?")
+            params.append(workspace_id)
+        if workspace_group_id:
+            where.append("workspace_group_id = ?")
+            params.append(workspace_group_id)
+        if scope_snapshot_id:
+            where.append("scope_snapshot_id = ?")
+            params.append(scope_snapshot_id)
         if phase:
             where.append("phase = ?")
             params.append(phase)
@@ -773,7 +1237,7 @@ class SQLiteStore(SandboxStore):
             where.append("started_at <= ?")
             params.append(started_at_to)
         sql = (
-            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "  # nosec B608
+            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,session_id,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "  # nosec B608
             f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT ? OFFSET ?"
         )
         params.extend([int(limit), int(offset)])
@@ -781,20 +1245,26 @@ class SQLiteStore(SandboxStore):
             cur = con.execute(sql, tuple(params))
             items: list[dict] = []
             for row in cur.fetchall():
+                row_dict = dict(row)
                 items.append({
-                    "id": row["id"],
-                    "user_id": row["user_id"],
-                    "spec_version": row["spec_version"],
-                    "runtime": row["runtime"],
-                    "runtime_version": row["runtime_version"],
-                    "base_image": row["base_image"],
-                    "phase": row["phase"],
-                    "exit_code": row["exit_code"],
-                    "started_at": row["started_at"],
-                    "finished_at": row["finished_at"],
-                    "message": row["message"],
-                    "image_digest": row["image_digest"],
-                    "policy_hash": row["policy_hash"],
+                    "id": row_dict.get("id"),
+                    "user_id": row_dict.get("user_id"),
+                    "spec_version": row_dict.get("spec_version"),
+                    "runtime": row_dict.get("runtime"),
+                    "runtime_version": row_dict.get("runtime_version"),
+                    "base_image": row_dict.get("base_image"),
+                    "session_id": row_dict.get("session_id"),
+                    "persona_id": row_dict.get("persona_id"),
+                    "workspace_id": row_dict.get("workspace_id"),
+                    "workspace_group_id": row_dict.get("workspace_group_id"),
+                    "scope_snapshot_id": row_dict.get("scope_snapshot_id"),
+                    "phase": row_dict.get("phase"),
+                    "exit_code": row_dict.get("exit_code"),
+                    "started_at": row_dict.get("started_at"),
+                    "finished_at": row_dict.get("finished_at"),
+                    "message": row_dict.get("message"),
+                    "image_digest": row_dict.get("image_digest"),
+                    "policy_hash": row_dict.get("policy_hash"),
                 })
             return items
 
@@ -803,6 +1273,10 @@ class SQLiteStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -815,6 +1289,18 @@ class SQLiteStore(SandboxStore):
         if user_id:
             where.append("user_id = ?")
             params.append(user_id)
+        if persona_id:
+            where.append("persona_id = ?")
+            params.append(persona_id)
+        if workspace_id:
+            where.append("workspace_id = ?")
+            params.append(workspace_id)
+        if workspace_group_id:
+            where.append("workspace_group_id = ?")
+            params.append(workspace_group_id)
+        if scope_snapshot_id:
+            where.append("scope_snapshot_id = ?")
+            params.append(scope_snapshot_id)
         if phase:
             where.append("phase = ?")
             params.append(phase)
@@ -1008,6 +1494,11 @@ class PostgresStore(SandboxStore):
                         runtime TEXT,
                         runtime_version TEXT,
                         base_image TEXT,
+                        session_id TEXT,
+                        persona_id TEXT,
+                        workspace_id TEXT,
+                        workspace_group_id TEXT,
+                        scope_snapshot_id TEXT,
                         phase TEXT,
                         exit_code INTEGER,
                         started_at TEXT,
@@ -1041,6 +1532,44 @@ class PostgresStore(SandboxStore):
                     );
                     """
             )
+            cur.execute(
+                """
+                    CREATE TABLE IF NOT EXISTS sandbox_sessions (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT,
+                        runtime TEXT,
+                        base_image TEXT,
+                        persona_id TEXT,
+                        workspace_id TEXT,
+                        workspace_group_id TEXT,
+                        scope_snapshot_id TEXT,
+                        expires_at TEXT,
+                        workspace_path TEXT,
+                        created_at DOUBLE PRECISION,
+                        updated_at DOUBLE PRECISION
+                    );
+                    """
+            )
+            cur.execute(
+                """
+                    CREATE TABLE IF NOT EXISTS sandbox_acp_sessions (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT,
+                        sandbox_session_id TEXT,
+                        run_id TEXT,
+                        ssh_host TEXT,
+                        ssh_port INTEGER,
+                        ssh_user TEXT,
+                        ssh_private_key TEXT,
+                        persona_id TEXT,
+                        workspace_id TEXT,
+                        workspace_group_id TEXT,
+                        scope_snapshot_id TEXT,
+                        created_at DOUBLE PRECISION,
+                        updated_at DOUBLE PRECISION
+                    );
+                    """
+            )
             # Migrations: ensure new columns exist
             def _ensure_column(table: str, col: str, coltype: str) -> None:
                 try:
@@ -1059,6 +1588,25 @@ class PostgresStore(SandboxStore):
 
             _ensure_column("sandbox_runs", "resource_usage", "JSONB")
             _ensure_column("sandbox_runs", "runtime_version", "TEXT")
+            _ensure_column("sandbox_runs", "session_id", "TEXT")
+            _ensure_column("sandbox_runs", "persona_id", "TEXT")
+            _ensure_column("sandbox_runs", "workspace_id", "TEXT")
+            _ensure_column("sandbox_runs", "workspace_group_id", "TEXT")
+            _ensure_column("sandbox_runs", "scope_snapshot_id", "TEXT")
+            _ensure_column("sandbox_sessions", "persona_id", "TEXT")
+            _ensure_column("sandbox_sessions", "workspace_id", "TEXT")
+            _ensure_column("sandbox_sessions", "workspace_group_id", "TEXT")
+            _ensure_column("sandbox_sessions", "scope_snapshot_id", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "sandbox_session_id", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "run_id", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "ssh_host", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "ssh_port", "INTEGER")
+            _ensure_column("sandbox_acp_sessions", "ssh_user", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "ssh_private_key", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "persona_id", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "workspace_id", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "workspace_group_id", "TEXT")
+            _ensure_column("sandbox_acp_sessions", "scope_snapshot_id", "TEXT")
 
     def _fp(self, body: dict[str, Any]) -> str:
         try:
@@ -1141,14 +1689,23 @@ class PostgresStore(SandboxStore):
             with con.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO sandbox_runs (id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    INSERT INTO sandbox_runs (
+                        id,user_id,spec_version,runtime,runtime_version,base_image,
+                        session_id,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,
+                        phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (id) DO UPDATE SET
                         user_id=EXCLUDED.user_id,
                         spec_version=EXCLUDED.spec_version,
                         runtime=EXCLUDED.runtime,
                         runtime_version=EXCLUDED.runtime_version,
                         base_image=EXCLUDED.base_image,
+                        session_id=EXCLUDED.session_id,
+                        persona_id=EXCLUDED.persona_id,
+                        workspace_id=EXCLUDED.workspace_id,
+                        workspace_group_id=EXCLUDED.workspace_group_id,
+                        scope_snapshot_id=EXCLUDED.scope_snapshot_id,
                         phase=EXCLUDED.phase,
                         exit_code=EXCLUDED.exit_code,
                         started_at=EXCLUDED.started_at,
@@ -1165,6 +1722,11 @@ class PostgresStore(SandboxStore):
                         (st.runtime.value if st.runtime else None),
                         (st.runtime_version if getattr(st, "runtime_version", None) else None),
                         st.base_image,
+                        (str(st.session_id) if getattr(st, "session_id", None) is not None else None),
+                        (str(st.persona_id) if getattr(st, "persona_id", None) is not None else None),
+                        (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
+                        (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
+                        (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
                         st.phase.value,
                         st.exit_code,
                         (st.started_at.isoformat() if st.started_at else None),
@@ -1202,6 +1764,11 @@ class PostgresStore(SandboxStore):
                     exit_code=row.get("exit_code"),
                     started_at=(datetime.fromisoformat(row.get("started_at")) if row.get("started_at") else None),
                     finished_at=(datetime.fromisoformat(row.get("finished_at")) if row.get("finished_at") else None),
+                    session_id=row.get("session_id"),
+                    persona_id=row.get("persona_id"),
+                    workspace_id=row.get("workspace_id"),
+                    workspace_group_id=row.get("workspace_group_id"),
+                    scope_snapshot_id=row.get("scope_snapshot_id"),
                 )
                 st.message = row.get("message")
                 st.resource_usage = ru if isinstance(ru, dict) else None
@@ -1211,8 +1778,57 @@ class PostgresStore(SandboxStore):
                 return None
 
     def update_run(self, st: RunStatus) -> None:
-        # UPSERT via put_run
-        self.put_run(None, st)
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sandbox_runs SET
+                        spec_version=%s,
+                        runtime=%s,
+                        runtime_version=%s,
+                        base_image=%s,
+                        session_id=%s,
+                        persona_id=%s,
+                        workspace_id=%s,
+                        workspace_group_id=%s,
+                        scope_snapshot_id=%s,
+                        phase=%s,
+                        exit_code=%s,
+                        started_at=%s,
+                        finished_at=%s,
+                        message=%s,
+                        image_digest=%s,
+                        policy_hash=%s,
+                        resource_usage=%s
+                    WHERE id=%s
+                    """,
+                    (
+                        st.spec_version,
+                        (st.runtime.value if st.runtime else None),
+                        (st.runtime_version if getattr(st, "runtime_version", None) else None),
+                        st.base_image,
+                        (str(st.session_id) if getattr(st, "session_id", None) is not None else None),
+                        (str(st.persona_id) if getattr(st, "persona_id", None) is not None else None),
+                        (str(st.workspace_id) if getattr(st, "workspace_id", None) is not None else None),
+                        (str(st.workspace_group_id) if getattr(st, "workspace_group_id", None) is not None else None),
+                        (str(st.scope_snapshot_id) if getattr(st, "scope_snapshot_id", None) is not None else None),
+                        st.phase.value,
+                        st.exit_code,
+                        (st.started_at.isoformat() if st.started_at else None),
+                        (st.finished_at.isoformat() if st.finished_at else None),
+                        st.message,
+                        st.image_digest,
+                        st.policy_hash,
+                        (json.dumps(st.resource_usage) if isinstance(st.resource_usage, dict) else None),
+                        st.id,
+                    ),
+                )
+                try:
+                    updated = int(getattr(cur, "rowcount", 0))
+                except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                    updated = 0
+                if updated <= 0:
+                    logger.debug("PostgresStore.update_run skipped missing run_id={}", st.id)
 
     def get_run_owner(self, run_id: str) -> str | None:
         with self._lock, self._conn() as con, con.cursor() as cur:
@@ -1221,6 +1837,167 @@ class PostgresStore(SandboxStore):
             if row and (row.get("user_id") is not None):
                 return str(row.get("user_id"))
             return None
+
+    def put_session(
+        self,
+        user_id: Any,
+        *,
+        session_id: str,
+        runtime: str | None,
+        base_image: str | None,
+        expires_at_iso: str | None,
+        workspace_path: str | None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        now_ts = time.time()
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sandbox_sessions(
+                        id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,
+                        expires_at,workspace_path,created_at,updated_at
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        user_id=EXCLUDED.user_id,
+                        runtime=EXCLUDED.runtime,
+                        base_image=EXCLUDED.base_image,
+                        persona_id=EXCLUDED.persona_id,
+                        workspace_id=EXCLUDED.workspace_id,
+                        workspace_group_id=EXCLUDED.workspace_group_id,
+                        scope_snapshot_id=EXCLUDED.scope_snapshot_id,
+                        expires_at=EXCLUDED.expires_at,
+                        workspace_path=EXCLUDED.workspace_path,
+                        updated_at=EXCLUDED.updated_at
+                    """,
+                    (
+                        str(session_id),
+                        self._user_key(user_id),
+                        (str(runtime) if runtime is not None else None),
+                        (str(base_image) if base_image is not None else None),
+                        (str(persona_id) if persona_id is not None else None),
+                        (str(workspace_id) if workspace_id is not None else None),
+                        (str(workspace_group_id) if workspace_group_id is not None else None),
+                        (str(scope_snapshot_id) if scope_snapshot_id is not None else None),
+                        (str(expires_at_iso) if expires_at_iso is not None else None),
+                        (str(workspace_path) if workspace_path is not None else None),
+                        float(now_ts),
+                        float(now_ts),
+                    ),
+                )
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute(
+                (
+                    "SELECT id,user_id,runtime,base_image,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,"
+                    "expires_at,workspace_path,created_at,updated_at "
+                    "FROM sandbox_sessions WHERE id=%s"
+                ),
+                (str(session_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if isinstance(row, dict) else None
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        row = self.get_session(str(session_id))
+        if not isinstance(row, dict):
+            return None
+        owner = row.get("user_id")
+        return str(owner) if owner is not None else None
+
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute("DELETE FROM sandbox_sessions WHERE id=%s", (str(session_id),))
+            try:
+                deleted = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                deleted = 0
+            return deleted > 0
+
+    def put_acp_session_control(
+        self,
+        *,
+        session_id: str,
+        user_id: Any,
+        sandbox_session_id: str | None,
+        run_id: str | None,
+        ssh_host: str | None = None,
+        ssh_port: int | None = None,
+        ssh_user: str | None = None,
+        ssh_private_key: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
+    ) -> None:
+        now_ts = time.time()
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sandbox_acp_sessions(
+                        id,user_id,sandbox_session_id,run_id,ssh_host,ssh_port,ssh_user,ssh_private_key,
+                        persona_id,workspace_id,workspace_group_id,scope_snapshot_id,created_at,updated_at
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        user_id=EXCLUDED.user_id,
+                        sandbox_session_id=EXCLUDED.sandbox_session_id,
+                        run_id=EXCLUDED.run_id,
+                        ssh_host=EXCLUDED.ssh_host,
+                        ssh_port=EXCLUDED.ssh_port,
+                        ssh_user=EXCLUDED.ssh_user,
+                        ssh_private_key=EXCLUDED.ssh_private_key,
+                        persona_id=EXCLUDED.persona_id,
+                        workspace_id=EXCLUDED.workspace_id,
+                        workspace_group_id=EXCLUDED.workspace_group_id,
+                        scope_snapshot_id=EXCLUDED.scope_snapshot_id,
+                        updated_at=EXCLUDED.updated_at
+                    """,
+                    (
+                        str(session_id),
+                        self._user_key(user_id),
+                        (str(sandbox_session_id) if sandbox_session_id is not None else None),
+                        (str(run_id) if run_id is not None else None),
+                        (str(ssh_host) if ssh_host is not None else None),
+                        (int(ssh_port) if ssh_port is not None else None),
+                        (str(ssh_user) if ssh_user is not None else None),
+                        (str(ssh_private_key) if ssh_private_key is not None else None),
+                        (str(persona_id) if persona_id is not None else None),
+                        (str(workspace_id) if workspace_id is not None else None),
+                        (str(workspace_group_id) if workspace_group_id is not None else None),
+                        (str(scope_snapshot_id) if scope_snapshot_id is not None else None),
+                        float(now_ts),
+                        float(now_ts),
+                    ),
+                )
+
+    def get_acp_session_control(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute(
+                (
+                    "SELECT id,user_id,sandbox_session_id,run_id,ssh_host,ssh_port,ssh_user,ssh_private_key,"
+                    "persona_id,workspace_id,workspace_group_id,scope_snapshot_id,created_at,updated_at "
+                    "FROM sandbox_acp_sessions WHERE id=%s"
+                ),
+                (str(session_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if isinstance(row, dict) else None
+
+    def delete_acp_session_control(self, session_id: str) -> bool:
+        with self._lock, self._conn() as con, con.cursor() as cur:
+            cur.execute("DELETE FROM sandbox_acp_sessions WHERE id=%s", (str(session_id),))
+            try:
+                deleted = int(getattr(cur, "rowcount", 0))
+            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
+                deleted = 0
+            return deleted > 0
 
     def get_user_artifact_bytes(self, user_id: str) -> int:
         with self._lock, self._conn() as con, con.cursor() as cur:
@@ -1252,6 +2029,10 @@ class PostgresStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -1268,6 +2049,18 @@ class PostgresStore(SandboxStore):
         if user_id:
             where.append("user_id = %s")
             params.append(user_id)
+        if persona_id:
+            where.append("persona_id = %s")
+            params.append(persona_id)
+        if workspace_id:
+            where.append("workspace_id = %s")
+            params.append(workspace_id)
+        if workspace_group_id:
+            where.append("workspace_group_id = %s")
+            params.append(workspace_group_id)
+        if scope_snapshot_id:
+            where.append("scope_snapshot_id = %s")
+            params.append(scope_snapshot_id)
         if phase:
             where.append("phase = %s")
             params.append(phase)
@@ -1278,7 +2071,7 @@ class PostgresStore(SandboxStore):
             where.append("started_at <= %s")
             params.append(started_at_to)
         sql = (
-            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "  # nosec B608
+            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,session_id,persona_id,workspace_id,workspace_group_id,scope_snapshot_id,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "  # nosec B608
             f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT %s OFFSET %s"
         )
         params.extend([int(limit), int(offset)])
@@ -1293,6 +2086,11 @@ class PostgresStore(SandboxStore):
                     "runtime": row.get("runtime"),
                     "runtime_version": row.get("runtime_version"),
                     "base_image": row.get("base_image"),
+                    "session_id": row.get("session_id"),
+                    "persona_id": row.get("persona_id"),
+                    "workspace_id": row.get("workspace_id"),
+                    "workspace_group_id": row.get("workspace_group_id"),
+                    "scope_snapshot_id": row.get("scope_snapshot_id"),
                     "phase": row.get("phase"),
                     "exit_code": row.get("exit_code"),
                     "started_at": row.get("started_at"),
@@ -1308,6 +2106,10 @@ class PostgresStore(SandboxStore):
         *,
         image_digest: str | None = None,
         user_id: str | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
         phase: str | None = None,
         started_at_from: str | None = None,
         started_at_to: str | None = None,
@@ -1320,6 +2122,18 @@ class PostgresStore(SandboxStore):
         if user_id:
             where.append("user_id = %s")
             params.append(user_id)
+        if persona_id:
+            where.append("persona_id = %s")
+            params.append(persona_id)
+        if workspace_id:
+            where.append("workspace_id = %s")
+            params.append(workspace_id)
+        if workspace_group_id:
+            where.append("workspace_group_id = %s")
+            params.append(workspace_group_id)
+        if scope_snapshot_id:
+            where.append("scope_snapshot_id = %s")
+            params.append(scope_snapshot_id)
         if phase:
             where.append("phase = %s")
             params.append(phase)
@@ -1499,6 +2313,22 @@ def _resolve_pg_dsn() -> str | None:
     return dsn_str
 
 
+def _require_cluster_ready() -> str:
+    dsn = _resolve_pg_dsn()
+    if not dsn:
+        raise ClusterStoreUnavailable(
+            "SANDBOX_STORE_BACKEND=cluster requires a non-sqlite Postgres DSN "
+            "(set SANDBOX_STORE_PG_DSN or DATABASE_URL)."
+        )
+    try:
+        import psycopg  # noqa: F401
+    except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as exc:
+        raise ClusterStoreUnavailable(
+            "SANDBOX_STORE_BACKEND=cluster requires psycopg to be installed."
+        ) from exc
+    return dsn
+
+
 def get_store() -> SandboxStore:
     backend = None
     try:
@@ -1510,14 +2340,8 @@ def get_store() -> SandboxStore:
         return InMemoryStore(idem_ttl_sec=ttl)
     if backend == "cluster":
         ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
-        dsn = _resolve_pg_dsn()
-        if dsn:
-            try:
-                return PostgresStore(dsn=dsn, idem_ttl_sec=ttl)
-            except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(f"Cluster store requested but unavailable ({e}); falling back to SQLite store")
-        else:
-            logger.warning("Cluster store requested but SANDBOX_STORE_PG_DSN/DATABASE_URL not set; falling back to SQLite store")
+        dsn = _require_cluster_ready()
+        return PostgresStore(dsn=dsn, idem_ttl_sec=ttl)
     # Default sqlite
     ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
     try:
@@ -1537,15 +2361,8 @@ def get_store_mode() -> str:
     except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
         backend = "memory"
     if backend == "cluster":
-        dsn = _resolve_pg_dsn()
-        try:
-            import psycopg  # noqa: F401
-            deps_ok = True
-        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS:
-            deps_ok = False
-        if dsn and deps_ok:
-            return "cluster"
-        return "sqlite"
+        _ = _require_cluster_ready()
+        return "cluster"
     if backend in {"memory", "sqlite"}:
         return backend
     return "unknown"

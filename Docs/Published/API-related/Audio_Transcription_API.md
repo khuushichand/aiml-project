@@ -18,7 +18,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - [Live Transcription](#live-transcription)
 - [Usage Examples](#usage-examples)
 - [Performance Comparison](#performance-comparison)
-- [Notes & Limitations](#notes--limitations)
+- [Notes & Limitations](#notes-limitations)
 
 ## Features
 
@@ -76,7 +76,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: 30 languages + 22 Chinese dialects (auto-detected)
 - **Best For**: Chinese transcription, high-accuracy multilingual content
 - **Special Features**: Optional word-level timestamps via Forced Aligner
-- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../STT-TTS/QWEN3_ASR_SETUP.md)
+- **Note**: Requires manual model download. See [Qwen3-ASR Setup Guide](../User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md)
 
 ### 6. VibeVoice-ASR
 - **Model**: `vibevoice-asr`, `vibevoice`
@@ -839,9 +839,9 @@ TTS
 ## Related Documentation
 
 - [API Overview](./API_README.md)
-- [Configuration Guide](../User_Guides/Configuration.md)
-- [Live Transcription Guide](../User_Guides/Live_Transcription.md)
-- [Model Selection Guide](../User_Guides/Model_Selection.md)
+- [Configuration Guide](../User_Guides/Server/Installation-Setup-Guide.md)
+- [Live Transcription Guide](#live-transcription)
+- [Model Selection Guide](#supported-models)
 - For non-JSON responses (`text`, `srt`, `vtt`), `segment=true` is ignored and no `segmentation` is returned.
 - TreeSeg embeddings use the configured embedding service unless `seg_embeddings_provider`/`seg_embeddings_model` overrides are supplied.
 - If you have per-utterance segments from your STT provider, you can call the dedicated segmentation endpoint with those entries for better alignment.

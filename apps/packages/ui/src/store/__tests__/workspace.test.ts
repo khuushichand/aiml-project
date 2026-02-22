@@ -8,12 +8,17 @@ import {
   WORKSPACE_STORAGE_QUOTA_EVENT,
   type WorkspaceStorageQuotaEventDetail
 } from "@/store/workspace-events"
-import { createWorkspaceStorage, useWorkspaceStore } from "../workspace"
+import {
+  createWorkspaceStorage,
+  estimateWorkspacePersistenceMetrics,
+  useWorkspaceStore
+} from "../workspace"
 
 const STORAGE_KEY = WORKSPACE_STORAGE_KEY
 
 const resetWorkspaceStore = () => {
   localStorage.removeItem(STORAGE_KEY)
+  delete window.__tldwWorkspacePersistenceMetrics
   useWorkspaceStore.setState({
     workspaceId: "",
     workspaceName: "",
@@ -382,6 +387,425 @@ describe("workspace store snapshot persistence", () => {
 
     storage.removeItem(testKey)
     expect(storage.getItem(testKey)).toBeNull()
+  })
+
+  it("estimates persistence payload section sizes", () => {
+    const metrics = estimateWorkspacePersistenceMetrics({
+      state: {
+        workspaceId: "workspace-metrics",
+        workspaceName: "Metrics Workspace",
+        workspaceTag: "workspace:metrics",
+        workspaceCreatedAt: "2026-02-10T00:00:00.000Z",
+        workspaceChatReferenceId: "workspace-metrics",
+        sources: [
+          {
+            id: "source-1",
+            mediaId: 1,
+            title: "Source One",
+            type: "pdf",
+            addedAt: "2026-02-10T00:00:00.000Z"
+          }
+        ],
+        selectedSourceIds: ["source-1"],
+        generatedArtifacts: [
+          {
+            id: "artifact-1",
+            type: "summary",
+            title: "Artifact One",
+            status: "completed",
+            content: "summary",
+            createdAt: "2026-02-10T00:00:00.000Z"
+          }
+        ],
+        notes: "workspace notes",
+        currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+        leftPaneCollapsed: false,
+        rightPaneCollapsed: false,
+        audioSettings: { ...DEFAULT_AUDIO_SETTINGS },
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-metrics": {
+            workspaceId: "workspace-metrics",
+            workspaceName: "Metrics Workspace",
+            workspaceTag: "workspace:metrics",
+            workspaceCreatedAt: "2026-02-10T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-metrics",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-metrics": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "hello",
+                sources: []
+              }
+            ],
+            history: [{ role: "user", content: "hello" }],
+            historyId: "history-1",
+            serverChatId: null
+          }
+        }
+      },
+      version: 0
+    })
+
+    expect(metrics.totalBytes).toBeGreaterThan(0)
+    expect(metrics.sections.workspaceSnapshots).toBeGreaterThan(0)
+    expect(metrics.sections.workspaceChatSessions).toBeGreaterThan(0)
+    expect(metrics.sections.generatedArtifacts).toBeGreaterThan(0)
+    expect(metrics.sections.notes).toBeGreaterThan(0)
+    expect(metrics.sections.sources).toBeGreaterThan(0)
+    expect(metrics.sections.selectedSourceIds).toBeGreaterThan(0)
+    expect(metrics.sections.other).toBeGreaterThanOrEqual(0)
+  })
+
+  it("records workspace persistence diagnostics on persisted writes", () => {
+    const previousWriteCount =
+      window.__tldwWorkspacePersistenceMetrics?.writeCount ?? 0
+
+    useWorkspaceStore.getState().initializeWorkspace("Diagnostics Workspace")
+    useWorkspaceStore.getState().setNotes("Diagnostics notes")
+
+    const diagnostics = window.__tldwWorkspacePersistenceMetrics
+    expect(diagnostics?.key).toBe(STORAGE_KEY)
+    expect((diagnostics?.writeCount ?? 0) - previousWriteCount).toBeGreaterThan(0)
+    expect(diagnostics?.totalBytes ?? 0).toBeGreaterThan(0)
+    expect(diagnostics?.maxTotalBytes ?? 0).toBeGreaterThan(0)
+    expect(diagnostics?.sections.workspaceSnapshots ?? 0).toBeGreaterThan(0)
+    expect(diagnostics?.updatedAt ?? 0).toBeGreaterThan(0)
+  })
+
+  it("rehydrates array-shaped legacy snapshots and chat sessions safely", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-legacy",
+        workspaceName: "Legacy Top Level Name",
+        workspaceTag: "workspace:legacy-top",
+        workspaceCreatedAt: "2026-02-01T00:00:00.000Z",
+        workspaceChatReferenceId: "workspace-legacy",
+        sources: { invalid: true },
+        selectedSourceIds: "invalid",
+        generatedArtifacts: "invalid",
+        notes: "",
+        currentNote: null,
+        leftPaneCollapsed: false,
+        rightPaneCollapsed: false,
+        audioSettings: null,
+        savedWorkspaces: "invalid",
+        archivedWorkspaces: null,
+        workspaceSnapshots: [
+          {
+            id: "workspace-legacy",
+            workspaceName: "Legacy Snapshot Name",
+            workspaceTag: "workspace:legacy",
+            workspaceCreatedAt: "2026-02-02T00:00:00.000Z",
+            workspaceChatReferenceId: "legacy-chat-ref",
+            sources: [
+              {
+                id: "source-legacy-1",
+                mediaId: 999,
+                title: "Legacy Source",
+                type: "pdf",
+                addedAt: "2026-02-03T00:00:00.000Z"
+              }
+            ],
+            selectedSourceIds: ["source-legacy-1"],
+            generatedArtifacts: [],
+            notes: "Legacy snapshot note",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: true,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        ],
+        workspaceChatSessions: [
+          {
+            workspaceId: "workspace-legacy",
+            session: {
+              messages: [
+                {
+                  isBot: false,
+                  name: "You",
+                  message: "Legacy hello",
+                  sources: []
+                }
+              ],
+              history: "invalid-history",
+              historyId: "legacy-history",
+              serverChatId: null
+            }
+          },
+          {
+            workspaceId: "workspace-empty-session",
+            session: {
+              messages: [],
+              history: [],
+              historyId: null,
+              serverChatId: null
+            }
+          }
+        ]
+      },
+      version: 0
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe("workspace-legacy")
+    expect(state.workspaceName).toBe("Legacy Snapshot Name")
+    expect(state.workspaceTag).toBe("workspace:legacy")
+    expect(state.workspaceChatReferenceId).toBe("legacy-chat-ref")
+    expect(state.sources).toHaveLength(1)
+    expect(state.sources[0]?.title).toBe("Legacy Source")
+    expect(state.selectedSourceIds).toEqual(["source-legacy-1"])
+    expect(state.notes).toBe("Legacy snapshot note")
+    expect(state.leftPaneCollapsed).toBe(true)
+    expect(state.rightPaneCollapsed).toBe(false)
+    expect(state.workspaceSnapshots["workspace-legacy"]).toBeDefined()
+    expect(state.workspaceSnapshots["workspace-legacy"]?.workspaceName).toBe(
+      "Legacy Snapshot Name"
+    )
+    expect(
+      state.workspaceChatSessions["workspace-legacy"]?.history[0]?.content
+    ).toBe("Legacy hello")
+    expect(
+      state.workspaceChatSessions["workspace-empty-session"]
+    ).toBeUndefined()
+  })
+
+  it("persists snapshot-first schema with messages-only chat sessions", () => {
+    useWorkspaceStore.getState().initializeWorkspace("Snapshot Canonical Workspace")
+    const workspaceId = useWorkspaceStore.getState().workspaceId
+
+    const source = useWorkspaceStore
+      .getState()
+      .addSource({ mediaId: 5001, title: "Canonical Source", type: "pdf" })
+    useWorkspaceStore.getState().setSelectedSourceIds([source.id])
+    useWorkspaceStore
+      .getState()
+      .addArtifact({
+        type: "summary",
+        title: "Canonical Artifact",
+        status: "completed",
+        content: "Canonical content"
+      })
+    useWorkspaceStore.setState({
+      notes: "Canonical notes",
+      currentNote: {
+        ...DEFAULT_WORKSPACE_NOTE,
+        title: "Canonical note title",
+        content: "Canonical note content"
+      }
+    })
+    useWorkspaceStore.getState().saveWorkspaceChatSession(workspaceId, {
+      messages: [
+        {
+          isBot: false,
+          name: "You",
+          message: "Persist canonical",
+          sources: []
+        }
+      ],
+      history: [{ role: "user", content: "Persist canonical" }],
+      historyId: "canonical-history",
+      serverChatId: "canonical-chat"
+    })
+
+    const splitIndexRaw = localStorage.getItem(STORAGE_KEY)
+    expect(splitIndexRaw).toBeTruthy()
+
+    const splitIndex = splitIndexRaw ? JSON.parse(splitIndexRaw) : null
+    expect(splitIndex?.schema).toBe("workspace_split_v1")
+    expect(Array.isArray(splitIndex?.state?.workspaceIds)).toBe(true)
+    expect(splitIndex?.state?.workspaceIds).toContain(workspaceId)
+    expect(splitIndex?.state?.workspaceName).toBeUndefined()
+    expect(splitIndex?.state?.sources).toBeUndefined()
+    expect(splitIndex?.state?.selectedSourceIds).toBeUndefined()
+    expect(splitIndex?.state?.generatedArtifacts).toBeUndefined()
+    expect(splitIndex?.state?.notes).toBeUndefined()
+    expect(splitIndex?.state?.currentNote).toBeUndefined()
+    expect(splitIndex?.state?.audioSettings).toBeUndefined()
+
+    const reconstructedRaw = createWorkspaceStorage().getItem(STORAGE_KEY)
+    const reconstructed = reconstructedRaw ? JSON.parse(reconstructedRaw) : null
+    const persistedState = reconstructed?.state as Record<string, unknown>
+    expect(persistedState.workspaceId).toBe(workspaceId)
+    expect(persistedState.workspaceSnapshots).toBeDefined()
+    expect(persistedState.workspaceChatSessions).toBeDefined()
+
+    const persistedSnapshot = (persistedState.workspaceSnapshots as Record<string, any>)[
+      workspaceId
+    ]
+    expect(persistedSnapshot?.sources?.[0]?.title).toBe("Canonical Source")
+    expect(persistedSnapshot?.selectedSourceIds).toEqual([source.id])
+    expect(persistedSnapshot?.generatedArtifacts?.[0]?.title).toBe(
+      "Canonical Artifact"
+    )
+    expect(persistedSnapshot?.notes).toBe("Canonical notes")
+    expect(persistedSnapshot?.currentNote?.title).toBe("Canonical note title")
+
+    const persistedSession = (
+      persistedState.workspaceChatSessions as Record<string, any>
+    )[workspaceId]
+    expect(persistedSession?.messages?.[0]?.message).toBe("Persist canonical")
+    expect(persistedSession?.historyId).toBe("canonical-history")
+    expect(persistedSession?.serverChatId).toBe("canonical-chat")
+    expect(persistedSession?.history).toBeUndefined()
+  })
+
+  it("rehydrates messages-only chat sessions and derives history", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-messages-only",
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceSnapshots: {
+          "workspace-messages-only": {
+            workspaceId: "workspace-messages-only",
+            workspaceName: "Messages Only Workspace",
+            workspaceTag: "workspace:messages-only",
+            workspaceCreatedAt: "2026-02-16T00:00:00.000Z",
+            workspaceChatReferenceId: "workspace-messages-only",
+            sources: [],
+            selectedSourceIds: [],
+            generatedArtifacts: [],
+            notes: "",
+            currentNote: { ...DEFAULT_WORKSPACE_NOTE },
+            leftPaneCollapsed: false,
+            rightPaneCollapsed: false,
+            audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
+          }
+        },
+        workspaceChatSessions: {
+          "workspace-messages-only": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "Hello from messages-only session",
+                sources: []
+              }
+            ],
+            historyId: "messages-only-history",
+            serverChatId: "messages-only-chat"
+          }
+        }
+      },
+      version: 1
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const session = useWorkspaceStore
+      .getState()
+      .getWorkspaceChatSession("workspace-messages-only")
+    expect(session?.messages[0]?.message).toBe("Hello from messages-only session")
+    expect(session?.history[0]?.content).toBe("Hello from messages-only session")
+    expect(session?.history[0]?.role).toBe("user")
+    expect(session?.historyId).toBe("messages-only-history")
+    expect(session?.serverChatId).toBe("messages-only-chat")
+  })
+
+  it("migrates legacy top-level persisted state without snapshots", async () => {
+    resetWorkspaceStore()
+
+    const persistedState = {
+      state: {
+        workspaceId: "workspace-legacy-top-level",
+        workspaceName: "Legacy Top-Level Workspace",
+        workspaceTag: "workspace:legacy-top-level",
+        workspaceCreatedAt: "2026-02-18T00:00:00.000Z",
+        workspaceChatReferenceId: "legacy-top-level-chat",
+        sources: [
+          {
+            id: "legacy-source-1",
+            mediaId: 4321,
+            title: "Legacy Top-Level Source",
+            type: "pdf",
+            addedAt: "2026-02-18T00:01:00.000Z"
+          }
+        ],
+        selectedSourceIds: ["legacy-source-1"],
+        generatedArtifacts: [
+          {
+            id: "legacy-artifact-1",
+            type: "summary",
+            title: "Legacy Top-Level Artifact",
+            status: "completed",
+            content: "Legacy artifact content",
+            createdAt: "2026-02-18T00:02:00.000Z"
+          }
+        ],
+        notes: "Legacy top-level notes",
+        currentNote: {
+          id: 7,
+          title: "Legacy note",
+          content: "Legacy note content",
+          keywords: ["legacy"],
+          version: 1,
+          isDirty: false
+        },
+        leftPaneCollapsed: true,
+        rightPaneCollapsed: false,
+        audioSettings: { ...DEFAULT_AUDIO_SETTINGS, speed: 1.1 },
+        savedWorkspaces: [],
+        archivedWorkspaces: [],
+        workspaceChatSessions: {
+          "workspace-legacy-top-level": {
+            messages: [
+              {
+                isBot: false,
+                name: "You",
+                message: "Legacy session message",
+                sources: []
+              }
+            ],
+            history: [{ role: "user", content: "Legacy session message" }],
+            historyId: "legacy-top-history",
+            serverChatId: null
+          }
+        }
+      },
+      version: 0
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistedState))
+    await useWorkspaceStore.persist.rehydrate()
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe("workspace-legacy-top-level")
+    expect(state.workspaceName).toBe("Legacy Top-Level Workspace")
+    expect(state.workspaceTag).toBe("workspace:legacy-top-level")
+    expect(state.workspaceChatReferenceId).toBe("legacy-top-level-chat")
+    expect(state.sources[0]?.title).toBe("Legacy Top-Level Source")
+    expect(state.selectedSourceIds).toEqual(["legacy-source-1"])
+    expect(state.generatedArtifacts[0]?.title).toBe("Legacy Top-Level Artifact")
+    expect(state.notes).toBe("Legacy top-level notes")
+    expect(state.currentNote.title).toBe("Legacy note")
+    expect(state.leftPaneCollapsed).toBe(true)
+    expect(state.rightPaneCollapsed).toBe(false)
+    expect(state.workspaceSnapshots["workspace-legacy-top-level"]).toBeDefined()
+    expect(
+      state.workspaceChatSessions["workspace-legacy-top-level"]?.history[0]?.content
+    ).toBe("Legacy session message")
   })
 
   it("dispatches a quota warning event when localStorage is full", () => {

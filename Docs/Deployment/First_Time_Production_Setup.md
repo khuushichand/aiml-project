@@ -11,8 +11,8 @@ Related documents
 - Sidecar workers (systemd/launchd): `Docs/Deployment/Sidecar_Workers.md`
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment variables reference: `Env_Vars.md`
-- General installation (local/dev): `Docs/Published/User_Guides/Installation-Setup-Guide.md`
-- Production hardening checklist: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`
+- General installation (local/dev): `Docs/Published/User_Guides/Server/Installation-Setup-Guide.md`
+- Production hardening checklist: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`
 
 ## 1) Prerequisites
 
@@ -226,4 +226,4 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 - Rate limits:
   - Keep global and module-specific rate limiters enabled and tuned for your users.
 
-For a comprehensive list, see `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+For a comprehensive list, see `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`.

@@ -85,7 +85,35 @@ const getFirstModelId = (payload: any): string | null => {
   return id ? String(id) : null
 }
 
+const closeBlockingDrawerIfVisible = async (page: any) => {
+  const drawerMask = page.locator(".ant-drawer-mask").first()
+  const maskVisible = await drawerMask
+    .isVisible({ timeout: 1000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!maskVisible) return
+
+  const closeCandidates = [
+    page.locator(".ant-drawer-close").first(),
+    page.getByRole("button", { name: /close|x/i }).first()
+  ]
+
+  for (const candidate of closeCandidates) {
+    const visible = await candidate
+      .isVisible({ timeout: 750 })
+      .then(() => true)
+      .catch(() => false)
+    if (!visible) continue
+    await candidate.click({ timeout: 3000 }).catch(() => {})
+    break
+  }
+
+  await page.keyboard.press("Escape").catch(() => {})
+  await drawerMask.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {})
+}
+
 const ensureComposerActionBarVisible = async (page: any) => {
+  await closeBlockingDrawerIfVisible(page)
   const composerInput = page.locator("#textarea-message")
   await expect(composerInput).toBeVisible({ timeout: 15000 })
   await composerInput.click({ timeout: 5000 })
@@ -109,7 +137,7 @@ const findVisibleButton = async (locator: any) => {
 }
 
 const findVisibleSearchInput = async (page: any) => {
-  const locator = page.getByPlaceholder(/Search characters/i)
+  const locator = page.getByPlaceholder(/Search characters(?: by name)?/i)
   return findVisibleButton(locator)
 }
 
@@ -144,6 +172,32 @@ const findCharacterMenuItem = async (page: any, characterName: string) => {
 
   return null
 }
+
+const collectVisibleCharacterMenuLabels = async (page: any) =>
+  page.evaluate(() =>
+    Array.from(
+      document.querySelectorAll("[role='menuitem'], .ant-dropdown-menu-item")
+    )
+      .map((node) => {
+        const element = node as HTMLElement
+        const style = window.getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        const visible =
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity || "1") > 0 &&
+          rect.width > 0 &&
+          rect.height > 0
+        return {
+          visible,
+          text: (element.innerText || element.textContent || "").trim()
+        }
+      })
+      .filter((entry) => entry.visible)
+      .map((entry) => entry.text)
+      .filter(Boolean)
+      .slice(0, 40)
+  )
 
 const openCharacterSelector = async (page: any) => {
   await ensureComposerActionBarVisible(page)
@@ -186,6 +240,16 @@ const openCharacterSelector = async (page: any) => {
   throw new Error(
     `Character trigger button was not visible. Visible buttons: ${JSON.stringify(visibleButtons)}`
   )
+}
+
+const dismissTutorialPromptIfVisible = async (page: any) => {
+  const dismissButton = await findVisibleButton(
+    page.getByRole("button", { name: /Not now/i })
+  )
+  if (dismissButton) {
+    await dismissButton.click({ timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(150)
+  }
 }
 
 const createEphemeralCharacters = async (
@@ -304,27 +368,27 @@ const waitForGreeting = async (page: any, characterName: string) => {
 }
 
 const dismissWorkflowHubIfVisible = async (page: any) => {
-  const hubHeading = page.getByText(/What would you like to do\?/i).first()
-  const hubDialog = page
+  const startChatButton = await findVisibleButton(
+    page.getByRole("button", { name: /Start chatting/i })
+  )
+  if (startChatButton) {
+    await startChatButton.click({ timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(150)
+  }
+
+  const legacyHubHeading = page.getByText(/What would you like to do\?/i).first()
+  const legacyHubDialog = page
     .locator("[role='dialog']")
-    .filter({ has: hubHeading })
+    .filter({ has: legacyHubHeading })
     .first()
-
-  const visible = await hubDialog
-    .isVisible({ timeout: 3000 })
+  const legacyVisible = await legacyHubDialog
+    .isVisible({ timeout: 1500 })
     .then(() => true)
     .catch(() => false)
-  if (!visible) return
-
-  const startChat = hubDialog.getByText(/Start Chatting/i).first()
-  const startChatVisible = await startChat
-    .isVisible({ timeout: 2000 })
-    .then(() => true)
-    .catch(() => false)
-  if (startChatVisible) {
-    await startChat.click().catch(() => {})
-  } else {
-    const closeButton = hubDialog.getByRole("button", { name: /close|x/i }).first()
+  if (legacyVisible) {
+    const closeButton = legacyHubDialog
+      .getByRole("button", { name: /close|x/i })
+      .first()
     const closeVisible = await closeButton
       .isVisible({ timeout: 1000 })
       .then(() => true)
@@ -334,9 +398,27 @@ const dismissWorkflowHubIfVisible = async (page: any) => {
     } else {
       await page.keyboard.press("Escape").catch(() => {})
     }
+    await legacyHubDialog.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {})
   }
 
-  await hubDialog.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {})
+  await dismissTutorialPromptIfVisible(page)
+}
+
+const enterCharacterChatModeIfAvailable = async (page: any) => {
+  const candidates = [
+    page.getByRole("button", { name: /^Character chat$/i }),
+    page.getByRole("button", { name: /new character chat/i }),
+    page.getByRole("button", { name: /^Character$/i })
+  ]
+
+  for (const locator of candidates) {
+    const visibleButton = await findVisibleButton(locator)
+    if (!visibleButton) continue
+    await visibleButton.click({ timeout: 5000 }).catch(() => {})
+    await closeBlockingDrawerIfVisible(page)
+    await page.waitForTimeout(150)
+    return
+  }
 }
 
 const createCharacter = async (
@@ -574,6 +656,7 @@ test.describe("Playground character selection", () => {
       )
       await setSelectedModel(page, selectedModelId)
       await dismissWorkflowHubIfVisible(page)
+      await enterCharacterChatModeIfAvailable(page)
       await page.evaluate(() => {
         const w = window as any
         if (w.__tldwStorageWrapped) return
@@ -616,8 +699,11 @@ test.describe("Playground character selection", () => {
       }
       const menuItem = await findCharacterMenuItem(page, character.name)
       if (!menuItem) {
+        const visibleMenuLabels = await collectVisibleCharacterMenuLabels(page)
         throw new Error(
-          `Unable to find character menu item for "${character.name}".`
+          `Unable to find character menu item for "${character.name}". Visible menu labels: ${JSON.stringify(
+            visibleMenuLabels
+          )}`
         )
       }
       await expect(menuItem).toBeVisible({ timeout: 15000 })
@@ -656,8 +742,11 @@ test.describe("Playground character selection", () => {
       }
       const secondItem = await findCharacterMenuItem(page, secondCharacter.name)
       if (!secondItem) {
+        const visibleMenuLabels = await collectVisibleCharacterMenuLabels(page)
         throw new Error(
-          `Unable to find second character menu item for "${secondCharacter.name}".`
+          `Unable to find second character menu item for "${secondCharacter.name}". Visible menu labels: ${JSON.stringify(
+            visibleMenuLabels
+          )}`
         )
       }
       await expect(secondItem).toBeVisible({ timeout: 15000 })
@@ -702,7 +791,7 @@ test.describe("Playground character selection", () => {
     }
   })
 
-  test("preselects server default on fresh load and preserves manual override across reload", async () => {
+  test("preselects server default after entering character chat and preserves manual override across reload", async () => {
     test.setTimeout(120000)
     const { serverUrl, apiKey } = requireRealServerConfig(test)
     const normalizedServerUrl = normalizeServerUrl(serverUrl)
@@ -827,6 +916,7 @@ test.describe("Playground character selection", () => {
       )
       await setSelectedModel(page, selectedModelId)
       await dismissWorkflowHubIfVisible(page)
+      await enterCharacterChatModeIfAvailable(page)
 
       await expect
         .poll(
@@ -846,8 +936,11 @@ test.describe("Playground character selection", () => {
       }
       const manualItem = await findCharacterMenuItem(page, manualCharacter.name)
       if (!manualItem) {
+        const visibleMenuLabels = await collectVisibleCharacterMenuLabels(page)
         throw new Error(
-          `Unable to find manual character menu item for "${manualCharacter.name}".`
+          `Unable to find manual character menu item for "${manualCharacter.name}". Visible menu labels: ${JSON.stringify(
+            visibleMenuLabels
+          )}`
         )
       }
       await expect(manualItem).toBeVisible({ timeout: 15000 })
@@ -873,6 +966,7 @@ test.describe("Playground character selection", () => {
       )
       await setSelectedModel(page, selectedModelId)
       await dismissWorkflowHubIfVisible(page)
+      await enterCharacterChatModeIfAvailable(page)
 
       await expect
         .poll(

@@ -7,7 +7,7 @@ This guide covers day-2 operations: upgrades, backups, monitoring, capacity and 
 
 Related documents
 - First-time production setup: `Docs/Deployment/First_Time_Production_Setup.md`
-- Production hardening checklist: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`
+- Production hardening checklist: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`
 - Reverse proxy examples: `Docs/Deployment/Reverse_Proxy_Examples.md`
 - Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
 - Metrics & Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
@@ -199,8 +199,8 @@ Recommended practice
 ## 10) References
 
 - README admin endpoints and usage reporting: `README.md`
-- Registration & AuthNZ configuration: `Docs/User_Guides/Authentication_Setup.md`
-- Multi-User deployment patterns: `Docs/User_Guides/Multi-User_Deployment_Guide.md`
+- Registration & AuthNZ configuration: `Docs/User_Guides/Server/Authentication_Setup.md`
+- Multi-User deployment patterns: `Docs/User_Guides/Server/Multi-User_Deployment_Guide.md`
 - Reverse proxy and TLS: `Docs/Deployment/Reverse_Proxy_Examples.md`
 - Postgres/SQLite backends: `Docs/Database-Backends.md`
 - Metrics and dashboards: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`

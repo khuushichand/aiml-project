@@ -21,20 +21,75 @@ and this project adheres to Some kind of Versioning
 -
 
 
-## [0.1.22] 2026-02-X
+## [0.1.22] 2026-02-22
 
 ### Added
--
+- Quick Chat helper documentation-assistant expansion:
+  - Added a docs-focused Q&A workflow path for project-documentation guidance.
+  - Added/expanded pre-written workflow Q&A cards for guided “how do I do X?” discovery.
+  - Added per-page `Tutorials for this page` section in Quick Chat Browse Guides (distinct from Q&A cards) with start/replay/locked states.
+  - Added strict-scope docs profile defaults for RAG Q&A (`media_db` + `project_docs`) with scope controls in Settings (`quickChatStrictDocsOnly`, `quickChatDocsIndexNamespace`, `quickChatDocsProjectMediaIds`).
+- Guided tutorial rollout (P1 routes) available from Help modal + Quick Chat Browse Guides:
+  - `/prompts` (`prompts-basics`)
+  - `/evaluations` (`evaluations-basics`)
+  - `/notes` (`notes-basics`)
+  - `/flashcards` (`flashcards-basics`)
+  - `/world-books` (`world-books-basics`)
+  - Legacy alias routing support for `/options/*` tutorial entry paths.
+- New tutorial selector/test contracts:
+  - Evaluations: stable tutorial target anchors for page title, tabs, create button, list/detail cards.
+  - World Books: stable tutorial target anchors for shell, search/filters, table, new/import actions.
+- Workspace Playground context controls:
+  - Added option to include full file contents in chat context for tasks like synopsis/summarization questions.
+- Validation/test assets:
+  - Added dedicated Quick Chat tutorials validation spec and expanded tutorial/registry/unit coverage.
+  - Added manual QA checklist and PR/release notes for the P1 tutorials rollout.
+- Published docs IA and release-notes additions:
+  - Added curated User Guides taxonomy under published docs (`Server`, `WebUI_Extension`, `Integrations_Experiments`) with updated guide index routing.
+  - Added published release notes page (`Docs/Published/RELEASE_NOTES.md`) and wired it into docs nav.
+  - Added targeted Playwright validation coverage updates for character selection/default bootstrap and options first-run onboarding contracts.
 
 ### Changed
--
+- Workspace Playground conversation surface behavior:
+  - Page now extends downward with conversation growth up to a max threshold, then switches to scrollable conversation behavior.
+- Character preview UX:
+  - Character preview modal now shows full description and full tag set rather than obscured/truncated content.
+- Options first-run UX test contracts:
+  - Updated Playwright coverage to align with onboarding-first shell and current landing-hub “Start Chatting” flows.
+- Documentation/user-guide coverage:
+  - Added/updated guidance on Quick Chat docs assistant usage, tutorial discovery, and editing pre-written workflow/Q&A cards.
+- Documentation cross-link normalization for published docs:
+  - Repointed published guide/API/code-documentation links from non-published paths to published equivalents.
+  - Replaced source-file local path links that do not publish in MkDocs with stable GitHub source links where appropriate.
+- MkDocs nav completeness updates:
+  - Added previously orphaned published pages to nav (`Watchlists API`, `VoiceAssistant Module`, `Doc Researcher Features`, `Generated Files Storage Code Guide`, `Sidecar Workers.template`, `Firecracker Host Checklist`).
+  - Added explicit “how to add/edit tutorials” developer workflow and “how to edit pre-written workflow cards” user workflow documentation.
 
 ### Removed
-- 
+- No removals in this session.
 
 ### Fixed
+- Fixed free-floating notes modal open behavior in WebUI/extension where the modal would open then shrink to minimum size.
+- Fixed character-page pagination instability that could jump/skip back to page 1.
+- Fixed character image rendering in both character grid cards and selected character detail views.
+- Fixed character list response handling by normalizing list envelopes (`items`, `characters`, `results`, `data`) to prevent missing-character selector states.
+- Fixed default-character bootstrap behavior in Options Playground so server defaults preselect correctly and manual override persists across reload.
+- Fixed Playwright flow instability around modern onboarding/tutorial overlays and drawer interception in character-selection scenarios.
+- Playwright validation hardening completed with targeted suite passing:
+  - `playground-character-selection.spec.ts` (green)
+  - `options-first-run.spec.ts` (green)
+  - `quick-chat-guides-tutorials.spec.ts` + `page-review.spec.ts` + `options-first-run.spec.ts` combined run (`68 passed`)
 - Media ingestion batch-processor shim resolution: `process_batch_media` now detects stale endpoint wrapper caches and prefers the live core audio/video processor callable when wrappers are out of sync.
 - Restored order-independent behavior for MediaIngestion_NEW regression tests that monkeypatch core processors (claims toggle integration and metadata/pre-check contract paths) by preventing fallback to real network/file audio processing during those tests.
+- Dictation reliability and diagnostics across WebUI `/chat` and extension sidepanel:
+  - Hardened extension dictation fallback E2E by forcing taxonomy-classified server STT failures through the extension upload transport path.
+  - Added `/chat` integration coverage for dictation mode routing (`server` vs `browser`) and transcript insertion behavior.
+  - Added sanitized dictation diagnostics event schema (`tldw:dictation:diagnostics`) with explicit privacy guarantees (no transcript/prompt/audio payload content).
+- MkDocs strict-build blockers for published documentation:
+  - Fixed missing-nav-entry blockers by including all published pages reported as out-of-nav.
+  - Fixed broken published links to removed/non-published `User_Guides` and `Development` paths.
+  - Fixed stale table-of-contents anchors (`#...--...`) that no longer matched generated heading IDs.
+  - Strict build now reports zero missing-nav and zero broken-anchor info warnings in the docs scope.
 
 
 ## [0.1.21] 2026-02-21

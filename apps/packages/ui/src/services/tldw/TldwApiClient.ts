@@ -74,6 +74,14 @@ export interface TldwConfig {
   authMode: 'single-user' | 'multi-user'
 }
 
+export interface CurrentUserStorageQuotaResponse {
+  user_id: number
+  storage_used_mb: number
+  storage_quota_mb: number
+  available_mb: number
+  usage_percentage: number
+}
+
 export type UserProfileUpdateEntry = {
   key: string
   value: unknown | null
@@ -884,6 +892,13 @@ export class TldwApiClient {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: payload
+    })
+  }
+
+  async getCurrentUserStorageQuota(): Promise<CurrentUserStorageQuotaResponse> {
+    return await this.request<CurrentUserStorageQuotaResponse>({
+      path: "/api/v1/users/storage",
+      method: "GET"
     })
   }
 
@@ -2330,15 +2345,42 @@ export class TldwApiClient {
   }
 
   // Characters API
+  private normalizeCharacterListResponse(payload: unknown): any[] {
+    if (Array.isArray(payload)) {
+      return payload
+    }
+    if (!payload || typeof payload !== "object") {
+      return []
+    }
+
+    const objectPayload = payload as Record<string, unknown>
+    const candidateLists = [
+      objectPayload.items,
+      objectPayload.characters,
+      objectPayload.results,
+      objectPayload.data
+    ]
+
+    for (const candidate of candidateLists) {
+      if (Array.isArray(candidate)) {
+        return candidate
+      }
+    }
+
+    return []
+  }
+
   async listCharacters(params?: Record<string, any>): Promise<any[]> {
     const query = this.buildQuery(params)
     const listPathCandidates = ["/api/v1/characters", "/api/v1/characters/"] as const
     const base = await this.resolveApiPath("characters.list", [...listPathCandidates])
     const requestList = async (path: string) =>
-      await bgRequest<any[]>({
-        path: appendPathQuery(path as AllowedPath, query),
-        method: "GET"
-      })
+      this.normalizeCharacterListResponse(
+        await bgRequest<any>({
+          path: appendPathQuery(path as AllowedPath, query),
+          method: "GET"
+        })
+      )
 
     try {
       return await requestList(base)

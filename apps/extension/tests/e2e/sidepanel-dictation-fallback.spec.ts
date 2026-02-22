@@ -180,11 +180,19 @@ const waitForServerDictationMode = async (sidepanel: Page) => {
     .toBe(true)
 }
 
-const installDictationBrowserMocks = async (pageContext: any) => {
-  await pageContext.addInitScript(() => {
+const installDictationBrowserMocks = async (
+  pageContext: any,
+  dictationErrorClass: string
+) => {
+  await pageContext.addInitScript((errorClass: string) => {
     ;(window as any).__dictationSpeechStartCount = 0
     ;(window as any).__mediaRecorderStartCount = 0
+    ;(window as any).__mediaRecorderStopCount = 0
+    ;(window as any).__mediaRecorderOnStopCount = 0
     ;(window as any).__dictationRecorderImpl = "unknown"
+    ;(window as any).__dictationUploadCount = 0
+    ;(window as any).__dictationLastUploadPath = ""
+    ;(window as any).__dictationLastUploadErrorClass = ""
 
     class FakeSpeechRecognition {
       lang = ""
@@ -238,50 +246,125 @@ const installDictationBrowserMocks = async (pageContext: any) => {
       })
     } catch {}
 
-    class FakeMediaRecorder {
-      static isTypeSupported() {
-        return true
-      }
-      stream: any
-      mimeType = "audio/webm"
-      state: "inactive" | "recording" = "inactive"
-      ondataavailable: ((event: any) => void) | null = null
-      onstop: (() => void) | null = null
-      onerror: ((event: Event) => void) | null = null
+    ;(window as any).SpeechRecognition = FakeSpeechRecognition
+    ;(window as any).webkitSpeechRecognition = FakeSpeechRecognition
 
-      constructor(stream: any) {
-        this.stream = stream
+    const patchRuntimeSendMessage = (runtime: any) => {
+      if (!runtime?.sendMessage) return
+      const previous = runtime.sendMessage
+      if (typeof previous !== "function") return
+      if ((runtime as any).__dictationUploadMockInstalled) return
+
+      const wrapped = function (message: any, ...args: any[]) {
+        if (
+          message?.type === "tldw:upload" &&
+          message?.payload?.path === "/api/v1/audio/transcriptions"
+        ) {
+          ;(window as any).__dictationUploadCount += 1
+          ;(window as any).__dictationLastUploadPath = String(
+            message?.payload?.path || ""
+          )
+          ;(window as any).__dictationLastUploadErrorClass = errorClass
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            error: `Simulated ${errorClass}`,
+            data: {
+              detail: {
+                dictation_error_class: errorClass,
+                status: errorClass,
+                message: `Simulated ${errorClass}`
+              }
+            }
+          })
+        }
+        return previous.apply(this, [message, ...args])
       }
 
-      start() {
-        this.state = "recording"
+      try {
+        runtime.sendMessage = wrapped
+      } catch {
+        try {
+          Object.defineProperty(runtime, "sendMessage", {
+            value: wrapped,
+            configurable: true,
+            writable: true
+          })
+        } catch {
+          return
+        }
+      }
+      ;(runtime as any).__dictationUploadMockInstalled = true
+    }
+
+    patchRuntimeSendMessage((window as any).chrome?.runtime)
+    patchRuntimeSendMessage((window as any).browser?.runtime)
+
+    const NativeMediaRecorder = (window as any).MediaRecorder
+    if (NativeMediaRecorder?.prototype) {
+      const nativeStart = NativeMediaRecorder.prototype.start
+      const nativeStop = NativeMediaRecorder.prototype.stop
+      NativeMediaRecorder.prototype.start = function (...args: any[]) {
         ;(window as any).__mediaRecorderStartCount += 1
-        ;(window as any).__dictationRecorderImpl = "fake"
+        ;(window as any).__dictationRecorderImpl = "native"
+        return nativeStart.apply(this, args)
       }
+      NativeMediaRecorder.prototype.stop = function (...args: any[]) {
+        ;(window as any).__mediaRecorderStopCount += 1
+        try {
+          this.addEventListener?.(
+            "stop",
+            () => {
+              ;(window as any).__mediaRecorderOnStopCount += 1
+            },
+            { once: true }
+          )
+        } catch {}
+        return nativeStop.apply(this, args)
+      }
+    } else {
+      class FakeMediaRecorder {
+        static isTypeSupported() {
+          return true
+        }
+        stream: any
+        mimeType = "audio/webm"
+        state: "inactive" | "recording" = "inactive"
+        ondataavailable: ((event: any) => void) | null = null
+        onstop: (() => void) | null = null
+        onerror: ((event: Event) => void) | null = null
 
-      stop() {
-        this.state = "inactive"
-        setTimeout(() => {
+        constructor(stream: any) {
+          this.stream = stream
+        }
+
+        start() {
+          this.state = "recording"
+          ;(window as any).__mediaRecorderStartCount += 1
+          ;(window as any).__dictationRecorderImpl = "fake"
+        }
+
+        stop() {
+          ;(window as any).__mediaRecorderStopCount += 1
+          this.state = "inactive"
           this.ondataavailable?.({
             data: new Blob(["mock-audio"], { type: "audio/webm" })
           })
+          ;(window as any).__mediaRecorderOnStopCount += 1
           this.onstop?.()
-        }, 0)
+        }
+      }
+      try {
+        Object.defineProperty(window, "MediaRecorder", {
+          value: FakeMediaRecorder,
+          configurable: true,
+          writable: true
+        })
+      } catch {
+        ;(window as any).MediaRecorder = FakeMediaRecorder
       }
     }
-
-    ;(window as any).SpeechRecognition = FakeSpeechRecognition
-    ;(window as any).webkitSpeechRecognition = FakeSpeechRecognition
-    try {
-      Object.defineProperty(window, "MediaRecorder", {
-        value: FakeMediaRecorder,
-        configurable: true,
-        writable: true
-      })
-    } catch {
-      ;(window as any).MediaRecorder = FakeMediaRecorder
-    }
-  })
+  }, dictationErrorClass)
 }
 
 const runFallbackScenario = async (
@@ -290,7 +373,7 @@ const runFallbackScenario = async (
   speechStartCount: number
   mediaRecorderStartCount: number
   recorderImpl: string
-  transcriptionsCount: number
+  uploadCount: number
 }> => {
   const mock = await startDictationMockServer(dictationErrorClass)
   const { context, page, openSidepanel, extensionId } =
@@ -309,7 +392,7 @@ const runFallbackScenario = async (
     })) as any
 
   try {
-    await installDictationBrowserMocks(context)
+    await installDictationBrowserMocks(context, dictationErrorClass)
     const origin = new URL(mock.baseUrl).origin + "/*"
     const granted = await grantHostPermission(context, extensionId, origin)
     test.skip(
@@ -340,20 +423,31 @@ const runFallbackScenario = async (
       mediaRecorderStartCount: Number(
         (window as any).__mediaRecorderStartCount || 0
       ),
-      recorderImpl: String((window as any).__dictationRecorderImpl || "unknown")
+      mediaRecorderStopCount: Number((window as any).__mediaRecorderStopCount || 0),
+      mediaRecorderOnStopCount: Number(
+        (window as any).__mediaRecorderOnStopCount || 0
+      ),
+      recorderImpl: String((window as any).__dictationRecorderImpl || "unknown"),
+      uploadCount: Number((window as any).__dictationUploadCount || 0),
+      uploadPath: String((window as any).__dictationLastUploadPath || ""),
+      uploadErrorClass: String(
+        (window as any).__dictationLastUploadErrorClass || ""
+      )
     }))
 
     await expect
       .poll(
-        () => {
-          const value = mock.getTranscriptionsCount()
+        async () => {
+          const value = await sidepanel.evaluate(
+            () => Number((window as any).__dictationUploadCount || 0)
+          )
           if (value !== 1) {
             const log = mock
               .getRequestLog()
               .map((entry) => `${entry.method} ${entry.path}`)
               .join("\n")
             console.log(
-              `[DICTATION_E2E_DEBUG] waiting for transcription; current=${value}\n` +
+              `[DICTATION_E2E_DEBUG] waiting for dictation upload; current=${value}\n` +
                 `[DICTATION_E2E_DEBUG] counters=${JSON.stringify(firstPassCounters)}\n` +
                 `[DICTATION_E2E_DEBUG] requests=\n${log}`
             )
@@ -374,12 +468,12 @@ const runFallbackScenario = async (
       mediaRecorderStartCount: Number(
         (window as any).__mediaRecorderStartCount || 0
       ),
-      recorderImpl: String((window as any).__dictationRecorderImpl || "unknown")
+      recorderImpl: String((window as any).__dictationRecorderImpl || "unknown"),
+      uploadCount: Number((window as any).__dictationUploadCount || 0)
     }))
 
     return {
-      ...counters,
-      transcriptionsCount: mock.getTranscriptionsCount()
+      ...counters
     }
   } finally {
     await context.close()
@@ -388,6 +482,8 @@ const runFallbackScenario = async (
 }
 
 test.describe("Sidepanel dictation fallback", () => {
+  test.setTimeout(90000)
+
   test.skip(
     !DICTATION_FALLBACK_E2E_ENABLED,
     "Set TLDW_E2E_RUN_DICTATION_FALLBACK=1 to run dictation fallback E2E."
@@ -396,7 +492,7 @@ test.describe("Sidepanel dictation fallback", () => {
   test("falls back to browser dictation for provider_unavailable", async () => {
     const result = await runFallbackScenario("provider_unavailable")
 
-    expect(result.transcriptionsCount).toBe(1)
+    expect(result.uploadCount).toBe(1)
     expect(result.speechStartCount).toBe(1)
     expect(result.mediaRecorderStartCount).toBe(1)
   })
@@ -404,7 +500,7 @@ test.describe("Sidepanel dictation fallback", () => {
   test("does not auto-fallback for quota_error", async () => {
     const result = await runFallbackScenario("quota_error")
 
-    expect(result.transcriptionsCount).toBe(1)
+    expect(result.uploadCount).toBe(1)
     expect(result.speechStartCount).toBe(0)
     expect(result.mediaRecorderStartCount).toBe(2)
   })

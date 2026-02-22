@@ -151,7 +151,7 @@ Retrieval baseline:
 - Use your generated retrieval dataset JSONL.
 
 References:
-- `Docs/Published/User_Guides/Media_to_RAG_Evals_Workflow.md`
+- `Docs/Published/User_Guides/Server/Media_to_RAG_Evals_Workflow.md`
 - `Docs/RAG/RAG_Benchmarks.md`
 
 ## 8) Repeat for a New Corpus

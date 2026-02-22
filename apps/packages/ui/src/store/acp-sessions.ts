@@ -191,6 +191,7 @@ export const useACPSessionsStore = createWithEqualityFn<ACPSessionsStore>()(
           id,
           cwd: options.cwd,
           name: generatedName,
+          forkParentSessionId: null,
           agentType: options.agentType,
           tags: options.tags,
           mcpServers: options.mcpServers,

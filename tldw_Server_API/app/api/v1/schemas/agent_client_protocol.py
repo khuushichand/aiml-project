@@ -190,6 +190,22 @@ class ACPSessionNewRequest(BaseModel):
     mcp_servers: list[ACPMCPServerConfig] | None = Field(
         default=None, description="Optional MCP server configurations"
     )
+    persona_id: str | None = Field(
+        default=None,
+        description="Optional persona identifier bound to sandbox tenancy metadata",
+    )
+    workspace_id: str | None = Field(
+        default=None,
+        description="Optional workspace identifier bound to sandbox tenancy metadata",
+    )
+    workspace_group_id: str | None = Field(
+        default=None,
+        description="Optional workspace group identifier bound to sandbox tenancy metadata",
+    )
+    scope_snapshot_id: str | None = Field(
+        default=None,
+        description="Optional materialized scope snapshot identifier for sandbox tenancy metadata",
+    )
 
 
 class ACPSessionNewResponse(BaseModel):
@@ -202,6 +218,14 @@ class ACPSessionNewResponse(BaseModel):
     sandbox_run_id: str | None = Field(default=None, description="Sandbox run backing this ACP session")
     ssh_ws_url: str | None = Field(default=None, description="WebSocket URL for browser-based SSH")
     ssh_user: str | None = Field(default=None, description="SSH username for this session")
+    persona_id: str | None = Field(default=None, description="Persona identifier bound to this ACP session")
+    workspace_id: str | None = Field(default=None, description="Workspace identifier bound to this ACP session")
+    workspace_group_id: str | None = Field(
+        default=None, description="Workspace group identifier bound to this ACP session"
+    )
+    scope_snapshot_id: str | None = Field(
+        default=None, description="Scope snapshot identifier bound to this ACP session"
+    )
 
 
 class ACPSessionPromptRequest(BaseModel):
@@ -264,6 +288,14 @@ class ACPSessionInfo(BaseModel):
     usage: ACPTokenUsage = Field(default_factory=ACPTokenUsage, description="Token usage for this session")
     tags: list[str] = Field(default_factory=list, description="Tags for organizing sessions")
     has_websocket: bool = Field(default=False, description="Whether a WebSocket is connected")
+    persona_id: str | None = Field(default=None, description="Persona identifier bound to this ACP session")
+    workspace_id: str | None = Field(default=None, description="Workspace identifier bound to this ACP session")
+    workspace_group_id: str | None = Field(
+        default=None, description="Workspace group identifier bound to this ACP session"
+    )
+    scope_snapshot_id: str | None = Field(
+        default=None, description="Scope snapshot identifier bound to this ACP session"
+    )
 
 
 class ACPSessionListResponse(BaseModel):

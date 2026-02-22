@@ -657,7 +657,7 @@ Must Tickets:
 
 - [x] `EMAIL-M4-001` Publish operator query user guide.
   Depends On: `EMAIL-M1-007`.
-  Deliverables: New guide in `Docs/User_Guides/Email_Operator_Search_Guide.md` (mirrored to `Docs/Published/User_Guides/Email_Operator_Search_Guide.md`) with examples and troubleshooting.
+  Deliverables: New guide in `Docs/User_Guides/Server/Email_Operator_Search_Guide.md` (mirrored to `Docs/Published/User_Guides/Server/Email_Operator_Search_Guide.md`) with examples and troubleshooting.
   Acceptance: Guide content published with operator syntax, endpoint usage, and error handling references; product/support review pending rollout sign-off.
 
 - [x] `EMAIL-M4-002` Publish email search architecture and developer integration docs.

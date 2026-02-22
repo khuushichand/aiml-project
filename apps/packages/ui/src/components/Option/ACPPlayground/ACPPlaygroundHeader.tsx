@@ -7,9 +7,9 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Settings,
 } from "lucide-react"
 import { useACPSessionsStore } from "@/store/acp-sessions"
+import { getSessionMessageCount, getSessionTokenUsage } from "./sessionMetrics"
 
 interface ACPPlaygroundHeaderProps {
   leftPaneOpen: boolean
@@ -30,6 +30,14 @@ export const ACPPlaygroundHeader: React.FC<ACPPlaygroundHeaderProps> = ({
 
   const activeSession = useACPSessionsStore((s) =>
     s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
+  )
+  const activeSessionMessageCount = React.useMemo(
+    () => (activeSession ? getSessionMessageCount(activeSession) : 0),
+    [activeSession]
+  )
+  const activeSessionTokenUsage = React.useMemo(
+    () => (activeSession ? getSessionTokenUsage(activeSession) : null),
+    [activeSession]
   )
 
   const getStateColor = (state: string | undefined) => {
@@ -108,12 +116,26 @@ export const ACPPlaygroundHeader: React.FC<ACPPlaygroundHeaderProps> = ({
       <div className="flex items-center gap-3">
         {/* Session status indicator */}
         {activeSession && (
-          <div className="flex items-center gap-2 rounded-lg bg-surface2 px-3 py-1.5">
-            <span
-              className={`h-2 w-2 rounded-full ${getStateColor(activeSession.state)}`}
-            />
-            <span className="text-sm text-text-muted">
-              {getStateLabel(activeSession.state)}
+          <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-surface2 px-2.5 py-1.5">
+            <span className="flex items-center gap-2 rounded bg-bg px-2 py-1">
+              <span
+                className={`h-2 w-2 rounded-full ${getStateColor(activeSession.state)}`}
+              />
+              <span className="text-sm text-text-muted">
+                {getStateLabel(activeSession.state)}
+              </span>
+            </span>
+            <span className="rounded bg-bg px-1.5 py-0.5 text-xs text-text-muted">
+              {t("playground:acp.sessionMeta.messages", `Msgs ${activeSessionMessageCount}`)}
+            </span>
+            <span className="rounded bg-bg px-1.5 py-0.5 text-xs text-text-muted">
+              {t(
+                "playground:acp.sessionMeta.tokens",
+                `Tokens ${activeSessionTokenUsage !== null ? activeSessionTokenUsage.toLocaleString() : "--"}`
+              )}
+            </span>
+            <span className="rounded bg-bg px-1.5 py-0.5 text-xs text-text-muted">
+              {t("playground:acp.sessionMeta.permissions", `Perm ${activeSession.pendingPermissions.length}`)}
             </span>
           </div>
         )}

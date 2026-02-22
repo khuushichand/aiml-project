@@ -7,6 +7,13 @@ import { QuickChatGuidesPanel } from "../QuickChatGuidesPanel"
 const useStorageMock = vi.fn()
 const startTutorialMock = vi.fn()
 const tutorialStoreSelectorMock = vi.fn()
+const tutorialStoreState: {
+  completedTutorials: string[]
+  startTutorial: typeof startTutorialMock
+} = {
+  completedTutorials: [],
+  startTutorial: startTutorialMock
+}
 
 vi.mock("@plasmohq/storage/hook", () => ({
   useStorage: (...args: unknown[]) => useStorageMock(...args)
@@ -32,7 +39,7 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
-vi.mock("../../../store/tutorials", () => ({
+vi.mock("@/store/tutorials", () => ({
   useTutorialStore: (selector: (state: unknown) => unknown) =>
     tutorialStoreSelectorMock(selector)
 }))
@@ -44,11 +51,9 @@ describe("QuickChatGuidesPanel tutorials section", () => {
     startTutorialMock.mockReset()
 
     useStorageMock.mockReturnValue([QUICK_CHAT_WORKFLOW_GUIDES])
-    tutorialStoreSelectorMock.mockImplementation((selector: (state: unknown) => unknown) =>
-      selector({
-        completedTutorials: [],
-        startTutorial: startTutorialMock
-      })
+    tutorialStoreState.completedTutorials = []
+    tutorialStoreSelectorMock.mockImplementation(
+      (selector: (state: unknown) => unknown) => selector(tutorialStoreState)
     )
   })
 
@@ -109,5 +114,60 @@ describe("QuickChatGuidesPanel tutorials section", () => {
     ).toBeInTheDocument()
     expect(screen.getByText("Workflow guide browser")).toBeInTheDocument()
     expect(screen.getByText("Ingest + summarize a source")).toBeInTheDocument()
+  })
+
+  it("uses store startTutorial when no external start callback is provided", () => {
+    render(
+      <QuickChatGuidesPanel
+        onAskGuide={vi.fn()}
+        onOpenRoute={vi.fn()}
+        currentRoute="/prompts"
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Start" }))
+    expect(startTutorialMock).toHaveBeenCalledWith("prompts-basics")
+  })
+
+  it("shows locked advanced tutorials until prerequisites are completed", () => {
+    render(
+      <QuickChatGuidesPanel
+        onAskGuide={vi.fn()}
+        onOpenRoute={vi.fn()}
+        currentRoute="/chat"
+      />
+    )
+
+    const toolsLabel = screen.getByText("Tools & Attachments")
+    const toolsRow = toolsLabel.closest("div")?.parentElement
+    expect(toolsRow).toBeTruthy()
+    if (!toolsRow) return
+
+    expect(within(toolsRow).getByRole("button", { name: "Locked" })).toBeDisabled()
+  })
+
+  it("shows replay for completed basics and unlocks advanced tutorials", () => {
+    tutorialStoreState.completedTutorials = ["playground-basics"]
+
+    render(
+      <QuickChatGuidesPanel
+        onAskGuide={vi.fn()}
+        onOpenRoute={vi.fn()}
+        currentRoute="/chat"
+      />
+    )
+
+    const chatBasicsLabel = screen.getByText("Chat Basics")
+    const chatBasicsRow = chatBasicsLabel.closest("div")?.parentElement
+    expect(chatBasicsRow).toBeTruthy()
+    if (!chatBasicsRow) return
+    expect(within(chatBasicsRow).getByRole("button", { name: "Replay" })).toBeInTheDocument()
+
+    const toolsLabel = screen.getByText("Tools & Attachments")
+    const toolsRow = toolsLabel.closest("div")?.parentElement
+    expect(toolsRow).toBeTruthy()
+    if (!toolsRow) return
+    expect(within(toolsRow).queryByRole("button", { name: "Locked" })).toBeNull()
+    expect(within(toolsRow).getByRole("button", { name: "Start" })).toBeInTheDocument()
   })
 })

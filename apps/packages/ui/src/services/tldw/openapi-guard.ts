@@ -191,6 +191,7 @@ export type ClientPath =
   | "/api/v1/auth/register"
   | "/api/v1/auth/magic-link/request"
   | "/api/v1/auth/magic-link/verify"
+  | "/api/v1/users/storage"
   | "/api/v1/billing/plans"
   | "/api/v1/billing/subscription"
   | "/api/v1/billing/usage"

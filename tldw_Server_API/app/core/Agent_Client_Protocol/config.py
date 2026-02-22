@@ -24,10 +24,13 @@ class ACPSandboxConfig:
     enabled: bool = False
     runtime: str = "docker"
     base_image: str = "tldw/acp-agent:latest"
-    network_policy: str = "allow_all"
+    network_policy: str = "deny_all"
+    run_as_root: bool = False
+    read_only_root: bool = True
     ssh_enabled: bool = True
     ssh_user: str = "acp"
     ssh_host: str = "127.0.0.1"
+    ssh_container_port: int = 2222
     ssh_port_min: int = 2222
     ssh_port_max: int = 2299
     agent_command: str = ""
@@ -123,10 +126,16 @@ def load_acp_sandbox_config() -> ACPSandboxConfig:
     enabled = _parse_bool(os.getenv("ACP_SANDBOX_ENABLED") or section.get("enabled"), False)
     runtime = os.getenv("ACP_SANDBOX_RUNTIME") or section.get("runtime", "docker")
     base_image = os.getenv("ACP_SANDBOX_BASE_IMAGE") or section.get("base_image", "tldw/acp-agent:latest")
-    network_policy = os.getenv("ACP_SANDBOX_NETWORK_POLICY") or section.get("network_policy", "allow_all")
+    network_policy = os.getenv("ACP_SANDBOX_NETWORK_POLICY") or section.get("network_policy", "deny_all")
+    run_as_root = _parse_bool(os.getenv("ACP_SANDBOX_RUN_AS_ROOT") or section.get("run_as_root"), False)
+    read_only_root = _parse_bool(os.getenv("ACP_SANDBOX_READ_ONLY_ROOT") or section.get("read_only_root"), True)
     ssh_enabled = _parse_bool(os.getenv("ACP_SSH_ENABLED") or section.get("ssh_enabled"), True)
     ssh_user = os.getenv("ACP_SSH_USER") or section.get("ssh_user", "acp")
     ssh_host = os.getenv("ACP_SSH_HOST") or section.get("ssh_host", "127.0.0.1")
+    ssh_container_port = _parse_int(
+        os.getenv("ACP_SSH_CONTAINER_PORT") or section.get("ssh_container_port"),
+        2222,
+    )
     ssh_port_min = _parse_int(os.getenv("ACP_SSH_PORT_MIN") or section.get("ssh_port_min"), 2222)
     ssh_port_max = _parse_int(os.getenv("ACP_SSH_PORT_MAX") or section.get("ssh_port_max"), 2299)
     agent_command = os.getenv("ACP_SANDBOX_AGENT_COMMAND") or section.get("agent_command", "")
@@ -137,10 +146,13 @@ def load_acp_sandbox_config() -> ACPSandboxConfig:
         enabled=bool(enabled),
         runtime=str(runtime or "docker"),
         base_image=str(base_image or "tldw/acp-agent:latest"),
-        network_policy=str(network_policy or "allow_all"),
+        network_policy=str(network_policy or "deny_all"),
+        run_as_root=bool(run_as_root),
+        read_only_root=bool(read_only_root),
         ssh_enabled=bool(ssh_enabled),
         ssh_user=str(ssh_user or "acp"),
         ssh_host=str(ssh_host or "127.0.0.1"),
+        ssh_container_port=int(ssh_container_port),
         ssh_port_min=int(ssh_port_min),
         ssh_port_max=int(ssh_port_max),
         agent_command=str(agent_command or ""),

@@ -88,7 +88,7 @@ The baseline suite tracks core visual states for regression:
 ## H10 Help and Docs Sync
 
 - User-facing Flashcards help source-of-truth:
-  `Docs/User_Guides/Flashcards_Study_Guide.md`
+  `Docs/User_Guides/WebUI_Extension/Flashcards_Study_Guide.md`
 - In-app links to guide sections are centralized in:
   `apps/packages/ui/src/components/Flashcards/constants/help-links.ts`
 - Link/anchor integrity tests:

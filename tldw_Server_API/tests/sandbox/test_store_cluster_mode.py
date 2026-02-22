@@ -14,22 +14,25 @@ def _has_psycopg() -> bool:
         return False
 
 
-def test_cluster_mode_falls_back_to_sqlite(monkeypatch):
+def test_cluster_mode_without_postgres_is_fail_fast(monkeypatch):
 
 
-     # Request cluster without DSN; expect get_store_mode to report sqlite fallback
+     # Request cluster without DSN; expect explicit startup/runtime failure
     from tldw_Server_API.app.core.config import clear_config_cache
 
     monkeypatch.setenv("SANDBOX_STORE_BACKEND", "cluster")
     monkeypatch.delenv("SANDBOX_STORE_PG_DSN", raising=False)
+    monkeypatch.delenv("SANDBOX_PG_DSN", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     clear_config_cache()
 
     from tldw_Server_API.app.core.Sandbox import store as sbx_store
     importlib.reload(sbx_store)
 
-    mode = sbx_store.get_store_mode()
-    assert mode == "sqlite"
+    with pytest.raises(RuntimeError):
+        _ = sbx_store.get_store_mode()
+    with pytest.raises(RuntimeError):
+        _ = sbx_store.get_store()
 
 
 @pytest.mark.integration

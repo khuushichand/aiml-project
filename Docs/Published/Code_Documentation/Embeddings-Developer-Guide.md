@@ -6,9 +6,9 @@
 3. [Working with the Codebase](#working-with-the-codebase)
 4. [Adding New Providers](#adding-new-providers)
 5. [Testing Guidelines](#testing-guidelines)
-6. [Debugging & Troubleshooting](#debugging--troubleshooting)
+6. [Debugging & Troubleshooting](#debugging-troubleshooting)
 7. [Performance Optimization](#performance-optimization)
-8. [Monitoring & Observability](#monitoring--observability)
+8. [Monitoring & Observability](#monitoring-observability)
 
 ## Introduction
 
@@ -880,4 +880,4 @@ async def handle_errors():
 
 ---
 
-For API usage documentation, see [Embeddings API Guide](./Embeddings-API-Guide.md)
+For API usage documentation, see [Embeddings API Guide](../API-related/Embeddings-API-Guide.md)

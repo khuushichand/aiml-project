@@ -246,7 +246,7 @@ curl -f https://tldw.yourdomain.com/health/ready
 If using SQLite for specific databases:
 
 ```bash
-# See Docs/User_Guides/Backups_Using_Litestream.md
+# See Docs/User_Guides/Server/Backups_Using_Litestream.md
 ```
 
 ---
@@ -301,8 +301,8 @@ docker compose logs -f
 ## Security Hardening Reference
 
 For comprehensive security guidance, see:
-- [Production Hardening Checklist](../User_Guides/Production_Hardening_Checklist.md)
-- [Multi-User Deployment Guide](../User_Guides/Multi-User_Deployment_Guide.md)
+- [Production Hardening Checklist](../User_Guides/Server/Production_Hardening_Checklist.md)
+- [Multi-User Deployment Guide](../User_Guides/Server/Multi-User_Deployment_Guide.md)
 - [AuthNZ Developer Guide](../Code_Documentation/AuthNZ-Developer-Guide/)
 
 ---

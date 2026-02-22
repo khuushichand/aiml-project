@@ -53,6 +53,7 @@ const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
 const WORKSPACE_NOTE_SEARCH_LIMIT = 75
 const WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES = 5 * 1024 * 1024
 const WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS = 120
+const ACCOUNT_STORAGE_USAGE_REFRESH_DELAY_MS = 1400
 const WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY =
   "tldw:workspace-playground:onboarding-dismissed:v1"
 const WORKSPACE_REFRESH_LOOP_TRACE_SESSION_KEY =
@@ -109,6 +110,15 @@ type WorkspaceNotesSearchResponse =
       results?: WorkspaceNoteSearchItem[]
       items?: WorkspaceNoteSearchItem[]
     }
+
+type WorkspaceStorageUsageState = {
+  usedBytes: number
+  quotaBytes: number
+  originUsedBytes: number | null
+  originQuotaBytes: number | null
+  accountUsedBytes: number | null
+  accountQuotaBytes: number | null
+}
 
 const parseNoteKeyword = (
   keyword: WorkspaceNoteKeywordLike | null | undefined
@@ -311,7 +321,35 @@ const parsePersistedWorkspaceState = (
       return null
     }
 
-    return candidateState as Record<string, unknown>
+    const baseState = candidateState as Record<string, unknown>
+    const workspaceId =
+      typeof baseState.workspaceId === "string" ? baseState.workspaceId : null
+    const snapshotsCandidate = baseState.workspaceSnapshots
+    const snapshots =
+      snapshotsCandidate && typeof snapshotsCandidate === "object"
+        ? (snapshotsCandidate as Record<string, unknown>)
+        : null
+    const activeSnapshot =
+      workspaceId && snapshots && snapshots[workspaceId] && typeof snapshots[workspaceId] === "object"
+        ? (snapshots[workspaceId] as Record<string, unknown>)
+        : null
+
+    if (!activeSnapshot) {
+      return baseState
+    }
+
+    return {
+      ...baseState,
+      workspaceName:
+        baseState.workspaceName ?? activeSnapshot.workspaceName ?? null,
+      sources: baseState.sources ?? activeSnapshot.sources ?? null,
+      selectedSourceIds:
+        baseState.selectedSourceIds ?? activeSnapshot.selectedSourceIds ?? null,
+      generatedArtifacts:
+        baseState.generatedArtifacts ?? activeSnapshot.generatedArtifacts ?? null,
+      currentNote: baseState.currentNote ?? activeSnapshot.currentNote ?? null,
+      audioSettings: baseState.audioSettings ?? activeSnapshot.audioSettings ?? null
+    }
   } catch {
     return null
   }
@@ -528,9 +566,14 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const [crossTabChangedFields, setCrossTabChangedFields] = React.useState<
     string[]
   >([])
-  const [workspaceStorageUsage, setWorkspaceStorageUsage] = React.useState({
+  const [workspaceStorageUsage, setWorkspaceStorageUsage] =
+    React.useState<WorkspaceStorageUsageState>({
     usedBytes: 0,
-    quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES
+    quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES,
+    originUsedBytes: null,
+    originQuotaBytes: null,
+    accountUsedBytes: null,
+    accountQuotaBytes: null
   })
   const lastCrossTabSyncWarningRef = React.useRef(0)
   const [showOnboardingOverlay, setShowOnboardingOverlay] =
@@ -573,6 +616,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
   const leftPaneOpen = !leftPaneCollapsed
   const rightPaneOpen = !rightPaneCollapsed
+  const desktopChatContentWidthMode: "comfortable" | "expanded" | "full" =
+    leftPaneOpen && rightPaneOpen
+      ? "comfortable"
+      : leftPaneOpen || rightPaneOpen
+        ? "expanded"
+        : "full"
 
   const workspaceChatMessages = React.useMemo(
     () => (workspaceId ? workspaceChatSessions[workspaceId]?.messages || [] : []),
@@ -656,19 +705,82 @@ const WorkspacePlaygroundBody: React.FC = () => {
     })
   }, [activeWorkspaceOperations, statusGuardrailsEnabled, workspaceId])
 
-  const refreshWorkspaceStorageUsage = React.useCallback(() => {
+  const refreshWorkspaceStorageUsage = React.useCallback(async () => {
     if (typeof window === "undefined") return
     try {
       const serializedWorkspace = window.localStorage.getItem(WORKSPACE_STORAGE_KEY)
       const usedBytes = serializedWorkspace
         ? estimateUtf8ByteLength(serializedWorkspace)
         : 0
-      setWorkspaceStorageUsage({
+      let originUsedBytes: number | null = null
+      let originQuotaBytes: number | null = null
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.storage &&
+        typeof navigator.storage.estimate === "function"
+      ) {
+        try {
+          const estimate = await navigator.storage.estimate()
+          const usage = estimate?.usage
+          const quota = estimate?.quota
+          if (typeof usage === "number" && Number.isFinite(usage) && usage >= 0) {
+            originUsedBytes = usage
+          }
+          if (typeof quota === "number" && Number.isFinite(quota) && quota > 0) {
+            originQuotaBytes = quota
+          }
+        } catch {
+          // Ignore storage estimate failures.
+        }
+      }
+      setWorkspaceStorageUsage((previousState) => ({
+        ...previousState,
         usedBytes,
-        quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES
-      })
+        quotaBytes: WORKSPACE_STORAGE_ESTIMATED_QUOTA_BYTES,
+        originUsedBytes,
+        originQuotaBytes
+      }))
     } catch {
       // Ignore storage read errors.
+    }
+  }, [])
+
+  const refreshAccountStorageUsage = React.useCallback(async () => {
+    if (typeof tldwClient.getCurrentUserStorageQuota !== "function") return
+    try {
+      const response = await tldwClient.getCurrentUserStorageQuota()
+      const usedMb = Number(response?.storage_used_mb)
+      const quotaMb = Number(response?.storage_quota_mb)
+      const accountUsedBytes =
+        Number.isFinite(usedMb) && usedMb >= 0 ? usedMb * 1024 * 1024 : null
+      const accountQuotaBytes =
+        Number.isFinite(quotaMb) && quotaMb > 0 ? quotaMb * 1024 * 1024 : null
+      setWorkspaceStorageUsage((previousState) => ({
+        ...previousState,
+        accountUsedBytes,
+        accountQuotaBytes
+      }))
+    } catch {
+      if (typeof tldwClient.getCurrentUserProfile !== "function") return
+      try {
+        const profile = await tldwClient.getCurrentUserProfile({
+          sections: "quotas"
+        })
+        const quotas = (profile as { quotas?: Record<string, unknown> } | null)?.quotas
+        const usedMb = Number(quotas?.storage_used_mb)
+        const quotaMb = Number(quotas?.storage_quota_mb)
+        const accountUsedBytes =
+          Number.isFinite(usedMb) && usedMb >= 0 ? usedMb * 1024 * 1024 : null
+        const accountQuotaBytes =
+          Number.isFinite(quotaMb) && quotaMb > 0 ? quotaMb * 1024 * 1024 : null
+        setWorkspaceStorageUsage((previousState) => ({
+          ...previousState,
+          accountUsedBytes,
+          accountQuotaBytes
+        }))
+      } catch {
+        // Ignore account storage fetch failures and keep existing values.
+      }
     }
   }, [])
 
@@ -1001,13 +1113,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }, [isStoreHydrated, statusGuardrailsEnabled, workspaceId])
 
   useEffect(() => {
-    refreshWorkspaceStorageUsage()
+    void refreshWorkspaceStorageUsage()
   }, [refreshWorkspaceStorageUsage])
+
+  useEffect(() => {
+    void refreshAccountStorageUsage()
+  }, [refreshAccountStorageUsage])
 
   useEffect(() => {
     if (typeof window === "undefined") return
     const timer = window.setTimeout(() => {
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
     }, WORKSPACE_STORAGE_USAGE_REFRESH_DELAY_MS)
     return () => {
       window.clearTimeout(timer)
@@ -1021,6 +1137,21 @@ const WorkspacePlaygroundBody: React.FC = () => {
     selectedSourceIds.length,
     sources.length,
     workspaceChatMessages.length,
+    workspaceId
+  ])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const timer = window.setTimeout(() => {
+      void refreshAccountStorageUsage()
+    }, ACCOUNT_STORAGE_USAGE_REFRESH_DELAY_MS)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [
+    generatedArtifacts.length,
+    refreshAccountStorageUsage,
+    sources.length,
     workspaceId
   ])
 
@@ -1217,7 +1348,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       const customEvent = event as CustomEvent<WorkspaceStorageQuotaEventDetail>
       if (customEvent.detail?.key !== WORKSPACE_STORAGE_KEY) return
       setShowStorageQuotaWarning(true)
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
       void trackWorkspacePlaygroundTelemetry({
         type: "quota_warning_seen",
         workspace_id: workspaceId || null,
@@ -1272,7 +1403,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       if (event.key !== WORKSPACE_STORAGE_KEY) return
       if (event.newValue === event.oldValue) return
       if (event.storageArea && event.storageArea !== window.localStorage) return
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
       surfaceCrossTabSyncWarning(event.oldValue, event.newValue)
     }
 
@@ -1296,7 +1427,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
     const handleBroadcastUpdate = (event: MessageEvent<unknown>) => {
       if (!isWorkspaceBroadcastUpdateMessage(event.data)) return
       if (event.data.key !== WORKSPACE_STORAGE_KEY) return
-      refreshWorkspaceStorageUsage()
+      void refreshWorkspaceStorageUsage()
       surfaceCrossTabSyncWarning()
     }
 
@@ -1503,6 +1634,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         <ChatPane
           provenanceEnabled={provenanceEnabled}
           statusGuardrailsEnabled={statusGuardrailsEnabled}
+          contentWidthMode="full"
         />
       )
     },
@@ -1541,7 +1673,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--surface-2),var(--bg)_45%)] text-text">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--surface-2),var(--bg)_45%)] text-text">
       {messageContextHolder}
       <a
         href="#workspace-main-content"
@@ -1779,6 +1911,10 @@ const WorkspacePlaygroundBody: React.FC = () => {
             hideToggles
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            storageOriginUsedBytes={workspaceStorageUsage.originUsedBytes ?? undefined}
+            storageOriginQuotaBytes={workspaceStorageUsage.originQuotaBytes ?? undefined}
+            storageAccountUsedBytes={workspaceStorageUsage.accountUsedBytes ?? undefined}
+            storageAccountQuotaBytes={workspaceStorageUsage.accountQuotaBytes ?? undefined}
             provenanceEnabled={provenanceEnabled}
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
@@ -1834,6 +1970,10 @@ const WorkspacePlaygroundBody: React.FC = () => {
             onToggleRightPane={handleToggleRightPane}
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
+            storageOriginUsedBytes={workspaceStorageUsage.originUsedBytes ?? undefined}
+            storageOriginQuotaBytes={workspaceStorageUsage.originQuotaBytes ?? undefined}
+            storageAccountUsedBytes={workspaceStorageUsage.accountUsedBytes ?? undefined}
+            storageAccountQuotaBytes={workspaceStorageUsage.accountQuotaBytes ?? undefined}
             provenanceEnabled={provenanceEnabled}
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
@@ -1910,6 +2050,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
               <ChatPane
                 provenanceEnabled={provenanceEnabled}
                 statusGuardrailsEnabled={statusGuardrailsEnabled}
+                contentWidthMode={desktopChatContentWidthMode}
               />
             </main>
 

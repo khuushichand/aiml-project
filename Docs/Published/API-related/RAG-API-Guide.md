@@ -4,13 +4,13 @@
 1. [Quick Start](#quick-start)
 2. [Authentication](#authentication)
 3. [Endpoint Reference](#endpoint-reference)
-4. [Request & Response Schemas](#request--response-schemas)
-5. [Search Types & Strategies](#search-types--strategies)
-6. [Agent Modes & Tools](#agent-modes--tools)
+4. [Request & Response Schemas](#request-response-schemas)
+5. [Search Types & Strategies](#search-types-strategies)
+6. [Agent Modes & Tools](#capabilities-features)
 7. [Code Examples](#code-examples)
 8. [Best Practices](#best-practices)
 9. [Error Handling](#error-handling)
-10. [Rate Limiting & Performance](#rate-limiting--performance)
+10. [Rate Limiting & Performance](#rate-limiting-performance)
 
 ## Quick Start
 
@@ -1289,4 +1289,4 @@ class LearningAssistant {
 
 The RAG API provides powerful search and question-answering capabilities with a clean, intuitive interface. Whether you need simple search, conversational Q&A, or advanced research capabilities, the API offers the flexibility and performance for production applications.
 
-For implementation details and extending the RAG module, see the [RAG Developer Guide](../Development/RAG-Developer-Guide.md).
+For implementation details and extending the RAG module, see the [RAG Developer Guide](../Code_Documentation/RAG-Developer-Guide.md).

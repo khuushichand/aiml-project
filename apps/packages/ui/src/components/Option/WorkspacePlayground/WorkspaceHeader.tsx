@@ -79,8 +79,16 @@ interface WorkspaceHeaderProps {
   hideToggles?: boolean
   /** Approximate persisted workspace payload bytes in local storage */
   storageUsedBytes?: number
-  /** Estimated available local storage budget for workspace data */
+  /** Estimated available local storage budget for workspace payload data */
   storageQuotaBytes?: number
+  /** Aggregate storage used by this browser profile/origin (if available). */
+  storageOriginUsedBytes?: number
+  /** Aggregate storage quota for this browser profile/origin (if available). */
+  storageOriginQuotaBytes?: number
+  /** Server-side storage used by the current user account (if available). */
+  storageAccountUsedBytes?: number
+  /** Server-side storage quota for the current user account (if available). */
+  storageAccountQuotaBytes?: number
   /** Rollout gate for provenance surfaces (retrieval transparency, telemetry tools). */
   provenanceEnabled?: boolean
   /** Rollout gate for status/guardrails surfaces (connectivity/quota/conflict state). */
@@ -122,6 +130,10 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   hideToggles = false,
   storageUsedBytes,
   storageQuotaBytes,
+  storageOriginUsedBytes,
+  storageOriginQuotaBytes,
+  storageAccountUsedBytes,
+  storageAccountQuotaBytes,
   provenanceEnabled = true,
   statusGuardrailsEnabled = true
 }) => {
@@ -172,8 +184,44 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       Number.isInteger(roundedQuota) || Math.abs(roundedQuota - Math.round(roundedQuota)) < 0.05
         ? String(Math.round(roundedQuota))
         : roundedQuota.toFixed(1)
+    const workspaceRatio = Math.max(0, Math.min(1, storageUsedBytes / storageQuotaBytes))
 
-    const ratio = Math.max(0, Math.min(1, storageUsedBytes / storageQuotaBytes))
+    const hasOriginUsage =
+      typeof storageOriginUsedBytes === "number" &&
+      Number.isFinite(storageOriginUsedBytes) &&
+      storageOriginUsedBytes >= 0 &&
+      typeof storageOriginQuotaBytes === "number" &&
+      Number.isFinite(storageOriginQuotaBytes) &&
+      storageOriginQuotaBytes > 0
+
+    const hasAccountUsage =
+      typeof storageAccountUsedBytes === "number" &&
+      Number.isFinite(storageAccountUsedBytes) &&
+      storageAccountUsedBytes >= 0 &&
+      typeof storageAccountQuotaBytes === "number" &&
+      Number.isFinite(storageAccountQuotaBytes) &&
+      storageAccountQuotaBytes > 0
+
+    let accountUsageShortLabel: string | null = null
+    let accountRatio: number | null = null
+    if (hasAccountUsage) {
+      const accountUsedMb = storageAccountUsedBytes / (1024 * 1024)
+      const accountQuotaMb = storageAccountQuotaBytes / (1024 * 1024)
+      const roundedAccountUsed = Math.round(accountUsedMb * 10) / 10
+      const roundedAccountQuota = Math.round(accountQuotaMb * 10) / 10
+      const accountQuotaLabel =
+        Number.isInteger(roundedAccountQuota) ||
+        Math.abs(roundedAccountQuota - Math.round(roundedAccountQuota)) < 0.05
+          ? String(Math.round(roundedAccountQuota))
+          : roundedAccountQuota.toFixed(1)
+      accountUsageShortLabel = `${roundedAccountUsed.toFixed(1)}/${accountQuotaLabel} MB`
+      accountRatio = Math.max(
+        0,
+        Math.min(1, storageAccountUsedBytes / storageAccountQuotaBytes)
+      )
+    }
+
+    const ratio = accountRatio ?? workspaceRatio
     const toneClass =
       ratio >= 0.95
         ? "border-error/40 bg-error/10 text-error"
@@ -181,20 +229,78 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           ? "border-warning/40 bg-warning/10 text-warning"
           : "border-border bg-surface2 text-text-muted"
 
+    let profileUsageShortLabel: string | null = null
+    if (hasOriginUsage) {
+      const originUsedMb = storageOriginUsedBytes / (1024 * 1024)
+      const originQuotaMb = storageOriginQuotaBytes / (1024 * 1024)
+      const roundedOriginUsed = Math.round(originUsedMb * 10) / 10
+      const roundedOriginQuota = Math.round(originQuotaMb * 10) / 10
+      const originQuotaLabel =
+        Number.isInteger(roundedOriginQuota) ||
+        Math.abs(roundedOriginQuota - Math.round(roundedOriginQuota)) < 0.05
+          ? String(Math.round(roundedOriginQuota))
+          : roundedOriginQuota.toFixed(1)
+      profileUsageShortLabel = `${roundedOriginUsed.toFixed(1)}/${originQuotaLabel} MB`
+    }
+
+    const workspaceShortLabel = `${roundedUsed.toFixed(1)}/${quotaLabel} MB`
+    const shortLabel = accountUsageShortLabel
+      ? `WS ${workspaceShortLabel} | Account ${accountUsageShortLabel}`
+      : profileUsageShortLabel
+        ? `WS ${workspaceShortLabel} | Profile ${profileUsageShortLabel}`
+        : `WS ${workspaceShortLabel}`
+
+    const longLabel = accountUsageShortLabel
+      ? profileUsageShortLabel
+        ? t(
+            "playground:workspace.storageUsageLabelWithAccountAndProfile",
+            "Workspace payload: {{workspace}}. Account storage: {{account}}. Browser profile storage: {{profile}}.",
+            {
+              workspace: workspaceShortLabel,
+              account: accountUsageShortLabel,
+              profile: profileUsageShortLabel
+            }
+          )
+        : t(
+            "playground:workspace.storageUsageLabelWithAccount",
+            "Workspace payload: {{workspace}}. Account storage: {{account}}.",
+            {
+              workspace: workspaceShortLabel,
+              account: accountUsageShortLabel
+            }
+          )
+      : profileUsageShortLabel
+        ? t(
+            "playground:workspace.storageUsageLabelWithProfile",
+            "Workspace payload: {{workspace}}. Browser profile storage: {{profile}}.",
+            {
+              workspace: workspaceShortLabel,
+              profile: profileUsageShortLabel
+            }
+          )
+        : t(
+            "playground:workspace.storageUsageLabelWorkspaceOnly",
+            "Workspace payload storage: {{workspace}}",
+            {
+              workspace: workspaceShortLabel
+            }
+          )
+
     return {
       ratio,
       toneClass,
-      shortLabel: `${roundedUsed.toFixed(1)}/${quotaLabel} MB`,
-      longLabel: t(
-        "playground:workspace.storageUsageLabel",
-        "Workspace storage: {{used}} of {{quota}} MB",
-        {
-          used: roundedUsed.toFixed(1),
-          quota: quotaLabel
-        }
-      )
+      shortLabel,
+      longLabel
     }
-  }, [storageQuotaBytes, storageUsedBytes, t])
+  }, [
+    storageAccountQuotaBytes,
+    storageAccountUsedBytes,
+    storageOriginQuotaBytes,
+    storageOriginUsedBytes,
+    storageQuotaBytes,
+    storageUsedBytes,
+    t
+  ])
   const connectionState = useConnectionStore((s) => s.state)
   const connectionIndicator = React.useMemo(() => {
     const uxState = deriveConnectionUxState(connectionState)

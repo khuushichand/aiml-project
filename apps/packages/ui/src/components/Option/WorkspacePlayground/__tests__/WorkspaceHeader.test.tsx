@@ -764,8 +764,44 @@ describe("WorkspaceHeader workspace browser modal", () => {
     )
 
     const indicator = screen.getByTestId("workspace-storage-usage-indicator")
-    expect(indicator).toHaveTextContent("Storage 2.1/5 MB")
+    expect(indicator).toHaveTextContent("Storage WS 2.1/5 MB")
     expect(indicator.className).toContain("text-text-muted")
+  })
+
+  it("includes browser profile storage usage when provided", () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={2.1 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+        storageOriginUsedBytes={120 * 1024 * 1024}
+        storageOriginQuotaBytes={1000 * 1024 * 1024}
+      />
+    )
+
+    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
+    expect(indicator).toHaveTextContent("Storage WS 2.1/5 MB | Profile 120.0/1000 MB")
+  })
+
+  it("includes account storage usage when provided", () => {
+    render(
+      <WorkspaceHeader
+        leftPaneOpen={true}
+        rightPaneOpen={true}
+        onToggleLeftPane={vi.fn()}
+        onToggleRightPane={vi.fn()}
+        storageUsedBytes={2.1 * 1024 * 1024}
+        storageQuotaBytes={5 * 1024 * 1024}
+        storageAccountUsedBytes={300 * 1024 * 1024}
+        storageAccountQuotaBytes={1000 * 1024 * 1024}
+      />
+    )
+
+    const indicator = screen.getByTestId("workspace-storage-usage-indicator")
+    expect(indicator).toHaveTextContent("Storage WS 2.1/5 MB | Account 300.0/1000 MB")
   })
 
   it("shows connection status indicator tone for healthy, degraded, and disconnected states", () => {

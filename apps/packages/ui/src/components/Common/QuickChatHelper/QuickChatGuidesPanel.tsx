@@ -104,7 +104,10 @@ export const QuickChatGuidesPanel: React.FC<Props> = ({
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <div className="rounded-md border border-border bg-surface p-3">
+      <div
+        className="rounded-md border border-border bg-surface p-3"
+        data-testid="quick-chat-guides-tutorials-section"
+      >
         <div className="mb-2 flex items-center gap-2 text-sm font-medium text-text">
           <GraduationCap className="h-4 w-4 text-primary" />
           <span>
@@ -121,7 +124,10 @@ export const QuickChatGuidesPanel: React.FC<Props> = ({
           )}
         </p>
         {pageTutorials.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border bg-surface2 p-3 text-xs text-text-muted">
+          <div
+            className="rounded-md border border-dashed border-border bg-surface2 p-3 text-xs text-text-muted"
+            data-testid="quick-chat-guides-tutorials-empty"
+          >
             {t(
               "option:quickChatHelper.guides.tutorialsEmpty",
               "No tutorials are available for this page yet."
@@ -133,6 +139,9 @@ export const QuickChatGuidesPanel: React.FC<Props> = ({
               return (
                 <div
                   key={tutorial.id}
+                  data-testid={`quick-chat-guides-tutorial-${tutorial.id}`}
+                  data-locked={isLocked ? "true" : "false"}
+                  data-completed={isCompleted ? "true" : "false"}
                   className={`flex items-start gap-2 rounded-md border border-border px-2.5 py-2 ${
                     isLocked ? "bg-surface2/40 opacity-80" : "bg-surface2/70"
                   }`}
@@ -169,6 +178,7 @@ export const QuickChatGuidesPanel: React.FC<Props> = ({
                     size="small"
                     type={isCompleted ? "default" : "primary"}
                     ghost={isCompleted}
+                    data-testid={`quick-chat-guides-tutorial-action-${tutorial.id}`}
                     icon={
                       isLocked ? (
                         <Lock className="h-3.5 w-3.5" />
@@ -194,7 +204,10 @@ export const QuickChatGuidesPanel: React.FC<Props> = ({
         )}
       </div>
 
-      <div className="rounded-md border border-border bg-surface p-3">
+      <div
+        className="rounded-md border border-border bg-surface p-3"
+        data-testid="quick-chat-guides-workflow-section"
+      >
         <div className="mb-2 flex items-center gap-2 text-sm font-medium text-text">
           <Compass className="h-4 w-4 text-primary" />
           <span>

@@ -53,7 +53,7 @@ Legend
 | Full-text search (FTS5) | Working | Fast local search | [docs](../API-related/RAG-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
 | Embeddings + ChromaDB | Working | OpenAI-compatible embeddings | [docs](../API-related/Embeddings_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py) |
 | Hybrid BM25 + vector + rerank | Working | Contextual retrieval | [docs](../API-related/RAG-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
-| Feedback (explicit + implicit) | Working | Explicit feedback + implicit signals; implicit can be disabled | [docs](../API-related/Feedback_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/feedback.py) |
+| Feedback (explicit + implicit) | Working | Explicit feedback + implicit signals; implicit can be disabled | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/feedback.py) |
 | Vector Stores (OpenAI-compatible) | Working | Chroma/PG adapters | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Vector_Stores_Admin_and_Query.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/vector_stores_openai.py) |
 | Media embeddings ingestion | Working | Create vectors from media | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/media_embeddings.py) |
 | pgvector backend | Experimental | Optional backend | [code](https://github.com/rmusser01/tldw_server/tree/main/tldw_Server_API/app/core/RAG/rag_service/vector_stores/) |
@@ -75,18 +75,18 @@ Legend
 | Capability | Status | Notes | Links |
 |---|---|---|---|
 | Notes + tagging | Working | Notebook-style notes | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/notes.py) |
-| Notes graph API | Experimental | Graph queries are stubbed; manual links supported | [docs](../API-related/Notes_Graph_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/notes_graph.py) |
-| Writing Playground | WIP | Sessions, templates, themes, tokenization, wordclouds | [docs](../API-related/Writing_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/writing.py) |
+| Notes graph API | Experimental | Graph queries are stubbed; manual links supported | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/notes_graph.py) |
+| Writing Playground | WIP | Sessions, templates, themes, tokenization, wordclouds | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/writing.py) |
 | Prompt library | Working | Import/export, versions, templates, bulk ops, sorting | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompts.py) |
 | Prompt Studio: projects/prompts/tests | Working | Test cases + runs | [docs](../API-related/Prompt_Studio_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompt_studio_projects.py) |
 | Prompt Studio: optimization + WS | Working | Live updates | [docs](../API-related/Prompt_Studio_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompt_studio_optimization.py) |
 | Character cards & sessions | Working | SillyTavern-compatible | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py) |
 | Chatbooks import/export | Working | Backup/export | [docs](../API-related/Chatbook_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/chatbooks.py) |
 | Flashcards | Working | Decks/cards, APKG export | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/flashcards.py) |
-| Quizzes | WIP | Quizzes, questions, attempts, generation | [docs](../API-related/Quizzes_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/quizzes.py) |
+| Quizzes | WIP | Quizzes, questions, attempts, generation | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/quizzes.py) |
 | Reading & highlights | Working | Reading items mgmt | [docs](../API-related/Reading_List_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/reading.py) |
-| Unified Items API | Working | Collections + Media DB view | [docs](../API-related/Items_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/items.py) |
-| Kanban boards | Working | Boards, lists, cards, labels, checklists | [docs](../User_Guides/Kanban_Board_Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/kanban_boards.py) |
+| Unified Items API | Working | Collections + Media DB view | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/items.py) |
+| Kanban boards | Working | Boards, lists, cards, labels, checklists | [docs](../User_Guides/WebUI_Extension/Kanban_Board_Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/kanban_boards.py) |
 | Collections feeds (RSS/Atom) | Working | Ingest feeds into collections | [docs](../API-related/Collections_Feeds_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/collections_feeds.py) |
 
 ## Evaluations
@@ -135,7 +135,7 @@ Legend
 | Egress + SSRF guards | Working | Centralized guards | [docs](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Security/README.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/Security/egress.py) |
 | Audit logging & alerts | Working | Unified audit + alerts | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Audit_Configuration.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin/__init__.py) |
 | Admin & Ops | Working | Users/orgs/teams, roles/perms, quotas, usage | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Admin_Orgs_Teams.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin/__init__.py) |
-| Billing & subscriptions | Working | Plans, invoices, usage | [docs](../API-related/Orgs_Billing_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/billing.py) |
+| Billing & subscriptions | Working | Plans, invoices, usage | [docs](../API-related/Admin_Orgs_Teams.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/billing.py) |
 | Monitoring & metrics | Working | Prometheus text + JSON | [docs](../Monitoring/index.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/metrics.py) |
 
 ## Sandbox & Tooling
@@ -149,14 +149,14 @@ Legend
 | Capability | Status | Notes | Links |
 |---|---|---|---|
 | SQLite defaults | Working | Local dev/small deployments | [code](https://github.com/rmusser01/tldw_server/tree/main/tldw_Server_API/app/core/DB_Management/) |
-| PostgreSQL (AuthNZ, content) | Working | Postgres content mode | [docs](../Deployment/Postgres_Content_Mode.md) |
+| PostgreSQL (AuthNZ, content) | Working | Postgres content mode | [docs](../Deployment/Long_Term_Admin_Guide.md) |
 | Outputs: templates | Working | Markdown/HTML/MP3 via TTS | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/outputs_templates.py) |
 | Outputs: artifacts | Working | Persist/list/soft-delete/purge | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/outputs.py) |
-| File artifacts | WIP | Structured files + export lifecycle | [docs](../API-related/File_Artifacts_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/files.py) |
-| Data tables | WIP | LLM-generated tables + async exports | [docs](../API-related/Data_Tables_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/data_tables.py) |
+| File artifacts | WIP | Structured files + export lifecycle | [docs](../API-related/Storage_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/files.py) |
+| Data tables | WIP | LLM-generated tables + async exports | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/data_tables.py) |
 | Slides / presentations | WIP | Generate, version, export decks | [docs](../API/Slides.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/slides.py) |
 | Storage API | WIP | Folders, trash, quotas, downloads | [docs](../API-related/Storage_API_Documentation.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/storage.py) |
-| Sync API | WIP | Change-log sync for client databases | [docs](../API-related/Sync_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/sync.py) |
+| Sync API | WIP | Change-log sync for client databases | [docs](../API-related/API_Notes.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/sync.py) |
 | Watchlists: sources/groups/tags | Working | CRUD + bulk import | [docs](../API-related/Watchlists_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
 | Watchlists: jobs & runs | Working | Schedule, run, run details | [docs](../API-related/Watchlists_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
 | Watchlists: templates & OPML | Working | Template store; OPML import/export | [docs](../API-related/Watchlists_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/watchlists.py) |

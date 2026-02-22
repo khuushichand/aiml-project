@@ -208,11 +208,14 @@ pip install -e ".[acp]"
 
 ### Build the ACP Image
 
-The Dockerfile expects `tldw-agent` to be in the build context:
+With sibling repos (`../tldw-agent` next to `tldw_server2`), build from the parent directory:
 
 ```bash
-# From repo root (or a parent that includes tldw-agent/)
-docker build -f Dockerfiles/ACP/Dockerfile -t tldw/acp-agent:latest .
+# From tldw_server2/
+docker build -f Dockerfiles/ACP/Dockerfile \
+  --build-arg TLDW_SERVER_DIR=tldw_server2 \
+  --build-arg TLDW_AGENT_DIR=tldw-agent \
+  -t tldw/acp-agent:latest ..
 ```
 
 ### Config
@@ -228,6 +231,9 @@ network_policy = allow_all
 agent_command = claude
 agent_args = ["code"]
 ```
+
+`agent_command` must be the downstream coding agent executable (`claude`, `codex`, `opencode`, etc).  
+Do not set it to `tldw-agent-acp` (that recursively launches the runner and fails with `resource temporarily unavailable`).
 
 ### Required Env
 

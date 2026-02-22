@@ -105,13 +105,11 @@ nav:
       - Content & Storage:
           - Chatbook API: API-related/Chatbook_API_Documentation.md
           - Chatbook Features API: API-related/Chatbook_Features_API_Documentation.md
-          - Notes Graph API: API-related/Notes_Graph_API.md
-          - Items API: API-related/Items_API.md
+          - API Notes: API-related/API_Notes.md
           - Reading List API: API-related/Reading_List_API.md
+          - Watchlists API: API-related/Watchlists_API.md
           - Collections Feeds API: API-related/Collections_Feeds_API.md
           - Storage API: API-related/Storage_API_Documentation.md
-          - File Artifacts API: API-related/File_Artifacts_API.md
-          - Sync API: API-related/Sync_API.md
       - Processing:
           - Chunking Templates API: API-related/Chunking_Templates_API_Documentation.md
           - OCR API: API-related/OCR_API_Documentation.md
@@ -137,10 +135,6 @@ nav:
           - Sandbox API: API-related/Sandbox_API.md
           - Tools API: API-related/Tools_API_Documentation.md
           - Vector Stores API: API-related/Vector_Stores_Admin_and_Query.md
-          - Quizzes API: API-related/Quizzes_API.md
-          - Writing API: API-related/Writing_API.md
-          - Data Tables API: API-related/Data_Tables_API.md
-          - Feedback API: API-related/Feedback_API.md
           - Slides API: API/Slides.md
           - Voice Assistant API: API/Voice_Assistant.md
   - Code:
@@ -187,6 +181,7 @@ nav:
           - Jobs Admin Examples: Code_Documentation/Jobs_Admin_Examples.md
       - AI & Models:
           - Local LLM: Code_Documentation/Local_LLM.md
+          - Voice Assistant Module: Code_Documentation/VoiceAssistant_Module.md
           - VLM Backends: Code_Documentation/VLM_Backends.md
           - Moderation Guardrails: Code_Documentation/Moderation-Guardrails.md
       - Auth & Security:
@@ -198,6 +193,7 @@ nav:
           - Tutorial System Developer Guide: Code_Documentation/Tutorial_System_Developer_Guide.md
       - Testing & Misc:
           - STT Testing Documentation: Code_Documentation/STT_TESTING_DOCUMENTATION.md
+          - Doc Researcher Features: Code_Documentation/Doc_Researcher_Features.md
           - Email Archive Formats (WIP): Code_Documentation/Email_Archive_Formats_WIP.md
           - Documentation Site Guide: Code_Documentation/Docs_Site_Guide.md
       - Code Guides:
@@ -207,6 +203,7 @@ nav:
           - Chatbooks Code Guide: Code_Documentation/Guides/Chatbooks_Code_Guide.md
           - Chunking Code Guide: Code_Documentation/Guides/Chunking_Code_Guide.md
           - Evaluations Code Guide: Code_Documentation/Guides/Evaluations_Code_Guide.md
+          - Generated Files Storage Code Guide: Code_Documentation/Guides/Generated_Files_Storage_Code_Guide.md
       - DB Backends - Placeholders & FTS: Development/DB-Backends-Query-FTS-Guidelines.md
   - Deployment:
       - Overview: Deployment/index.md
@@ -216,8 +213,10 @@ nav:
       - Embeddings Deployment Guide: Deployment/Embeddings-Deployment-Guide.md
       - Reverse Proxy Examples: Deployment/Reverse_Proxy_Examples.md
       - Sidecar Workers: Deployment/Sidecar_Workers.md
+      - Sidecar Workers Template: Deployment/Sidecar_Workers.template.md
       - OpenAI Compat Strict Mode: Deployment/OpenAI_Compat_Strict_Mode.md
       - Operations:
+          - Firecracker Host Checklist: Deployment/Operations/Firecracker_Host_Checklist.md
           - JWT Rotation Runbook: Deployment/Operations/JWT_Rotation_Runbook.md
           - MCP Rate Limits Tuning: Deployment/Operations/MCP_Rate_Limits_Tuning.md
       - FTS:
@@ -232,52 +231,70 @@ nav:
       - Exemplars: Monitoring/Exemplars/README.md
   - User Guides:
       - Overview: User_Guides/index.md
-      - Getting Started:
-          - Installation & Setup: User_Guides/Installation-Setup-Guide.md
-          - Authentication Setup: User_Guides/Authentication_Setup.md
-          - User Guide: User_Guides/User_Guide.md
-          - CLI Reference: User_Guides/CLI_Reference.md
-      - Content & Media:
-          - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
-          - Web Scraping and Ingestion: User_Guides/Web_Scraping_Ingestion_Guide.md
-          - EPUB Reader Guide: User_Guides/EPUB_Reader_Guide.md
-          - Chatbook User Guide: User_Guides/Chatbook_User_Guide.md
-          - Chatbook Tools Getting Started: User_Guides/Chatbook_Tools_Getting_Started.md
-          - Chunking Templates User Guide: User_Guides/Chunking_Templates_User_Guide.md
-          - Templated Chunking HowTo: User_Guides/Templated_Chunking_Incoming_Documents_HowTo.md
-      - RAG & Evaluations:
-          - RAG Deployment Guide: User_Guides/RAG_Deployment_Guide.md
-          - RAG Production Configuration: User_Guides/RAG_Production_Configuration_Guide.md
-          - RAG Evals Playbook: User_Guides/RAG_Evals_Playbook.md
-          - Evaluations User Guide: User_Guides/Evaluations_User_Guide.md
-          - Evaluations Deployment Guide: User_Guides/Evaluations_Deployment_Guide.md
-          - Evaluations End User Guide: User_Guides/Evaluations_End_User_Guide.md
-          - Evaluations Production Deployment: User_Guides/Evaluations_Production_Deployment_Guide.md
-      - Chat & AI:
-          - Chat Pages: User_Guides/Chat_Pages.md
-          - Quick Chat Docs Assistant: User_Guides/Quick_Chat_Docs_Assistant_Guide.md
-          - Setting up a local LLM: User_Guides/Setting_up_a_local_LLM.md
-          - Prompt Engineering Notes: User_Guides/Prompt_Engineering_Notes.md
-          - Context MCP Search: User_Guides/context_mcp_search.md
-      - Audio & TTS:
-          - Voice Agent Setup Guide: User_Guides/Voice_Agent_Setup_Guide.md
-          - TTS Getting Started: User_Guides/TTS_Getting_Started.md
-      - Organizations & Admin:
-          - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md
-          - Organization Administration: User_Guides/Organization_Administration.md
-          - Multi-User Postgres Setup: User_Guides/Multi-User_Postgres_Setup.md
-          - Multi-User Deployment Guide: User_Guides/Multi-User_Deployment_Guide.md
-          - Production Hardening Checklist: User_Guides/Production_Hardening_Checklist.md
-          - Usage Module: User_Guides/Usage_Module.md
-      - Keys & Backups:
-          - BYOK User Guide: User_Guides/BYOK_User_Guide.md
-          - Backups using Litestream: User_Guides/Backups_Using_Litestream.md
-      - Examples & Tutorials:
-          - Workflows Examples: User_Guides/Workflows_Examples.md
-          - Project2025 RAG Guide: User_Guides/Project2025-RAG-Guide.md
-          - Kanban Board Guide: User_Guides/Kanban_Board_Guide.md
-          - Setup Supertonic: User_Guides/Setup-Supertonic.md
-          - Setup Supertonic 2: User_Guides/Setup-Supertonic2.md
+      - Server:
+          - Setup & Authentication:
+              - Installation & Setup: User_Guides/Server/Installation-Setup-Guide.md
+              - Authentication Setup: User_Guides/Server/Authentication_Setup.md
+              - Multi-User Postgres Setup: User_Guides/Server/Multi-User_Postgres_Setup.md
+              - Multi-User SQLite Setup: User_Guides/Server/Multi-User_SQLite_Setup.md
+              - Multi-User Deployment Guide: User_Guides/Server/Multi-User_Deployment_Guide.md
+              - OpenAI OAuth First-Time Setup: User_Guides/Server/OpenAI_OAuth_First_Time_Setup.md
+          - Operations & Administration:
+              - Production Hardening Checklist: User_Guides/Server/Production_Hardening_Checklist.md
+              - Organizations and Sharing: User_Guides/Server/Organizations_and_Sharing.md
+              - Organization Administration: User_Guides/Server/Organization_Administration.md
+              - Usage Module: User_Guides/Server/Usage_Module.md
+              - BYOK User Guide: User_Guides/Server/BYOK_User_Guide.md
+              - Backups using Litestream: User_Guides/Server/Backups_Using_Litestream.md
+              - CLI Reference: User_Guides/Server/CLI_Reference.md
+          - Ingestion, RAG & Evaluations:
+              - Media→Embeddings→RAG→Evals Workflow: User_Guides/Server/Media_to_RAG_Evals_Workflow.md
+              - Web Scraping and Ingestion: User_Guides/Server/Web_Scraping_Ingestion_Guide.md
+              - Chunking Templates User Guide: User_Guides/Server/Chunking_Templates_User_Guide.md
+              - Templated Chunking HowTo: User_Guides/Server/Templated_Chunking_Incoming_Documents_HowTo.md
+              - RAG Deployment Guide: User_Guides/Server/RAG_Deployment_Guide.md
+              - RAG Production Configuration: User_Guides/Server/RAG_Production_Configuration_Guide.md
+              - RAG Evals Playbook: User_Guides/Server/RAG_Evals_Playbook.md
+              - Evaluations User Guide: User_Guides/Server/Evaluations_User_Guide.md
+              - Evaluations Deployment Guide: User_Guides/Server/Evaluations_Deployment_Guide.md
+              - Evaluations End User Guide: User_Guides/Server/Evaluations_End_User_Guide.md
+              - Evaluations Production Deployment: User_Guides/Server/Evaluations_Production_Deployment_Guide.md
+              - Email Operator Search Guide: User_Guides/Server/Email_Operator_Search_Guide.md
+      - WebUI & Extension:
+          - Core Chat Experience:
+              - User Guide: User_Guides/WebUI_Extension/User_Guide.md
+              - Chat Pages: User_Guides/WebUI_Extension/Chat_Pages.md
+              - Quick Chat Docs Assistant: User_Guides/WebUI_Extension/Quick_Chat_Docs_Assistant_Guide.md
+              - Dictation Strategy and Settings: User_Guides/WebUI_Extension/Dictation_Strategy_and_Settings.md
+              - Chat Dictionaries Guide: User_Guides/WebUI_Extension/Chat_Dictionaries_Guide.md
+              - Context MCP Search: User_Guides/WebUI_Extension/context_mcp_search.md
+              - Prompt Engineering Notes: User_Guides/WebUI_Extension/Prompt_Engineering_Notes.md
+          - Audio, Voice & Media UX:
+              - Getting Started STT and TTS: User_Guides/WebUI_Extension/Getting-Started-STT_and_TTS.md
+              - TTS Getting Started: User_Guides/WebUI_Extension/TTS_Getting_Started.md
+              - TTS Setup Guide: User_Guides/WebUI_Extension/TTS-SETUP-GUIDE.md
+              - PocketTTS Voice Cloning Guide: User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md
+              - EPUB Reader Guide: User_Guides/WebUI_Extension/EPUB_Reader_Guide.md
+              - Image Generation Setup: User_Guides/WebUI_Extension/Image_Generation_Setup.md
+          - Characters & Learning:
+              - Character Roleplay Quickstart: User_Guides/WebUI_Extension/Character_Roleplay_Quickstart.md
+              - Effective Character Roleplay and You: User_Guides/WebUI_Extension/Effective_Character_Roleplay_and_You.md
+              - Advanced Character Roleplay Guide: User_Guides/WebUI_Extension/Advanced_Character_Roleplay_Guide.md
+              - Family Guardian Setup: User_Guides/WebUI_Extension/Family_Guardian_Setup.md
+              - Household Multi-User Walkthrough: User_Guides/WebUI_Extension/Household_Multi_User_Walkthrough.md
+              - Flashcards Study Guide: User_Guides/WebUI_Extension/Flashcards_Study_Guide.md
+              - Kanban Board Guide: User_Guides/WebUI_Extension/Kanban_Board_Guide.md
+          - Chatbooks & Workflows:
+              - Chatbook User Guide: User_Guides/WebUI_Extension/Chatbook_User_Guide.md
+              - Chatbook Tools Getting Started: User_Guides/WebUI_Extension/Chatbook_Tools_Getting_Started.md
+              - Workflows Examples: User_Guides/WebUI_Extension/Workflows_Examples.md
+      - Integrations & Experiments:
+          - Getting Started with ACP: User_Guides/Integrations_Experiments/Getting_Started_with_ACP.md
+          - Anthropic ClaudeCode and Claude SDK Setup: User_Guides/Integrations_Experiments/Anthropic_ClaudeCode_ClaudeSDK_Setup.md
+          - Project2025 RAG Guide: User_Guides/Integrations_Experiments/Project2025-RAG-Guide.md
+          - Setup Supertonic: User_Guides/Integrations_Experiments/Setup-Supertonic.md
+          - Setup Supertonic 2: User_Guides/Integrations_Experiments/Setup-Supertonic2.md
+          - Setting up a local LLM: User_Guides/Integrations_Experiments/Setting_up_a_local_LLM.md
   - Release Notes: RELEASE_NOTES.md
   - MCP Unified:
       - Overview: MCP/Unified_Overview.md

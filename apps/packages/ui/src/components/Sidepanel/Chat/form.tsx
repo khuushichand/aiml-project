@@ -39,7 +39,12 @@ import { getVariable } from "@/utils/select-variable"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useTldwStt } from "@/hooks/useTldwStt"
 import { useMicStream } from "@/hooks/useMicStream"
-import type { DictationModePreference } from "@/hooks/useDictationStrategy"
+import type {
+  DictationErrorClass,
+  DictationModePreference,
+  DictationResolvedMode,
+  DictationServerErrorTransition
+} from "@/hooks/useDictationStrategy"
 import { useDictationStrategy } from "@/hooks/useDictationStrategy"
 import { BsIncognito } from "react-icons/bs"
 import { handleChatInputKeyDown } from "@/utils/key-down"
@@ -100,6 +105,7 @@ import { generateID } from "@/db/dexie/helpers"
 import type { UploadedFile } from "@/db/dexie/types"
 import { formatFileSize } from "@/utils/format"
 import { formatPinnedResults } from "@/utils/rag-format"
+import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -631,15 +637,60 @@ export const SidepanelForm = ({
   // When sidepanel connection transitions to CONNECTED, focus the composer
   useFocusComposerOnConnect(phase)
 
-  const serverDictationErrorBridgeRef = React.useRef<(error: unknown) => void>(
-    () => {}
+  const dictationDiagnosticsSnapshotRef = React.useRef<{
+    requestedMode: DictationModePreference
+    resolvedMode: DictationResolvedMode
+    speechAvailable: boolean
+    speechUsesServer: boolean
+    fallbackReason: DictationErrorClass | null
+  }>({
+    requestedMode: "auto",
+    resolvedMode: "unavailable",
+    speechAvailable: false,
+    speechUsesServer: false,
+    fallbackReason: null
+  })
+  const serverDictationErrorBridgeRef = React.useRef<
+    (error: unknown) => DictationServerErrorTransition
+  >(
+    () => ({
+      errorClass: "unknown_error",
+      appliedFallback: false,
+      requestedMode: "auto",
+      resolvedModeBeforeError: "unavailable",
+      speechAvailableBeforeError: false,
+      speechUsesServerBeforeError: false,
+      browserSupportsSpeechRecognition: false,
+      autoFallbackEnabled: false
+    })
   )
   const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
   const handleServerDictationError = React.useCallback((error: unknown) => {
-    serverDictationErrorBridgeRef.current(error)
+    const transition = serverDictationErrorBridgeRef.current(error)
+    emitDictationDiagnostics({
+      surface: "sidepanel",
+      kind: "server_error",
+      requestedMode: transition.requestedMode,
+      resolvedMode: transition.resolvedModeBeforeError,
+      speechAvailable: transition.speechAvailableBeforeError,
+      speechUsesServer: transition.speechUsesServerBeforeError,
+      errorClass: transition.errorClass,
+      fallbackApplied: transition.appliedFallback,
+      fallbackReason: transition.appliedFallback ? transition.errorClass : null
+    })
   }, [])
   const handleServerDictationSuccess = React.useCallback(() => {
     serverDictationSuccessBridgeRef.current()
+    const snapshot = dictationDiagnosticsSnapshotRef.current
+    emitDictationDiagnostics({
+      surface: "sidepanel",
+      kind: "server_success",
+      requestedMode: snapshot.requestedMode,
+      resolvedMode: snapshot.resolvedMode,
+      speechAvailable: snapshot.speechAvailable,
+      speechUsesServer: snapshot.speechUsesServer,
+      fallbackReason: snapshot.fallbackReason
+    })
   }, [])
 
   // Server-side dictation hook
@@ -666,6 +717,13 @@ export const SidepanelForm = ({
   })
   serverDictationErrorBridgeRef.current = dictationStrategy.recordServerError
   serverDictationSuccessBridgeRef.current = dictationStrategy.recordServerSuccess
+  dictationDiagnosticsSnapshotRef.current = {
+    requestedMode: dictationStrategy.requestedMode,
+    resolvedMode: dictationStrategy.resolvedMode,
+    speechAvailable: dictationStrategy.speechAvailable,
+    speechUsesServer: dictationStrategy.speechUsesServer,
+    fallbackReason: dictationStrategy.autoFallbackErrorClass
+  }
   const speechAvailable = dictationStrategy.speechAvailable
   const speechUsesServer = dictationStrategy.speechUsesServer
 
@@ -1500,7 +1558,8 @@ export const SidepanelForm = ({
   }, [resetTranscript, speechToTextLanguage, startListening])
 
   const handleDictationToggle = React.useCallback(() => {
-    switch (dictationStrategy.toggleIntent) {
+    const toggleIntent = dictationStrategy.toggleIntent
+    switch (toggleIntent) {
       case "start_server":
         void startServerDictation()
         break
@@ -1516,6 +1575,17 @@ export const SidepanelForm = ({
       default:
         break
     }
+    const snapshot = dictationDiagnosticsSnapshotRef.current
+    emitDictationDiagnostics({
+      surface: "sidepanel",
+      kind: "toggle",
+      requestedMode: snapshot.requestedMode,
+      resolvedMode: snapshot.resolvedMode,
+      speechAvailable: snapshot.speechAvailable,
+      speechUsesServer: snapshot.speechUsesServer,
+      toggleIntent,
+      fallbackReason: snapshot.fallbackReason
+    })
   }, [
     dictationStrategy.toggleIntent,
     startBrowserDictation,

@@ -125,8 +125,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const isMediaRoute = location.pathname === "/media"
   const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
   const isMediaMultiRoute = location.pathname === "/media-multi"
+  const isWorkspacePlaygroundRoute = location.pathname === "/workspace-playground"
   const isViewportConstrainedRoute =
-    isDocumentWorkspace || isMediaRoute || isMediaMultiRoute
+    isDocumentWorkspace ||
+    isMediaRoute ||
+    isMediaMultiRoute ||
+    isWorkspacePlaygroundRoute
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage
       ? {

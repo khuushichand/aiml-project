@@ -265,4 +265,4 @@ CHAT_FORCE_MOCK=1 uvicorn tldw_Server_API.app.main:app --reload
 - [Docker Self-Host Guide](./Docker_Self_Host.md) - Run on your home server
 - [Production Guide](./Production.md) - Deploy for a team
 - [API Documentation](http://localhost:8000/docs) - Full endpoint reference
-- [RAG Guide](../User_Guides/RAG_Deployment_Guide.md) - Set up retrieval-augmented generation
+- [RAG Guide](../User_Guides/Server/RAG_Deployment_Guide.md) - Set up retrieval-augmented generation

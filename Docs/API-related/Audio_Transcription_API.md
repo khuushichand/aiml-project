@@ -196,6 +196,33 @@ Fallback policy:
 - Auto-fallback allowed: `unsupported_api`, `provider_unavailable`, `model_unavailable`, `transient_failure`.
 - Auto-fallback disallowed: `permission_denied`, `auth_error`, `quota_error`, `empty_transcript`, `unknown_error`.
 
+### Client Dictation Diagnostics (WebUI + Extension)
+
+WebUI `/chat` and extension sidepanel emit a sanitized diagnostics event for dictation strategy transitions:
+- Event name: `tldw:dictation:diagnostics`
+- Purpose: explain mode resolution and fallback behavior without logging sensitive content.
+
+Payload schema:
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | number | Schema version (`1`) |
+| `at` | string | ISO-8601 timestamp |
+| `surface` | string | `playground` or `sidepanel` |
+| `kind` | string | `toggle`, `server_error`, or `server_success` |
+| `requested_mode` | string | `auto`, `server`, `browser`, or `unknown` |
+| `resolved_mode` | string | `server`, `browser`, `unavailable`, or `unknown` |
+| `speech_available` | boolean | Whether dictation is available on this surface |
+| `speech_uses_server` | boolean | Whether current resolved mode routes through server STT |
+| `toggle_intent` | string/null | `start_*`/`stop_*` intent for toggle events |
+| `error_class` | string/null | Dictation taxonomy class for terminal server errors |
+| `fallback_applied` | boolean | Whether auto-fallback was applied after server error |
+| `fallback_reason` | string/null | Error class that triggered fallback, if any |
+
+Privacy contract:
+- Diagnostics payloads never include transcript text, prompt text, raw audio, or binary payloads.
+- Only strategy state and taxonomy metadata are serialized.
+
 Internal STT helpers:
 - `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
 - `transcribe_audio(...)` (NumPy waveform input) is the canonical plain-text helper used by this HTTP endpoint, speech-chat, and streaming sinks; it routes to the configured provider and returns a single transcript string. Provider failures are surfaced as error sentinel strings (for example, `"[Transcription error] Qwen2Audio ..."`), which HTTP handlers detect via `is_transcription_error_message(...)` and map to appropriate HTTP error responses rather than returning the sentinel text as user content.

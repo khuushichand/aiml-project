@@ -2,6 +2,8 @@ import { render, screen } from "@testing-library/react"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
+const chatPanePropsSpy = vi.fn()
+
 const testState = {
   isMobile: false,
   storeHydrated: true,
@@ -151,7 +153,17 @@ vi.mock("../SourcesPane", () => ({
 }))
 
 vi.mock("../ChatPane", () => ({
-  ChatPane: () => <div data-testid="workspace-chat-pane">Chat</div>
+  ChatPane: (props: { contentWidthMode?: string }) => {
+    chatPanePropsSpy(props)
+    return (
+      <div
+        data-testid="workspace-chat-pane"
+        data-content-width-mode={props.contentWidthMode ?? ""}
+      >
+        Chat
+      </div>
+    )
+  }
 }))
 
 vi.mock("../StudioPane", () => ({
@@ -196,6 +208,7 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    chatPanePropsSpy.mockClear()
     testState.isMobile = false
     testState.storeHydrated = true
     testState.leftPaneCollapsed = false
@@ -233,6 +246,10 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
     const root = container.firstElementChild as HTMLElement | null
     expect(root).not.toBeNull()
     expect(root?.className).toContain("h-full")
+    expect(screen.getByTestId("workspace-chat-pane")).toHaveAttribute(
+      "data-content-width-mode",
+      "comfortable"
+    )
   })
 
   it("renders hydration skeleton until workspace store hydration completes", () => {
@@ -256,5 +273,28 @@ describe("WorkspacePlayground desktop layout guardrails", () => {
     expect(screen.queryByTestId("workspace-playground-skeleton")).not.toBeInTheDocument()
     expect(screen.getByTestId("workspace-header")).toBeInTheDocument()
     expect(screen.getByTestId("workspace-chat-pane")).toBeInTheDocument()
+  })
+
+  it("expands chat content width when one sidebar is collapsed", () => {
+    testState.rightPaneCollapsed = true
+
+    render(<WorkspacePlayground />)
+
+    expect(screen.getByTestId("workspace-chat-pane")).toHaveAttribute(
+      "data-content-width-mode",
+      "expanded"
+    )
+  })
+
+  it("uses full chat content width when both sidebars are collapsed", () => {
+    testState.leftPaneCollapsed = true
+    testState.rightPaneCollapsed = true
+
+    render(<WorkspacePlayground />)
+
+    expect(screen.getByTestId("workspace-chat-pane")).toHaveAttribute(
+      "data-content-width-mode",
+      "full"
+    )
   })
 })

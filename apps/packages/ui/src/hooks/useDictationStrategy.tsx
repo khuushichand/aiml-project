@@ -336,11 +336,20 @@ export type UseDictationStrategyResult = {
   toggleIntent: DictationToggleIntent
   autoFallbackActive: boolean
   autoFallbackErrorClass: DictationErrorClass | null
-  recordServerError: (
-    error: unknown
-  ) => { errorClass: DictationErrorClass; appliedFallback: boolean }
+  recordServerError: (error: unknown) => DictationServerErrorTransition
   recordServerSuccess: () => void
   clearAutoFallback: () => void
+}
+
+export type DictationServerErrorTransition = {
+  errorClass: DictationErrorClass
+  appliedFallback: boolean
+  requestedMode: DictationModePreference
+  resolvedModeBeforeError: DictationResolvedMode
+  speechAvailableBeforeError: boolean
+  speechUsesServerBeforeError: boolean
+  browserSupportsSpeechRecognition: boolean
+  autoFallbackEnabled: boolean
 }
 
 export const useDictationStrategy = (
@@ -432,13 +441,22 @@ export const useDictationStrategy = (
       }
       return {
         errorClass,
-        appliedFallback: allowFallback
+        appliedFallback: allowFallback,
+        requestedMode,
+        resolvedModeBeforeError: resolvedMode,
+        speechAvailableBeforeError: speechAvailable,
+        speechUsesServerBeforeError: speechUsesServer,
+        browserSupportsSpeechRecognition,
+        autoFallbackEnabled
       }
     },
     [
       autoFallbackEnabled,
       browserSupportsSpeechRecognition,
-      requestedMode
+      requestedMode,
+      resolvedMode,
+      speechAvailable,
+      speechUsesServer
     ]
   )
 

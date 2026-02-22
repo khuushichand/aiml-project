@@ -10,9 +10,12 @@ import {
   WORKSPACE_STORAGE_CHANNEL_NAME,
   WORKSPACE_STORAGE_KEY,
   WORKSPACE_STORAGE_QUOTA_EVENT,
+  WORKSPACE_STORAGE_RECOVERY_EVENT,
   isWorkspaceBroadcastSyncEnabled,
   type WorkspaceBroadcastUpdateMessage,
-  type WorkspaceStorageQuotaEventDetail
+  type WorkspaceStorageQuotaEventDetail,
+  type WorkspaceStorageRecoveryAction,
+  type WorkspaceStorageRecoveryEventDetail
 } from "@/store/workspace-events"
 import {
   WORKSPACE_EXPORT_BUNDLE_FORMAT,
@@ -93,6 +96,546 @@ const emitWorkspaceQuotaExceeded = (key: string, error: unknown): void => {
   )
 }
 
+const emitWorkspaceStorageRecoveryEvent = (
+  detail: WorkspaceStorageRecoveryEventDetail
+): void => {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(
+    new CustomEvent<WorkspaceStorageRecoveryEventDetail>(
+      WORKSPACE_STORAGE_RECOVERY_EVENT,
+      { detail }
+    )
+  )
+}
+
+type WorkspaceStorageRecoveryMutation = {
+  action: WorkspaceStorageRecoveryAction
+  workspaceId?: string
+  beforeBytes: number
+  afterBytes: number
+  recoveredBytes: number
+}
+
+type WorkspaceStorageRecoveryAttempt = {
+  value: string
+  beforeBytes: number
+  afterBytes: number
+  mutations: WorkspaceStorageRecoveryMutation[]
+}
+
+const WORKSPACE_STORAGE_RECOVERY_MIN_RECLAIM_BYTES = 64 * 1024
+const WORKSPACE_STORAGE_OVERSIZED_ARTIFACT_MIN_BYTES = 12 * 1024
+const WORKSPACE_SPLIT_INDEX_SCHEMA = "workspace_split_v1"
+const WORKSPACE_SPLIT_INDEX_VERSION = 1
+
+type WorkspaceSplitIndexState = {
+  workspaceId: string
+  savedWorkspaces: SavedWorkspace[]
+  archivedWorkspaces: SavedWorkspace[]
+  workspaceIds: string[]
+  workspaceSnapshots: Record<string, WorkspaceSnapshot>
+  workspaceChatSessions: Record<string, PersistedWorkspaceChatSession>
+}
+
+type WorkspaceSplitIndexEnvelope = {
+  schema: typeof WORKSPACE_SPLIT_INDEX_SCHEMA
+  splitVersion: number
+  version: number
+  state: WorkspaceSplitIndexState
+}
+
+const parseWorkspaceTimestamp = (value: unknown): number => {
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value).getTime()
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return Number.POSITIVE_INFINITY
+}
+
+const attemptWorkspaceStorageRecovery = (
+  key: string,
+  serializedValue: string
+): WorkspaceStorageRecoveryAttempt | null => {
+  if (key !== WORKSPACE_STORAGE_KEY) return null
+  if (typeof serializedValue !== "string" || serializedValue.length === 0) {
+    return null
+  }
+
+  let parsedPayload: unknown
+  try {
+    parsedPayload = JSON.parse(serializedValue)
+  } catch {
+    return null
+  }
+
+  if (!isRecord(parsedPayload)) return null
+
+  const hasStateEnvelope =
+    isRecord(parsedPayload) &&
+    "state" in parsedPayload &&
+    isRecord(parsedPayload.state)
+  const mutableState = hasStateEnvelope
+    ? (parsedPayload.state as Record<string, unknown>)
+    : (parsedPayload as Record<string, unknown>)
+
+  const beforeBytes = estimateSerializedByteLength(mutableState)
+  if (beforeBytes <= 0) return null
+
+  const targetBytes = Math.max(
+    beforeBytes - WORKSPACE_STORAGE_RECOVERY_MIN_RECLAIM_BYTES,
+    0
+  )
+
+  const workspaceId =
+    typeof mutableState.workspaceId === "string" ? mutableState.workspaceId : ""
+  const savedWorkspaces = Array.isArray(mutableState.savedWorkspaces)
+    ? (mutableState.savedWorkspaces as Array<Record<string, unknown>>)
+    : []
+  const archivedWorkspaces = Array.isArray(mutableState.archivedWorkspaces)
+    ? (mutableState.archivedWorkspaces as Array<Record<string, unknown>>)
+    : []
+  const workspaceSnapshots = isRecord(mutableState.workspaceSnapshots)
+    ? (mutableState.workspaceSnapshots as Record<string, unknown>)
+    : {}
+  const workspaceChatSessions = isRecord(mutableState.workspaceChatSessions)
+    ? (mutableState.workspaceChatSessions as Record<string, unknown>)
+    : {}
+
+  const workspaceLastAccess = new Map<string, number>()
+  for (const workspace of [...savedWorkspaces, ...archivedWorkspaces]) {
+    if (!isRecord(workspace)) continue
+    const id = typeof workspace.id === "string" ? workspace.id : null
+    if (!id) continue
+    const timestamp = parseWorkspaceTimestamp(workspace.lastAccessedAt)
+    workspaceLastAccess.set(id, timestamp)
+  }
+
+  const mutations: WorkspaceStorageRecoveryMutation[] = []
+  let currentBytes = beforeBytes
+  const applyMutation = (
+    action: WorkspaceStorageRecoveryAction,
+    nextWorkspaceId?: string
+  ) => {
+    const nextBytes = estimateSerializedByteLength(mutableState)
+    if (nextBytes >= currentBytes) return
+    mutations.push({
+      action,
+      workspaceId: nextWorkspaceId,
+      beforeBytes: currentBytes,
+      afterBytes: nextBytes,
+      recoveredBytes: currentBytes - nextBytes
+    })
+    currentBytes = nextBytes
+  }
+  const reachedTarget = () => currentBytes <= targetBytes
+
+  // Evict archived workspace snapshots/sessions first (least recently used).
+  const archivedIds = archivedWorkspaces
+    .map((workspace) => (typeof workspace.id === "string" ? workspace.id : null))
+    .filter((id): id is string => Boolean(id))
+    .sort(
+      (a, b) =>
+        (workspaceLastAccess.get(a) ?? Number.POSITIVE_INFINITY) -
+        (workspaceLastAccess.get(b) ?? Number.POSITIVE_INFINITY)
+    )
+
+  for (const archivedId of archivedIds) {
+    if (reachedTarget()) break
+
+    mutableState.archivedWorkspaces = (
+      Array.isArray(mutableState.archivedWorkspaces)
+        ? (mutableState.archivedWorkspaces as Array<Record<string, unknown>>)
+        : []
+    ).filter((workspace) => workspace.id !== archivedId)
+    if (isRecord(mutableState.workspaceSnapshots)) {
+      delete (mutableState.workspaceSnapshots as Record<string, unknown>)[archivedId]
+    }
+    if (isRecord(mutableState.workspaceChatSessions)) {
+      delete (mutableState.workspaceChatSessions as Record<string, unknown>)[archivedId]
+    }
+
+    applyMutation("archived_workspace_removed", archivedId)
+  }
+
+  // Evict oldest non-active chat sessions next.
+  const sessionIds = Object.keys(workspaceChatSessions)
+    .filter((id) => id !== workspaceId)
+    .sort(
+      (a, b) =>
+        (workspaceLastAccess.get(a) ?? Number.POSITIVE_INFINITY) -
+        (workspaceLastAccess.get(b) ?? Number.POSITIVE_INFINITY)
+    )
+
+  for (const sessionId of sessionIds) {
+    if (reachedTarget()) break
+    if (!isRecord(mutableState.workspaceChatSessions)) break
+    const sessionsMap = mutableState.workspaceChatSessions as Record<string, unknown>
+    if (!(sessionId in sessionsMap)) continue
+    delete sessionsMap[sessionId]
+    applyMutation("chat_session_removed", sessionId)
+  }
+
+  // Evict oversized artifacts from least-recently-used snapshots.
+  const snapshotIds = Object.keys(workspaceSnapshots).sort((a, b) => {
+    const aScore =
+      a === workspaceId
+        ? Number.MAX_SAFE_INTEGER
+        : workspaceLastAccess.get(a) ?? Number.POSITIVE_INFINITY
+    const bScore =
+      b === workspaceId
+        ? Number.MAX_SAFE_INTEGER
+        : workspaceLastAccess.get(b) ?? Number.POSITIVE_INFINITY
+    return aScore - bScore
+  })
+
+  for (const snapshotId of snapshotIds) {
+    if (reachedTarget()) break
+    if (!isRecord(mutableState.workspaceSnapshots)) break
+    const snapshotsMap = mutableState.workspaceSnapshots as Record<string, unknown>
+    const snapshot = snapshotsMap[snapshotId]
+    if (!isRecord(snapshot) || !Array.isArray(snapshot.generatedArtifacts)) continue
+
+    const artifacts = snapshot.generatedArtifacts as Array<Record<string, unknown>>
+    const oversizedArtifacts = artifacts
+      .filter(
+        (artifact) =>
+          isRecord(artifact) &&
+          estimateSerializedByteLength(artifact) >=
+            WORKSPACE_STORAGE_OVERSIZED_ARTIFACT_MIN_BYTES
+      )
+      .sort(
+        (a, b) =>
+          estimateSerializedByteLength(b) - estimateSerializedByteLength(a)
+      )
+
+    for (const artifact of oversizedArtifacts) {
+      if (reachedTarget()) break
+      const artifactIndex = artifacts.indexOf(artifact)
+      if (artifactIndex < 0) continue
+      artifacts.splice(artifactIndex, 1)
+      applyMutation("artifact_removed", snapshotId)
+    }
+  }
+
+  if (mutations.length === 0) return null
+
+  const nextSerializedValue = JSON.stringify(parsedPayload)
+  return {
+    value: nextSerializedValue,
+    beforeBytes,
+    afterBytes: currentBytes,
+    mutations
+  }
+}
+
+const normalizeWorkspaceStorageIds = (
+  ...candidates: Array<string | null | undefined>
+): string[] => {
+  const ids = new Set<string>()
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const trimmed = candidate.trim()
+    if (!trimmed) continue
+    ids.add(trimmed)
+  }
+  return Array.from(ids)
+}
+
+const buildWorkspaceSnapshotStorageKey = (workspaceId: string): string =>
+  `${WORKSPACE_STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:snapshot`
+
+const buildWorkspaceChatStorageKey = (workspaceId: string): string =>
+  `${WORKSPACE_STORAGE_KEY}:workspace:${encodeURIComponent(workspaceId)}:chat`
+
+const safeParseJson = (raw: string | null | undefined): unknown => {
+  if (typeof raw !== "string" || raw.length === 0) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+const parsePersistedWorkspaceEnvelope = (
+  serializedValue: string
+): { state: Record<string, unknown>; version: number } | null => {
+  const parsed = safeParseJson(serializedValue)
+  if (!isRecord(parsed)) return null
+
+  if (
+    parsed.schema === WORKSPACE_SPLIT_INDEX_SCHEMA &&
+    typeof parsed.version === "number" &&
+    isRecord(parsed.state)
+  ) {
+    return {
+      state: parsed.state,
+      version: parsed.version
+    }
+  }
+
+  const candidateState =
+    isRecord(parsed.state) ? parsed.state : parsed
+  if (!isRecord(candidateState)) return null
+
+  const version =
+    typeof parsed.version === "number" && Number.isFinite(parsed.version)
+      ? parsed.version
+      : 1
+
+  return { state: candidateState, version }
+}
+
+const isWorkspaceSplitIndexEnvelope = (
+  candidate: unknown
+): candidate is WorkspaceSplitIndexEnvelope => {
+  if (!isRecord(candidate)) return false
+  if (candidate.schema !== WORKSPACE_SPLIT_INDEX_SCHEMA) return false
+  if (typeof candidate.version !== "number") return false
+  if (!isRecord(candidate.state)) return false
+  return true
+}
+
+const getWorkspaceIdsFromStoredValue = (raw: string | null): string[] => {
+  const parsed = safeParseJson(raw)
+  if (!parsed) return []
+
+  if (isWorkspaceSplitIndexEnvelope(parsed)) {
+    const ids = Array.isArray(parsed.state.workspaceIds)
+      ? parsed.state.workspaceIds.filter(
+          (workspaceId): workspaceId is string => typeof workspaceId === "string"
+        )
+      : []
+    return normalizeWorkspaceStorageIds(...ids, parsed.state.workspaceId)
+  }
+
+  const envelope = parsePersistedWorkspaceEnvelope(raw || "")
+  if (!envelope) return []
+
+  const workspaceSnapshots = isRecord(envelope.state.workspaceSnapshots)
+    ? envelope.state.workspaceSnapshots
+    : {}
+  const workspaceChatSessions = isRecord(envelope.state.workspaceChatSessions)
+    ? envelope.state.workspaceChatSessions
+    : {}
+  const workspaceId =
+    typeof envelope.state.workspaceId === "string"
+      ? envelope.state.workspaceId
+      : null
+
+  return normalizeWorkspaceStorageIds(
+    ...Object.keys(workspaceSnapshots),
+    ...Object.keys(workspaceChatSessions),
+    workspaceId
+  )
+}
+
+const buildWorkspaceSplitIndexEnvelope = (
+  persistedState: PersistedWorkspaceState,
+  version: number
+): WorkspaceSplitIndexEnvelope => {
+  const workspaceIds = normalizeWorkspaceStorageIds(
+    ...Object.keys(persistedState.workspaceSnapshots || {}),
+    ...Object.keys(persistedState.workspaceChatSessions || {}),
+    persistedState.workspaceId
+  )
+  const activeWorkspaceId = persistedState.workspaceId
+  const activeSnapshot =
+    activeWorkspaceId && persistedState.workspaceSnapshots[activeWorkspaceId]
+      ? { [activeWorkspaceId]: persistedState.workspaceSnapshots[activeWorkspaceId] }
+      : {}
+  const activeChatSession =
+    activeWorkspaceId && persistedState.workspaceChatSessions[activeWorkspaceId]
+      ? {
+          [activeWorkspaceId]:
+            persistedState.workspaceChatSessions[activeWorkspaceId]
+        }
+      : {}
+
+  return {
+    schema: WORKSPACE_SPLIT_INDEX_SCHEMA,
+    splitVersion: WORKSPACE_SPLIT_INDEX_VERSION,
+    version,
+    state: {
+      workspaceId: persistedState.workspaceId,
+      savedWorkspaces: persistedState.savedWorkspaces,
+      archivedWorkspaces: persistedState.archivedWorkspaces,
+      workspaceIds,
+      workspaceSnapshots: activeSnapshot,
+      workspaceChatSessions: activeChatSession
+    }
+  }
+}
+
+const reconstructPersistedWorkspaceStateFromSplitIndex = (
+  envelope: WorkspaceSplitIndexEnvelope
+): PersistedWorkspaceState => {
+  const stateCandidate = envelope.state
+  const workspaceId =
+    typeof stateCandidate.workspaceId === "string"
+      ? stateCandidate.workspaceId
+      : ""
+  const savedWorkspaces = Array.isArray(stateCandidate.savedWorkspaces)
+    ? stateCandidate.savedWorkspaces
+    : []
+  const archivedWorkspaces = Array.isArray(stateCandidate.archivedWorkspaces)
+    ? stateCandidate.archivedWorkspaces
+    : []
+  const workspaceIds = Array.isArray(stateCandidate.workspaceIds)
+    ? stateCandidate.workspaceIds.filter(
+        (workspaceStorageId): workspaceStorageId is string =>
+          typeof workspaceStorageId === "string"
+      )
+    : []
+
+  const snapshots: Record<string, WorkspaceSnapshot> = {}
+  const chatSessions: Record<string, PersistedWorkspaceChatSession> = {}
+
+  for (const workspaceStorageId of workspaceIds) {
+    const snapshotRaw = localStorage.getItem(
+      buildWorkspaceSnapshotStorageKey(workspaceStorageId)
+    )
+    const parsedSnapshot = safeParseJson(snapshotRaw)
+    if (isRecord(parsedSnapshot)) {
+      snapshots[workspaceStorageId] = parsedSnapshot as WorkspaceSnapshot
+    }
+
+    const chatRaw = localStorage.getItem(
+      buildWorkspaceChatStorageKey(workspaceStorageId)
+    )
+    const parsedChat = safeParseJson(chatRaw)
+    if (isRecord(parsedChat)) {
+      chatSessions[workspaceStorageId] =
+        parsedChat as PersistedWorkspaceChatSession
+    }
+  }
+
+  if (
+    workspaceId &&
+    !snapshots[workspaceId] &&
+    isRecord(stateCandidate.workspaceSnapshots) &&
+    isRecord(stateCandidate.workspaceSnapshots[workspaceId])
+  ) {
+    snapshots[workspaceId] =
+      stateCandidate.workspaceSnapshots[workspaceId] as WorkspaceSnapshot
+  }
+
+  if (
+    workspaceId &&
+    !chatSessions[workspaceId] &&
+    isRecord(stateCandidate.workspaceChatSessions) &&
+    isRecord(stateCandidate.workspaceChatSessions[workspaceId])
+  ) {
+    chatSessions[workspaceId] =
+      stateCandidate.workspaceChatSessions[
+        workspaceId
+      ] as PersistedWorkspaceChatSession
+  }
+
+  return {
+    workspaceId,
+    savedWorkspaces: savedWorkspaces as SavedWorkspace[],
+    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[],
+    workspaceSnapshots: snapshots,
+    workspaceChatSessions: chatSessions
+  }
+}
+
+const writeSplitWorkspacePersistence = (
+  name: string,
+  serializedValue: string
+): boolean => {
+  if (name !== WORKSPACE_STORAGE_KEY) return false
+
+  const envelope = parsePersistedWorkspaceEnvelope(serializedValue)
+  if (!envelope) return false
+
+  const migrated = migratePersistedWorkspaceState(envelope.state)
+  const version =
+    typeof envelope.version === "number" && Number.isFinite(envelope.version)
+      ? envelope.version
+      : 1
+  const nextWorkspaceIds = normalizeWorkspaceStorageIds(
+    ...Object.keys(migrated.workspaceSnapshots || {}),
+    ...Object.keys(migrated.workspaceChatSessions || {}),
+    migrated.workspaceId
+  )
+  const existingWorkspaceIds = getWorkspaceIdsFromStoredValue(
+    localStorage.getItem(name)
+  )
+
+  for (const workspaceStorageId of nextWorkspaceIds) {
+    const snapshotKey = buildWorkspaceSnapshotStorageKey(workspaceStorageId)
+    const snapshot = migrated.workspaceSnapshots[workspaceStorageId]
+    if (snapshot) {
+      const nextSnapshotValue = JSON.stringify(snapshot)
+      if (localStorage.getItem(snapshotKey) !== nextSnapshotValue) {
+        localStorage.setItem(snapshotKey, nextSnapshotValue)
+      }
+    } else if (localStorage.getItem(snapshotKey) !== null) {
+      localStorage.removeItem(snapshotKey)
+    }
+
+    const chatKey = buildWorkspaceChatStorageKey(workspaceStorageId)
+    const chatSession = migrated.workspaceChatSessions[workspaceStorageId]
+    if (chatSession) {
+      const nextChatValue = JSON.stringify(chatSession)
+      if (localStorage.getItem(chatKey) !== nextChatValue) {
+        localStorage.setItem(chatKey, nextChatValue)
+      }
+    } else if (localStorage.getItem(chatKey) !== null) {
+      localStorage.removeItem(chatKey)
+    }
+  }
+
+  for (const staleWorkspaceId of existingWorkspaceIds) {
+    if (nextWorkspaceIds.includes(staleWorkspaceId)) continue
+    localStorage.removeItem(buildWorkspaceSnapshotStorageKey(staleWorkspaceId))
+    localStorage.removeItem(buildWorkspaceChatStorageKey(staleWorkspaceId))
+  }
+
+  const splitIndex = buildWorkspaceSplitIndexEnvelope(migrated, version)
+  const indexValue = JSON.stringify(splitIndex)
+  if (localStorage.getItem(name) !== indexValue) {
+    localStorage.setItem(name, indexValue)
+  }
+
+  return true
+}
+
+const rebuildWorkspaceEnvelopeFromStorage = (
+  name: string
+): string | null => {
+  const raw = localStorage.getItem(name)
+  if (raw === null) return null
+
+  const parsed = safeParseJson(raw)
+  if (!isWorkspaceSplitIndexEnvelope(parsed)) {
+    const envelope = parsePersistedWorkspaceEnvelope(raw)
+    if (!envelope) {
+      return raw
+    }
+    const migrated = migratePersistedWorkspaceState(envelope.state)
+    const migratedEnvelope = JSON.stringify({
+      state: migrated,
+      version: envelope.version
+    })
+    // Best-effort migration to split-key storage on first read.
+    try {
+      writeSplitWorkspacePersistence(name, migratedEnvelope)
+    } catch {
+      // Ignore migration failures and continue with in-memory rehydrate value.
+    }
+    return migratedEnvelope
+  }
+
+  const reconstructed = reconstructPersistedWorkspaceStateFromSplitIndex(parsed)
+  return JSON.stringify({
+    state: reconstructed,
+    version: parsed.version
+  })
+}
+
 const getWorkspaceBroadcastChannel = (): BroadcastChannel | null => {
   if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") {
     return null
@@ -146,21 +689,103 @@ export const createWorkspaceStorage = (): StateStorage => {
 
   return {
     getItem: (name: string): string | null => {
+      if (name === WORKSPACE_STORAGE_KEY) {
+        return rebuildWorkspaceEnvelopeFromStorage(name)
+      }
       return localStorage.getItem(name)
     },
     setItem: (name: string, value: string): void => {
       try {
-        localStorage.setItem(name, value)
+        const handledBySplitStorage = writeSplitWorkspacePersistence(name, value)
+        if (!handledBySplitStorage) {
+          localStorage.setItem(name, value)
+        }
         broadcastWorkspaceStorageUpdate(name)
       } catch (error) {
         if (isQuotaExceededError(error)) {
-          emitWorkspaceQuotaExceeded(name, error)
-          return
+          const recoveryAttempt = attemptWorkspaceStorageRecovery(name, value)
+          if (!recoveryAttempt) {
+            emitWorkspaceStorageRecoveryEvent({
+              key: name,
+              action: "retry_skipped",
+              beforeBytes: estimateSerializedByteLength(value),
+              afterBytes: estimateSerializedByteLength(value),
+              recoveredBytes: 0,
+              reason:
+                error instanceof Error
+                  ? error.message
+                  : "Quota exceeded and no recoverable payload sections were found."
+            })
+            emitWorkspaceQuotaExceeded(name, error)
+            return
+          }
+
+          for (const mutation of recoveryAttempt.mutations) {
+            emitWorkspaceStorageRecoveryEvent({
+              key: name,
+              action: mutation.action,
+              workspaceId: mutation.workspaceId,
+              beforeBytes: mutation.beforeBytes,
+              afterBytes: mutation.afterBytes,
+              recoveredBytes: mutation.recoveredBytes
+            })
+          }
+
+          try {
+            const handledBySplitStorage = writeSplitWorkspacePersistence(
+              name,
+              recoveryAttempt.value
+            )
+            if (!handledBySplitStorage) {
+              localStorage.setItem(name, recoveryAttempt.value)
+            }
+            broadcastWorkspaceStorageUpdate(name)
+            emitWorkspaceStorageRecoveryEvent({
+              key: name,
+              action: "retry_success",
+              beforeBytes: recoveryAttempt.beforeBytes,
+              afterBytes: recoveryAttempt.afterBytes,
+              recoveredBytes:
+                recoveryAttempt.beforeBytes - recoveryAttempt.afterBytes
+            })
+            return
+          } catch (retryError) {
+            if (!isQuotaExceededError(retryError)) {
+              throw retryError
+            }
+            emitWorkspaceStorageRecoveryEvent({
+              key: name,
+              action: "retry_failed",
+              beforeBytes: recoveryAttempt.beforeBytes,
+              afterBytes: recoveryAttempt.afterBytes,
+              recoveredBytes:
+                recoveryAttempt.beforeBytes - recoveryAttempt.afterBytes,
+              reason:
+                retryError instanceof Error
+                  ? retryError.message
+                  : "Quota exceeded after recovery retry."
+            })
+            emitWorkspaceQuotaExceeded(name, retryError)
+            return
+          }
         }
         throw error
       }
     },
     removeItem: (name: string): void => {
+      if (name === WORKSPACE_STORAGE_KEY) {
+        const workspaceIds = getWorkspaceIdsFromStoredValue(
+          localStorage.getItem(name)
+        )
+        for (const workspaceStorageId of workspaceIds) {
+          localStorage.removeItem(
+            buildWorkspaceSnapshotStorageKey(workspaceStorageId)
+          )
+          localStorage.removeItem(
+            buildWorkspaceChatStorageKey(workspaceStorageId)
+          )
+        }
+      }
       localStorage.removeItem(name)
     }
   }
@@ -241,6 +866,14 @@ export interface WorkspaceChatSession {
   history: ChatHistory
   historyId: string | null
   serverChatId: string | null
+}
+
+interface PersistedWorkspaceChatSession {
+  messages: Message[]
+  historyId: string | null
+  serverChatId: string | null
+  // Legacy fallback persisted by older versions.
+  history?: ChatHistory
 }
 
 interface WorkspaceChatSessionsState {
@@ -522,28 +1155,8 @@ const initialState = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface PersistedWorkspaceState {
-  // Workspace identity
+  // Active workspace identity
   workspaceId: string
-  workspaceName: string
-  workspaceTag: string
-  workspaceCreatedAt: Date | null
-  workspaceChatReferenceId: string
-
-  // Sources (without transient state)
-  sources: WorkspaceSource[]
-  selectedSourceIds: string[]
-
-  // Studio outputs (generated artifacts persist, but audioUrl blobs don't survive reload)
-  generatedArtifacts: GeneratedArtifact[]
-  notes: string
-  currentNote: WorkspaceNote
-
-  // Pane visibility preferences
-  leftPaneCollapsed: boolean
-  rightPaneCollapsed: boolean
-
-  // Audio generation settings
-  audioSettings: AudioGenerationSettings
 
   // Saved workspaces list
   savedWorkspaces: SavedWorkspace[]
@@ -553,19 +1166,165 @@ interface PersistedWorkspaceState {
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
 
   // Workspace chat sessions keyed by workspace ID
-  workspaceChatSessions: Record<string, WorkspaceChatSession>
+  workspaceChatSessions: Record<string, PersistedWorkspaceChatSession>
+
+  // Legacy fields supported during migration/rehydration.
+  workspaceName?: string
+  workspaceTag?: string
+  workspaceCreatedAt?: Date | null
+  workspaceChatReferenceId?: string
+  sources?: WorkspaceSource[]
+  selectedSourceIds?: string[]
+  generatedArtifacts?: GeneratedArtifact[]
+  notes?: string
+  currentNote?: WorkspaceNote
+  leftPaneCollapsed?: boolean
+  rightPaneCollapsed?: boolean
+  audioSettings?: AudioGenerationSettings
+}
+
+export type WorkspacePersistenceSectionKey =
+  | "workspaceSnapshots"
+  | "workspaceChatSessions"
+  | "generatedArtifacts"
+  | "notes"
+  | "sources"
+  | "selectedSourceIds"
+  | "savedWorkspaces"
+  | "archivedWorkspaces"
+  | "other"
+
+export type WorkspacePersistenceSectionBytes = Record<
+  WorkspacePersistenceSectionKey,
+  number
+>
+
+export interface WorkspacePersistenceMetricsSnapshot {
+  totalBytes: number
+  sections: WorkspacePersistenceSectionBytes
+}
+
+export interface WorkspacePersistenceDiagnosticsSnapshot
+  extends WorkspacePersistenceMetricsSnapshot {
+  key: string
+  writeCount: number
+  maxTotalBytes: number
+  updatedAt: number
+}
+
+type WorkspacePersistedCandidate =
+  | PersistedWorkspaceState
+  | {
+      state?: PersistedWorkspaceState | Record<string, unknown> | null
+      version?: number
+    }
+  | Record<string, unknown>
+
+declare global {
+  interface Window {
+    __tldwWorkspacePersistenceMetrics?: WorkspacePersistenceDiagnosticsSnapshot
+  }
 }
 
 const MAX_SAVED_WORKSPACES = 10
 const MAX_ARCHIVED_WORKSPACES = 50
 const INTERRUPTED_GENERATION_ERROR_MESSAGE =
   "Generation was interrupted. Click regenerate to try again."
+let workspacePersistenceWriteCount = 0
+let workspacePersistenceMaxBytes = 0
 
 const cloneWorkspaceValue = <T>(value: T): T => {
   if (typeof structuredClone === "function") {
     return structuredClone(value)
   }
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+const estimateUtf8ByteLength = (value: string): number => {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(value).length
+  }
+  return encodeURIComponent(value).replace(/%[A-F\d]{2}/g, "x").length
+}
+
+const estimateSerializedByteLength = (value: unknown): number => {
+  try {
+    return estimateUtf8ByteLength(JSON.stringify(value))
+  } catch {
+    return 0
+  }
+}
+
+const unwrapPersistedWorkspaceCandidate = (
+  candidate: WorkspacePersistedCandidate | null | undefined
+): Record<string, unknown> => {
+  if (!candidate) return {}
+  if (!isRecord(candidate)) return {}
+
+  const nestedState = candidate.state
+  if (isRecord(nestedState)) {
+    return nestedState
+  }
+
+  return candidate
+}
+
+export const estimateWorkspacePersistenceMetrics = (
+  candidate: WorkspacePersistedCandidate | null | undefined
+): WorkspacePersistenceMetricsSnapshot => {
+  const payload = unwrapPersistedWorkspaceCandidate(candidate)
+  const totalBytes = estimateSerializedByteLength(payload)
+
+  const sections: WorkspacePersistenceSectionBytes = {
+    workspaceSnapshots: estimateSerializedByteLength(payload.workspaceSnapshots),
+    workspaceChatSessions: estimateSerializedByteLength(payload.workspaceChatSessions),
+    generatedArtifacts: estimateSerializedByteLength(payload.generatedArtifacts),
+    notes: estimateSerializedByteLength(payload.notes),
+    sources: estimateSerializedByteLength(payload.sources),
+    selectedSourceIds: estimateSerializedByteLength(payload.selectedSourceIds),
+    savedWorkspaces: estimateSerializedByteLength(payload.savedWorkspaces),
+    archivedWorkspaces: estimateSerializedByteLength(payload.archivedWorkspaces),
+    other: 0
+  }
+
+  const knownSectionBytes = Object.entries(sections)
+    .filter(([key]) => key !== "other")
+    .reduce((accumulator, [, bytes]) => accumulator + bytes, 0)
+  sections.other = Math.max(0, totalBytes - knownSectionBytes)
+
+  return {
+    totalBytes,
+    sections
+  }
+}
+
+const shouldCaptureWorkspacePersistenceDiagnostics = (): boolean =>
+  typeof window !== "undefined" && process.env.NODE_ENV !== "production"
+
+const recordWorkspacePersistenceDiagnostics = (
+  key: string,
+  candidate: WorkspacePersistedCandidate
+): void => {
+  if (!shouldCaptureWorkspacePersistenceDiagnostics()) return
+
+  const metrics = estimateWorkspacePersistenceMetrics(candidate)
+  workspacePersistenceWriteCount += 1
+  workspacePersistenceMaxBytes = Math.max(
+    workspacePersistenceMaxBytes,
+    metrics.totalBytes
+  )
+
+  window.__tldwWorkspacePersistenceMetrics = {
+    key,
+    writeCount: workspacePersistenceWriteCount,
+    maxTotalBytes: workspacePersistenceMaxBytes,
+    updatedAt: Date.now(),
+    totalBytes: metrics.totalBytes,
+    sections: metrics.sections
+  }
 }
 
 const sanitizeArtifactsForPersistence = (
@@ -651,6 +1410,312 @@ const reviveWorkspaceSnapshot = (
     generatedArtifacts: reviveArtifacts(snapshot.generatedArtifacts || []),
     currentNote: snapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
     audioSettings: snapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS }
+  }
+}
+
+const normalizeChatHistoryEntries = (history: unknown): ChatHistory => {
+  if (!Array.isArray(history)) return []
+
+  return history
+    .map((entry) => {
+      if (!isRecord(entry)) return null
+      const role =
+        entry.role === "assistant" || entry.role === "system"
+          ? entry.role
+          : entry.role === "user"
+            ? "user"
+            : null
+      const content = typeof entry.content === "string" ? entry.content : ""
+      if (!role || !content) return null
+      const normalized: ChatHistory[number] = { role, content }
+      if (typeof entry.image === "string") {
+        normalized.image = entry.image
+      }
+      if (typeof entry.messageType === "string") {
+        normalized.messageType = entry.messageType
+      }
+      return normalized
+    })
+    .filter((entry): entry is ChatHistory[number] => Boolean(entry))
+}
+
+const normalizeWorkspaceSessionMessages = (messages: unknown): Message[] => {
+  if (!Array.isArray(messages)) return []
+  return messages
+    .filter((message): message is Message => isRecord(message))
+    .map((message) => ({ ...message }))
+}
+
+const deriveHistoryFromMessages = (messages: Message[]): ChatHistory =>
+  messages
+    .map((message) => {
+      const content = typeof message.message === "string" ? message.message : ""
+      if (!content) return null
+      const role =
+        message.role && ["assistant", "system", "user"].includes(message.role)
+          ? message.role
+          : message.isBot
+            ? "assistant"
+            : "user"
+      return { role, content }
+    })
+    .filter((entry): entry is ChatHistory[number] => Boolean(entry))
+
+const normalizeWorkspaceChatSession = (
+  workspaceId: string,
+  sessionCandidate: unknown
+): WorkspaceChatSession | null => {
+  if (!isRecord(sessionCandidate)) return null
+
+  const messages = normalizeWorkspaceSessionMessages(sessionCandidate.messages)
+  const normalizedHistory = normalizeChatHistoryEntries(sessionCandidate.history)
+  const history =
+    normalizedHistory.length > 0
+      ? normalizedHistory
+      : deriveHistoryFromMessages(messages)
+  const historyId =
+    typeof sessionCandidate.historyId === "string"
+      ? sessionCandidate.historyId
+      : null
+  const serverChatId =
+    typeof sessionCandidate.serverChatId === "string"
+      ? sessionCandidate.serverChatId
+      : null
+
+  // Drop empty shells so we don't keep expanding persisted payloads with no data.
+  if (
+    messages.length === 0 &&
+    history.length === 0 &&
+    historyId === null &&
+    serverChatId === null
+  ) {
+    return null
+  }
+
+  return {
+    messages,
+    history,
+    historyId,
+    serverChatId
+  }
+}
+
+const normalizeWorkspaceChatSessionsForRehydrate = (
+  candidate: unknown
+): Record<string, WorkspaceChatSession> => {
+  const normalized: Record<string, WorkspaceChatSession> = {}
+
+  if (Array.isArray(candidate)) {
+    for (const entry of candidate) {
+      if (!isRecord(entry)) continue
+      const workspaceId =
+        typeof entry.workspaceId === "string"
+          ? entry.workspaceId
+          : typeof entry.id === "string"
+            ? entry.id
+            : null
+      if (!workspaceId) continue
+      const sessionCandidate = isRecord(entry.session)
+        ? entry.session
+        : entry
+      const session = normalizeWorkspaceChatSession(workspaceId, sessionCandidate)
+      if (session) {
+        normalized[workspaceId] = session
+      }
+    }
+    return normalized
+  }
+
+  if (!isRecord(candidate)) return normalized
+
+  for (const [workspaceId, entry] of Object.entries(candidate)) {
+    const session = normalizeWorkspaceChatSession(workspaceId, entry)
+    if (session) {
+      normalized[workspaceId] = session
+    }
+  }
+
+  return normalized
+}
+
+const normalizeWorkspaceSnapshotsForRehydrate = (
+  candidate: unknown
+): Record<string, WorkspaceSnapshot> => {
+  const normalized: Record<string, WorkspaceSnapshot> = {}
+
+  if (Array.isArray(candidate)) {
+    for (const entry of candidate) {
+      if (!isRecord(entry)) continue
+      const workspaceId =
+        typeof entry.workspaceId === "string"
+          ? entry.workspaceId
+          : typeof entry.id === "string"
+            ? entry.id
+            : null
+      if (!workspaceId) continue
+      normalized[workspaceId] = reviveWorkspaceSnapshot(
+        workspaceId,
+        entry as WorkspaceSnapshot
+      )
+    }
+    return normalized
+  }
+
+  if (!isRecord(candidate)) return normalized
+
+  for (const [workspaceId, snapshot] of Object.entries(candidate)) {
+    if (!isRecord(snapshot)) continue
+    normalized[workspaceId] = reviveWorkspaceSnapshot(
+      workspaceId,
+      snapshot as WorkspaceSnapshot
+    )
+  }
+
+  return normalized
+}
+
+const coerceWorkspaceNoteForRehydrate = (candidate: unknown): WorkspaceNote => {
+  if (!isRecord(candidate)) {
+    return { ...DEFAULT_WORKSPACE_NOTE }
+  }
+
+  return {
+    id: typeof candidate.id === "number" ? candidate.id : undefined,
+    title: typeof candidate.title === "string" ? candidate.title : "",
+    content: typeof candidate.content === "string" ? candidate.content : "",
+    keywords: Array.isArray(candidate.keywords)
+      ? candidate.keywords.filter(
+          (keyword): keyword is string => typeof keyword === "string"
+        )
+      : [],
+    version: typeof candidate.version === "number" ? candidate.version : 1,
+    isDirty: Boolean(candidate.isDirty)
+  }
+}
+
+const coerceAudioSettingsForRehydrate = (
+  candidate: unknown
+): AudioGenerationSettings => {
+  if (!isRecord(candidate)) {
+    return { ...DEFAULT_AUDIO_SETTINGS }
+  }
+
+  return {
+    provider:
+      typeof candidate.provider === "string"
+        ? candidate.provider
+        : DEFAULT_AUDIO_SETTINGS.provider,
+    model:
+      typeof candidate.model === "string"
+        ? candidate.model
+        : DEFAULT_AUDIO_SETTINGS.model,
+    voice:
+      typeof candidate.voice === "string"
+        ? candidate.voice
+        : DEFAULT_AUDIO_SETTINGS.voice,
+    speed:
+      typeof candidate.speed === "number"
+        ? candidate.speed
+        : DEFAULT_AUDIO_SETTINGS.speed,
+    format:
+      typeof candidate.format === "string"
+        ? candidate.format
+        : DEFAULT_AUDIO_SETTINGS.format
+  }
+}
+
+const buildLegacyTopLevelSnapshotForMigration = (
+  workspaceId: string,
+  persisted: Record<string, unknown>
+): WorkspaceSnapshot | null => {
+  if (!workspaceId) return null
+
+  const sources = reviveSources(
+    Array.isArray(persisted.sources) ? (persisted.sources as WorkspaceSource[]) : []
+  )
+  const selectedSourceIds = (
+    Array.isArray(persisted.selectedSourceIds)
+      ? (persisted.selectedSourceIds as string[])
+      : []
+  ).filter((sourceId) => sources.some((source) => source.id === sourceId))
+  const generatedArtifacts = reviveArtifacts(
+    Array.isArray(persisted.generatedArtifacts)
+      ? (persisted.generatedArtifacts as GeneratedArtifact[])
+      : []
+  )
+  const resolvedWorkspaceTag =
+    typeof persisted.workspaceTag === "string" && persisted.workspaceTag.trim()
+      ? persisted.workspaceTag
+      : `workspace:${workspaceId.slice(0, 8)}`
+  const resolvedWorkspaceName =
+    typeof persisted.workspaceName === "string" && persisted.workspaceName.trim()
+      ? persisted.workspaceName
+      : "Untitled Workspace"
+
+  return {
+    workspaceId,
+    workspaceName: resolvedWorkspaceName,
+    workspaceTag: resolvedWorkspaceTag,
+    workspaceCreatedAt: reviveDateOrNull(
+      persisted.workspaceCreatedAt as Date | string | null | undefined
+    ),
+    workspaceChatReferenceId:
+      typeof persisted.workspaceChatReferenceId === "string" &&
+      persisted.workspaceChatReferenceId.trim()
+        ? persisted.workspaceChatReferenceId
+        : workspaceId,
+    sources,
+    selectedSourceIds,
+    generatedArtifacts,
+    notes: typeof persisted.notes === "string" ? persisted.notes : "",
+    currentNote: coerceWorkspaceNoteForRehydrate(persisted.currentNote),
+    leftPaneCollapsed: Boolean(persisted.leftPaneCollapsed),
+    rightPaneCollapsed: Boolean(persisted.rightPaneCollapsed),
+    audioSettings: coerceAudioSettingsForRehydrate(persisted.audioSettings)
+  }
+}
+
+const migratePersistedWorkspaceState = (
+  candidate: unknown
+): PersistedWorkspaceState => {
+  const persisted = isRecord(candidate) ? candidate : {}
+
+  const normalizedSnapshots = normalizeWorkspaceSnapshotsForRehydrate(
+    persisted.workspaceSnapshots
+  )
+  const initialWorkspaceId =
+    typeof persisted.workspaceId === "string" ? persisted.workspaceId : ""
+  const legacySnapshot =
+    initialWorkspaceId && !normalizedSnapshots[initialWorkspaceId]
+      ? buildLegacyTopLevelSnapshotForMigration(initialWorkspaceId, persisted)
+      : null
+  if (legacySnapshot) {
+    normalizedSnapshots[legacySnapshot.workspaceId] = legacySnapshot
+  }
+
+  const resolvedWorkspaceId =
+    initialWorkspaceId || Object.keys(normalizedSnapshots)[0] || ""
+  if (resolvedWorkspaceId && !normalizedSnapshots[resolvedWorkspaceId]) {
+    normalizedSnapshots[resolvedWorkspaceId] = createEmptyWorkspaceSnapshot({
+      id: resolvedWorkspaceId,
+      name: "Untitled Workspace",
+      tag: `workspace:${resolvedWorkspaceId.slice(0, 8)}`,
+      createdAt: new Date()
+    })
+  }
+
+  return {
+    workspaceId: resolvedWorkspaceId,
+    savedWorkspaces: Array.isArray(persisted.savedWorkspaces)
+      ? (persisted.savedWorkspaces as SavedWorkspace[])
+      : [],
+    archivedWorkspaces: Array.isArray(persisted.archivedWorkspaces)
+      ? (persisted.archivedWorkspaces as SavedWorkspace[])
+      : [],
+    workspaceSnapshots: normalizedSnapshots,
+    workspaceChatSessions: buildPersistedWorkspaceChatSessions(
+      normalizeWorkspaceChatSessionsForRehydrate(persisted.workspaceChatSessions)
+    )
   }
 }
 
@@ -870,6 +1935,24 @@ const cloneWorkspaceChatSession = (
   historyId: session.historyId,
   serverChatId: session.serverChatId
 })
+
+const buildPersistedWorkspaceChatSession = (
+  session: WorkspaceChatSession
+): PersistedWorkspaceChatSession => ({
+  messages: session.messages.map((message) => ({ ...message })),
+  historyId: session.historyId,
+  serverChatId: session.serverChatId
+})
+
+const buildPersistedWorkspaceChatSessions = (
+  sessions: Record<string, WorkspaceChatSession>
+): Record<string, PersistedWorkspaceChatSession> => {
+  const persisted: Record<string, PersistedWorkspaceChatSession> = {}
+  for (const [workspaceId, session] of Object.entries(sessions)) {
+    persisted[workspaceId] = buildPersistedWorkspaceChatSession(session)
+  }
+  return persisted
+}
 
 const createFallbackWorkspaceSnapshot = (): WorkspaceSnapshot => {
   const replacementId = generateWorkspaceId()
@@ -2081,6 +3164,8 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
     {
       name: WORKSPACE_STORAGE_KEY,
       storage: createJSONStorage(() => createWorkspaceStorage()),
+      version: 1,
+      migrate: (persistedState) => migratePersistedWorkspaceState(persistedState),
       // Only persist essential state, not transient UI state
       partialize: (state): PersistedWorkspaceState => {
         const nextSnapshots = { ...state.workspaceSnapshots }
@@ -2098,59 +3183,49 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           }
         }
 
-        return {
-          // Workspace identity
+        const persistedState: PersistedWorkspaceState = {
+          // Active workspace identity
           workspaceId: state.workspaceId,
-          workspaceName: state.workspaceName,
-          workspaceTag: state.workspaceTag,
-          workspaceCreatedAt: state.workspaceCreatedAt,
-          workspaceChatReferenceId:
-            state.workspaceChatReferenceId || state.workspaceId,
 
-          // Sources
-          sources: state.sources,
-          selectedSourceIds: state.selectedSourceIds,
-
-          // Studio outputs (note: audioUrl blobs won't survive reload, but text content will)
-          generatedArtifacts: sanitizeArtifactsForPersistence(
-            state.generatedArtifacts
-          ),
-          notes: state.notes,
-          currentNote: state.currentNote,
-
-          // Pane preferences
-          leftPaneCollapsed: state.leftPaneCollapsed,
-          rightPaneCollapsed: state.rightPaneCollapsed,
-
-          // Audio generation settings
-          audioSettings: state.audioSettings,
-
-          // Saved workspaces list
+          // Workspace lists
           savedWorkspaces: state.savedWorkspaces,
           archivedWorkspaces: state.archivedWorkspaces,
 
           // Workspace snapshots
           workspaceSnapshots: persistedSnapshots,
 
-          // Workspace chat sessions
-          workspaceChatSessions: state.workspaceChatSessions
+          // Workspace chat sessions (messages canonical; history derived on rehydrate)
+          workspaceChatSessions: buildPersistedWorkspaceChatSessions(
+            state.workspaceChatSessions
+          )
         }
+
+        recordWorkspacePersistenceDiagnostics(
+          WORKSPACE_STORAGE_KEY,
+          persistedState
+        )
+
+        return persistedState
       },
       // Rehydrate dates properly and handle migration
       onRehydrateStorage: () => (state) => {
         if (state) {
           // Ensure dates are Date objects after rehydration
           state.workspaceCreatedAt = reviveDateOrNull(state.workspaceCreatedAt)
-          state.sources = reviveSources(state.sources || [])
+          state.sources = reviveSources(
+            Array.isArray(state.sources) ? state.sources : []
+          )
           const readySourceIds = new Set(
             state.sources
               .filter((source) => getWorkspaceSourceStatus(source) === "ready")
               .map((source) => source.id)
           )
-          state.selectedSourceIds = (state.selectedSourceIds || []).filter((id) =>
-            readySourceIds.has(id)
-          )
-          const persistedArtifacts = state.generatedArtifacts || []
+          state.selectedSourceIds = (
+            Array.isArray(state.selectedSourceIds) ? state.selectedSourceIds : []
+          ).filter((id) => readySourceIds.has(id))
+          const persistedArtifacts = Array.isArray(state.generatedArtifacts)
+            ? state.generatedArtifacts
+            : []
           const interruptedArtifactCount = persistedArtifacts.filter(
             (artifact) =>
               (artifact?.status || "").toString().toLowerCase() === "generating"
@@ -2176,24 +3251,21 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
           }
 
           // Migration: ensure savedWorkspaces exists and dates are properly converted
-          state.savedWorkspaces = (state.savedWorkspaces || []).map(
-            reviveSavedWorkspace
-          )
-          state.archivedWorkspaces = (state.archivedWorkspaces || []).map(
-            reviveSavedWorkspace
-          )
+          state.savedWorkspaces = (
+            Array.isArray(state.savedWorkspaces) ? state.savedWorkspaces : []
+          ).map(reviveSavedWorkspace)
+          state.archivedWorkspaces = (
+            Array.isArray(state.archivedWorkspaces) ? state.archivedWorkspaces : []
+          ).map(reviveSavedWorkspace)
 
           // Migration: ensure workspace snapshots exist and are hydrated
-          const rawSnapshots = state.workspaceSnapshots || {}
-          const hydratedSnapshots: Record<string, WorkspaceSnapshot> = {}
-          for (const [workspaceId, snapshot] of Object.entries(rawSnapshots)) {
-            hydratedSnapshots[workspaceId] = reviveWorkspaceSnapshot(
-              workspaceId,
-              snapshot
+          state.workspaceSnapshots = normalizeWorkspaceSnapshotsForRehydrate(
+            state.workspaceSnapshots
+          )
+          state.workspaceChatSessions =
+            normalizeWorkspaceChatSessionsForRehydrate(
+              state.workspaceChatSessions
             )
-          }
-          state.workspaceSnapshots = hydratedSnapshots
-          state.workspaceChatSessions = state.workspaceChatSessions || {}
 
           // Ensure active workspace snapshot exists and use it as canonical source
           if (state.workspaceId) {

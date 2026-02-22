@@ -5,6 +5,7 @@ import contextlib
 import inspect
 import json
 import os
+import threading
 import tempfile
 from types import SimpleNamespace
 from typing import Any
@@ -37,13 +38,16 @@ from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_sess
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as get_auth_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 router = APIRouter(prefix="/acp", tags=["acp"])
 
@@ -69,6 +73,102 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     ValueError,
 )
 
+_ACP_WS_QUOTA_LOCK = threading.Lock()
+_ACP_WS_ACTIVE_TOTAL = 0
+_ACP_WS_ACTIVE_BY_USER: dict[str, int] = {}
+_ACP_WS_ACTIVE_BY_PERSONA: dict[str, int] = {}
+_ACP_WS_ACTIVE_BY_SESSION: dict[str, int] = {}
+
+
+def _acp_ws_limit(env_key: str, default: int) -> int:
+    try:
+        return int(os.getenv(env_key, str(default)))
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return int(default)
+
+
+def _acp_quota_inc(bucket: dict[str, int], key: str | None) -> None:
+    if key is None:
+        return
+    bucket[key] = int(bucket.get(key, 0)) + 1
+
+
+def _acp_quota_dec(bucket: dict[str, int], key: str | None) -> None:
+    if key is None:
+        return
+    current = int(bucket.get(key, 0))
+    if current <= 1:
+        bucket.pop(key, None)
+    else:
+        bucket[key] = current - 1
+
+
+def _acp_ws_try_acquire_quota(
+    *,
+    user_id: int,
+    session_id: str,
+    persona_id: str | None,
+) -> tuple[dict[str, str | None] | None, str | None]:
+    global _ACP_WS_ACTIVE_TOTAL
+    total_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_TOTAL", 1024)
+    per_user_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_PER_USER", 64)
+    per_persona_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_PER_PERSONA", 32)
+    per_session_limit = _acp_ws_limit("ACP_WS_MAX_CONNECTIONS_PER_SESSION", 16)
+
+    user_key = str(user_id)
+    session_key = str(session_id).strip() if session_id else None
+    persona_key = str(persona_id).strip() if persona_id else None
+
+    with _ACP_WS_QUOTA_LOCK:
+        if total_limit > 0 and _ACP_WS_ACTIVE_TOTAL >= total_limit:
+            return None, "total_connections_quota_exceeded"
+        if per_user_limit > 0 and int(_ACP_WS_ACTIVE_BY_USER.get(user_key, 0)) >= per_user_limit:
+            return None, "user_connections_quota_exceeded"
+        if persona_key and per_persona_limit > 0 and int(_ACP_WS_ACTIVE_BY_PERSONA.get(persona_key, 0)) >= per_persona_limit:
+            return None, "persona_connections_quota_exceeded"
+        if session_key and per_session_limit > 0 and int(_ACP_WS_ACTIVE_BY_SESSION.get(session_key, 0)) >= per_session_limit:
+            return None, "session_connections_quota_exceeded"
+
+        _ACP_WS_ACTIVE_TOTAL += 1
+        _acp_quota_inc(_ACP_WS_ACTIVE_BY_USER, user_key)
+        _acp_quota_inc(_ACP_WS_ACTIVE_BY_PERSONA, persona_key)
+        _acp_quota_inc(_ACP_WS_ACTIVE_BY_SESSION, session_key)
+        return {
+            "user_key": user_key,
+            "persona_key": persona_key,
+            "session_key": session_key,
+        }, None
+
+
+def _acp_ws_release_quota(token: dict[str, str | None] | None) -> None:
+    global _ACP_WS_ACTIVE_TOTAL
+    if not token:
+        return
+    with _ACP_WS_QUOTA_LOCK:
+        if _ACP_WS_ACTIVE_TOTAL > 0:
+            _ACP_WS_ACTIVE_TOTAL -= 1
+        _acp_quota_dec(_ACP_WS_ACTIVE_BY_USER, token.get("user_key"))
+        _acp_quota_dec(_ACP_WS_ACTIVE_BY_PERSONA, token.get("persona_key"))
+        _acp_quota_dec(_ACP_WS_ACTIVE_BY_SESSION, token.get("session_key"))
+
+
+async def _resolve_acp_session_persona_id(client: Any, session_id: str, user_id: int) -> str | None:
+    getter = getattr(client, "get_session_metadata", None)
+    if not callable(getter):
+        return None
+    try:
+        metadata = await getter(session_id, user_id=user_id)
+    except TypeError:
+        metadata = await getter(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    persona_id = metadata.get("persona_id")
+    if persona_id is None:
+        return None
+    return str(persona_id)
+
 
 # -----------------------------------------------------------------------------
 # WebSocket Authentication Helper
@@ -77,14 +177,18 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
 class _AuthNZJWTManagerCompat:
     """Compatibility shim exposing verify_token() with token_data.user_id."""
 
-    def verify_token(self, token: str) -> SimpleNamespace | None:
-        token_data = get_jwt_service().decode_access_token(token)
-        if not isinstance(token_data, dict):
+    async def verify_token(self, token: str) -> SimpleNamespace | None:
+        try:
+            payload = get_jwt_service().decode_access_token(token)
+            session_manager = await get_session_manager()
+            if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                return None
+            user_id = payload.get("user_id") or payload.get("sub")
+            if user_id is None:
+                return None
+            return SimpleNamespace(user_id=int(user_id))
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             return None
-        user_id = token_data.get("sub")
-        if user_id is None:
-            return None
-        return SimpleNamespace(user_id=int(user_id))
 
 
 def get_jwt_manager() -> _AuthNZJWTManagerCompat:
@@ -103,6 +207,8 @@ async def _authenticate_ws(
         try:
             jwtm = get_jwt_manager()
             token_data = jwtm.verify_token(token)
+            if inspect.isawaitable(token_data):
+                token_data = await token_data
             if token_data and getattr(token_data, "user_id", None):
                 return int(token_data.user_id)
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
@@ -113,6 +219,7 @@ async def _authenticate_ws(
         try:
             settings = get_auth_settings()
             auth_mode = str(getattr(settings, "AUTH_MODE", "single_user")).strip().lower()
+            client_ip = resolve_client_ip(websocket, settings)
             if auth_mode == "single_user":
                 allowed_keys: set[str] = set()
                 primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
@@ -121,14 +228,19 @@ async def _authenticate_ws(
                 env_primary = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
                 if isinstance(env_primary, str) and env_primary.strip():
                     allowed_keys.add(env_primary.strip())
-                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-                if isinstance(test_key, str) and test_key.strip():
-                    allowed_keys.add(test_key.strip())
-                if api_key in allowed_keys:
+                if is_explicit_pytest_runtime():
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                    if isinstance(test_key, str) and test_key.strip():
+                        allowed_keys.add(test_key.strip())
+                if api_key in allowed_keys and is_single_user_ip_allowed(client_ip, settings):
                     return int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             else:
                 api_mgr = await get_api_key_manager()
-                info = await api_mgr.validate_api_key(api_key=api_key, required_scope="read")
+                info = await api_mgr.validate_api_key(
+                    api_key=api_key,
+                    required_scope="read",
+                    ip_address=client_ip,
+                )
                 user_id = info.get("user_id") if isinstance(info, dict) else None
                 if user_id is not None:
                     return int(user_id)
@@ -230,6 +342,17 @@ async def acp_session_stream(
         return
 
     # Set up WebSocket stream wrapper for metrics
+    persona_id = await _resolve_acp_session_persona_id(client, session_id=session_id, user_id=int(user_id))
+    ws_quota_token, _ws_quota_reason = _acp_ws_try_acquire_quota(
+        user_id=int(user_id),
+        session_id=session_id,
+        persona_id=persona_id,
+    )
+    if ws_quota_token is None:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4429)
+        return
+
     stream = WebSocketStream(
         websocket,
         heartbeat_interval_s=30.0,
@@ -237,13 +360,15 @@ async def acp_session_stream(
         close_on_done=False,
         labels={"component": "acp", "endpoint": "acp_session_stream"},
     )
+    send_callback: Any | None = None
 
     try:
         await stream.start()
 
         # Define send callback for broadcasting
-        async def send_callback(message: dict[str, Any]) -> None:
+        async def _send_callback(message: dict[str, Any]) -> None:
             await stream.send_json(message)
+        send_callback = _send_callback
 
         # Register this WebSocket with the session
         await client.register_websocket(session_id, send_callback)
@@ -285,12 +410,14 @@ async def acp_session_stream(
         logger.exception("WebSocket error for ACP session {}", session_id)
     finally:
         # Unregister WebSocket
-        try:
-            client = await get_runner_client()
-            await client.unregister_websocket(session_id, send_callback)
-        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
+        if send_callback is not None:
+            try:
+                client = await get_runner_client()
+                await client.unregister_websocket(session_id, send_callback)
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                pass
         await stream.stop()
+        _acp_ws_release_quota(ws_quota_token)
 
 
 @router.websocket("/sessions/{session_id}/ssh")
@@ -323,6 +450,17 @@ async def acp_session_ssh(
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4404)
+        return
+
+    persona_id = await _resolve_acp_session_persona_id(client, session_id=session_id, user_id=int(user_id))
+    ws_quota_token, _ws_quota_reason = _acp_ws_try_acquire_quota(
+        user_id=int(user_id),
+        session_id=session_id,
+        persona_id=persona_id,
+    )
+    if ws_quota_token is None:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4429)
         return
 
     await websocket.accept()
@@ -468,6 +606,7 @@ async def acp_session_ssh(
         if temp_key_path:
             with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
                 os.unlink(temp_key_path)
+        _acp_ws_release_quota(ws_quota_token)
 
 async def _handle_client_message(
     client: Any,
@@ -727,6 +866,15 @@ async def acp_session_new(
             create_session_kwargs["agent_type"] = payload.agent_type
         if "user_id" in create_session_params:
             create_session_kwargs["user_id"] = user.id
+        optional_tenancy_args = (
+            ("persona_id", payload.persona_id),
+            ("workspace_id", payload.workspace_id),
+            ("workspace_group_id", payload.workspace_group_id),
+            ("scope_snapshot_id", payload.scope_snapshot_id),
+        )
+        for field_name, field_value in optional_tenancy_args:
+            if field_value is not None and field_name in create_session_params:
+                create_session_kwargs[field_name] = field_value
         session_id = await client.create_session(
             payload.cwd,
             mcp_servers_dicts,
@@ -753,6 +901,15 @@ async def acp_session_new(
             resolved_agent_type = default_agent
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             resolved_agent_type = "custom"
+    resolved_persona_id = payload.persona_id
+    resolved_workspace_id = payload.workspace_id
+    resolved_workspace_group_id = payload.workspace_group_id
+    resolved_scope_snapshot_id = payload.scope_snapshot_id
+    if sandbox_meta:
+        resolved_persona_id = resolved_persona_id or sandbox_meta.get("persona_id")
+        resolved_workspace_id = resolved_workspace_id or sandbox_meta.get("workspace_id")
+        resolved_workspace_group_id = resolved_workspace_group_id or sandbox_meta.get("workspace_group_id")
+        resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
     # Persist session metadata and emit SSE event
     try:
@@ -764,6 +921,10 @@ async def acp_session_new(
             name=session_name,
             cwd=payload.cwd,
             tags=payload.tags,
+            persona_id=resolved_persona_id,
+            workspace_id=resolved_workspace_id,
+            workspace_group_id=resolved_workspace_group_id,
+            scope_snapshot_id=resolved_scope_snapshot_id,
         )
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.warning("Failed to persist ACP session metadata for {}", session_id)
@@ -787,6 +948,10 @@ async def acp_session_new(
         sandbox_run_id=(sandbox_meta or {}).get("sandbox_run_id") if sandbox_meta else None,
         ssh_ws_url=(sandbox_meta or {}).get("ssh_ws_url") if sandbox_meta else None,
         ssh_user=(sandbox_meta or {}).get("ssh_user") if sandbox_meta else None,
+        persona_id=resolved_persona_id,
+        workspace_id=resolved_workspace_id,
+        workspace_group_id=resolved_workspace_group_id,
+        scope_snapshot_id=resolved_scope_snapshot_id,
     )
 
 

@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict, deque
 from collections.abc import Coroutine
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from loguru import logger
@@ -49,6 +50,14 @@ _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _is_self_referential_agent_command(command: str) -> bool:
+    """Return True when ACP runner is configured to launch itself as downstream."""
+    normalized = (command or "").strip()
+    if not normalized:
+        return False
+    return Path(normalized).name == "tldw-agent-acp"
+
+
 @dataclass
 class SandboxSessionHandle:
     session_id: str
@@ -62,6 +71,10 @@ class SandboxSessionHandle:
     ssh_port: int | None = None
     ssh_private_key: str | None = None
     agent_capabilities: dict[str, Any] | None = None
+    persona_id: str | None = None
+    workspace_id: str | None = None
+    workspace_group_id: str | None = None
+    scope_snapshot_id: str | None = None
 
 
 class ACPSandboxRunnerManager:
@@ -75,6 +88,88 @@ class ACPSandboxRunnerManager:
         self._ws_registry_lock = asyncio.Lock()
         self._ssh_ports_in_use: set[int] = set()
         self._ssh_ports_lock = asyncio.Lock()
+
+    def _control_record_from_handle(self, sess: SandboxSessionHandle) -> dict[str, Any]:
+        return {
+            "id": sess.session_id,
+            "user_id": int(sess.user_id),
+            "sandbox_session_id": sess.sandbox_session_id,
+            "run_id": sess.run_id,
+            "ssh_host": sess.ssh_host,
+            "ssh_port": sess.ssh_port,
+            "ssh_user": sess.ssh_user,
+            "ssh_private_key": sess.ssh_private_key,
+            "persona_id": sess.persona_id,
+            "workspace_id": sess.workspace_id,
+            "workspace_group_id": sess.workspace_group_id,
+            "scope_snapshot_id": sess.scope_snapshot_id,
+        }
+
+    def _get_sandbox_store(self) -> Any | None:
+        try:
+            sandbox_service = sandbox_ep._service  # type: ignore[attr-defined]
+            orch = getattr(sandbox_service, "_orch", None)
+            return getattr(orch, "_store", None)
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    def _store_control_record(self, sess: SandboxSessionHandle, *, required: bool = False) -> bool:
+        store = self._get_sandbox_store()
+        if store is None:
+            if required:
+                raise ACPResponseError("ACP sandbox control metadata store is unavailable")
+            return False
+        putter = getattr(store, "put_acp_session_control", None)
+        if not callable(putter):
+            if required:
+                raise ACPResponseError("ACP sandbox control metadata store does not support ACP session control")
+            return False
+        control = self._control_record_from_handle(sess)
+        try:
+            putter(
+                session_id=str(control.get("id") or ""),
+                user_id=control.get("user_id"),
+                sandbox_session_id=control.get("sandbox_session_id"),
+                run_id=control.get("run_id"),
+                ssh_host=control.get("ssh_host"),
+                ssh_port=control.get("ssh_port"),
+                ssh_user=control.get("ssh_user"),
+                ssh_private_key=control.get("ssh_private_key"),
+                persona_id=control.get("persona_id"),
+                workspace_id=control.get("workspace_id"),
+                workspace_group_id=control.get("workspace_group_id"),
+                scope_snapshot_id=control.get("scope_snapshot_id"),
+            )
+            return True
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as exc:
+            if required:
+                raise ACPResponseError("Failed to persist ACP sandbox session control metadata") from exc
+            return False
+
+    def _load_control_record(self, session_id: str) -> dict[str, Any] | None:
+        store = self._get_sandbox_store()
+        if store is None:
+            return None
+        getter = getattr(store, "get_acp_session_control", None)
+        if not callable(getter):
+            return None
+        try:
+            row = getter(str(session_id))
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            return None
+        return dict(row) if isinstance(row, dict) else None
+
+    def _delete_control_record(self, session_id: str) -> bool:
+        store = self._get_sandbox_store()
+        if store is None:
+            return False
+        deleter = getattr(store, "delete_acp_session_control", None)
+        if not callable(deleter):
+            return False
+        try:
+            return bool(deleter(str(session_id)))
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            return False
 
     @property
     def agent_capabilities(self) -> dict[str, Any]:
@@ -103,11 +198,23 @@ class ACPSandboxRunnerManager:
         mcp_servers: list[dict[str, Any]] | None = None,
         agent_type: str | None = None,
         user_id: int | None = None,
+        persona_id: str | None = None,
+        workspace_id: str | None = None,
+        workspace_group_id: str | None = None,
+        scope_snapshot_id: str | None = None,
     ) -> str:
         if not self.config.enabled:
             raise ACPResponseError("ACP sandbox mode is not enabled")
         if not self.config.agent_command:
             raise ACPResponseError("ACP_SANDBOX_AGENT_COMMAND is required for sandbox mode")
+        if _is_self_referential_agent_command(self.config.agent_command):
+            raise ACPResponseError(
+                "ACP_SANDBOX_AGENT_COMMAND cannot be tldw-agent-acp. "
+                "Set it to a downstream ACP-compatible coding agent command "
+                "(for example: claude, codex, or opencode)."
+            )
+        if user_id is None:
+            raise ACPResponseError("ACP sandbox sessions require an authenticated user_id")
         if cwd and cwd != "/workspace":
             logger.warning("ACP sandbox ignores host cwd '{}' (using /workspace inside container)", cwd)
         try:
@@ -138,20 +245,32 @@ class ACPSandboxRunnerManager:
         ssh_port: int | None = None
         ssh_key_priv: str | None = None
         ssh_key_pub: str | None = None
+        acp_session_id: str | None = None
 
         try:
             # Create sandbox session
             sess_spec = SessionSpec(
                 runtime=RuntimeType(self.config.runtime),
                 base_image=self.config.base_image,
-                network_policy=self.config.network_policy or "allow_all",
+                network_policy=self.config.network_policy or "deny_all",
+                persona_id=persona_id,
+                workspace_id=workspace_id,
+                workspace_group_id=workspace_group_id,
+                scope_snapshot_id=scope_snapshot_id,
             )
             sandbox_session = sandbox_service.create_session(
-                user_id=user_id or 0,
+                user_id=user_id,
                 spec=sess_spec,
                 spec_version="1.0",
                 idem_key=None,
-                raw_body={"runtime": self.config.runtime, "base_image": self.config.base_image},
+                raw_body={
+                    "runtime": self.config.runtime,
+                    "base_image": self.config.base_image,
+                    "persona_id": persona_id,
+                    "workspace_id": workspace_id,
+                    "workspace_group_id": workspace_group_id,
+                    "scope_snapshot_id": scope_snapshot_id,
+                },
             )
 
             if self.config.ssh_enabled:
@@ -164,16 +283,18 @@ class ACPSandboxRunnerManager:
                 "ACP_AGENT_ARGS_JSON": json.dumps(self.config.agent_args),
                 "ACP_AGENT_ENV_JSON": json.dumps(self.config.agent_env),
                 "ACP_WORKSPACE_ROOT": "/workspace",
+                "ACP_RUNTIME_HOME": "/workspace/.acp-home",
             }
             if self.config.ssh_enabled and ssh_key_pub:
                 env["ACP_SSH_AUTHORIZED_KEY"] = ssh_key_pub
+                env["ACP_SSH_PORT"] = str(int(self.config.ssh_container_port))
 
             port_mappings: list[dict[str, str | int]] = []
             if self.config.ssh_enabled and ssh_port is not None:
                 port_mappings = [{
                     "host_ip": self.config.ssh_host,
                     "host_port": ssh_port,
-                    "container_port": 22,
+                    "container_port": int(self.config.ssh_container_port),
                 }]
 
             run_spec = RunSpec(
@@ -183,18 +304,29 @@ class ACPSandboxRunnerManager:
                 command=["/usr/local/bin/tldw-acp-entrypoint"],
                 env=env,
                 interactive=True,
-                run_as_root=True,
-                read_only_root=False,
-                network_policy=self.config.network_policy or "allow_all",
+                run_as_root=bool(self.config.run_as_root),
+                read_only_root=bool(self.config.read_only_root),
+                network_policy=self.config.network_policy or "deny_all",
                 port_mappings=port_mappings,
+                persona_id=persona_id,
+                workspace_id=workspace_id,
+                workspace_group_id=workspace_group_id,
+                scope_snapshot_id=scope_snapshot_id,
             )
 
             status = sandbox_service.start_run_scaffold(
-                user_id=user_id or 0,
+                user_id=user_id,
                 spec=run_spec,
                 spec_version="1.0",
                 idem_key=None,
-                raw_body={"runtime": self.config.runtime, "base_image": self.config.base_image},
+                raw_body={
+                    "runtime": self.config.runtime,
+                    "base_image": self.config.base_image,
+                    "persona_id": persona_id,
+                    "workspace_id": workspace_id,
+                    "workspace_group_id": workspace_group_id,
+                    "scope_snapshot_id": scope_snapshot_id,
+                },
             )
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             if status is not None:
@@ -254,12 +386,17 @@ class ACPSandboxRunnerManager:
             session_id = (session_new.result or {}).get("sessionId")
             if not session_id:
                 raise ACPResponseError("Missing sessionId in ACP sandbox response")
+            acp_session_id = str(session_id)
 
             handle = SandboxSessionHandle(
                 session_id=session_id,
-                user_id=user_id or 0,
+                user_id=user_id,
                 sandbox_session_id=sandbox_session.id,
                 run_id=status.id,
+                persona_id=persona_id,
+                workspace_id=workspace_id,
+                workspace_group_id=workspace_group_id,
+                scope_snapshot_id=scope_snapshot_id,
                 client=client,
                 reader_task=reader_task,
                 ssh_user=self.config.ssh_user if self.config.ssh_enabled else None,
@@ -272,6 +409,7 @@ class ACPSandboxRunnerManager:
             async with self._sessions_lock:
                 self._sessions[session_id] = handle
 
+            self._store_control_record(handle, required=True)
             session_registered = True
             return session_id
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -279,6 +417,11 @@ class ACPSandboxRunnerManager:
                 reader_task.cancel()
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 await client.close()
+            if acp_session_id:
+                async with self._sessions_lock:
+                    self._sessions.pop(acp_session_id, None)
+                self._updates.pop(acp_session_id, None)
+                self._delete_control_record(acp_session_id)
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 sandbox_service.cancel_run(status.id)
             with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
@@ -306,30 +449,42 @@ class ACPSandboxRunnerManager:
 
     async def close_session(self, session_id: str) -> None:
         sess = await self._get_session(session_id, required=False)
-        if not sess:
+        control = self._load_control_record(session_id) if not sess else self._control_record_from_handle(sess)
+        if not sess and not control:
             return
-        with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
-            await sess.client.call("_tldw/session/close", {"sessionId": session_id})
+        if sess:
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await sess.client.call("_tldw/session/close", {"sessionId": session_id})
+            try:
+                if sess.reader_task:
+                    sess.reader_task.cancel()
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+                pass
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await sess.client.close()
+        run_id = str((control or {}).get("run_id") or "")
+        sandbox_session_id = str((control or {}).get("sandbox_session_id") or "")
+        ssh_port_raw = (control or {}).get("ssh_port")
         try:
-            if sess.reader_task:
-                sess.reader_task.cancel()
+            ssh_port = int(ssh_port_raw) if ssh_port_raw is not None else None
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            ssh_port = None
+        try:
+            if run_id:
+                sandbox_ep._service.cancel_run(run_id)  # type: ignore[attr-defined]
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
-        with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
-            await sess.client.close()
         try:
-            sandbox_ep._service.cancel_run(sess.run_id)  # type: ignore[attr-defined]
+            if sandbox_session_id:
+                sandbox_ep._service.destroy_session(sandbox_session_id)  # type: ignore[attr-defined]
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
-            sandbox_ep._service.destroy_session(sess.sandbox_session_id)  # type: ignore[attr-defined]
-        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
-            pass
-        if sess.ssh_port:
-            await self._release_ssh_port(sess.ssh_port)
+        if ssh_port:
+            await self._release_ssh_port(ssh_port)
         async with self._sessions_lock:
             self._sessions.pop(session_id, None)
         self._updates.pop(session_id, None)
+        self._delete_control_record(session_id)
 
     def pop_updates(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         updates = []
@@ -342,31 +497,63 @@ class ACPSandboxRunnerManager:
 
     async def verify_session_access(self, session_id: str, user_id: int) -> bool:
         """Verify that the given user owns the sandbox-backed ACP session."""
-        sess = await self._get_session(session_id, required=False)
-        return bool(sess and int(sess.user_id) == int(user_id))
+        control = await self._get_session_control_record(session_id)
+        if not control:
+            return False
+        owner = control.get("user_id")
+        if owner is None:
+            return False
+        try:
+            return int(owner) == int(user_id)
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            return False
 
     # -------------------------------------------------------------------------
     # SSH metadata
     # -------------------------------------------------------------------------
     async def get_ssh_info(self, session_id: str, user_id: int | None = None) -> tuple[str, int, str, str] | None:
-        sess = await self._get_session(session_id, required=False)
-        if sess and user_id is not None and sess.user_id != user_id:
+        control = await self._get_session_control_record(session_id)
+        if not control:
             return None
-        if not sess or not sess.ssh_host or not sess.ssh_port or not sess.ssh_user or not sess.ssh_private_key:
+        owner = control.get("user_id")
+        if user_id is not None and owner is not None:
+            try:
+                if int(owner) != int(user_id):
+                    return None
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+                return None
+        ssh_host = control.get("ssh_host")
+        ssh_port = control.get("ssh_port")
+        ssh_user = control.get("ssh_user")
+        ssh_private_key = control.get("ssh_private_key")
+        if not ssh_host or ssh_port is None or not ssh_user or not ssh_private_key:
             return None
-        return sess.ssh_host, sess.ssh_port, sess.ssh_user, sess.ssh_private_key
+        try:
+            return str(ssh_host), int(ssh_port), str(ssh_user), str(ssh_private_key)
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            return None
 
     async def get_session_metadata(self, session_id: str, user_id: int | None = None) -> dict[str, Any] | None:
-        sess = await self._get_session(session_id, required=False)
-        if sess and user_id is not None and sess.user_id != user_id:
+        control = await self._get_session_control_record(session_id)
+        if not control:
             return None
-        if not sess:
-            return None
+        owner = control.get("user_id")
+        if user_id is not None and owner is not None:
+            try:
+                if int(owner) != int(user_id):
+                    return None
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+                return None
+        session_has_ssh = bool(control.get("ssh_user"))
         return {
-            "sandbox_session_id": sess.sandbox_session_id,
-            "sandbox_run_id": sess.run_id,
-            "ssh_ws_url": f"/api/v1/acp/sessions/{session_id}/ssh" if sess.ssh_user else None,
-            "ssh_user": sess.ssh_user,
+            "sandbox_session_id": control.get("sandbox_session_id"),
+            "sandbox_run_id": control.get("run_id"),
+            "ssh_ws_url": f"/api/v1/acp/sessions/{session_id}/ssh" if session_has_ssh else None,
+            "ssh_user": control.get("ssh_user"),
+            "persona_id": control.get("persona_id"),
+            "workspace_id": control.get("workspace_id"),
+            "workspace_group_id": control.get("workspace_group_id"),
+            "scope_snapshot_id": control.get("scope_snapshot_id"),
         }
 
     # -------------------------------------------------------------------------
@@ -598,12 +785,132 @@ class ACPSandboxRunnerManager:
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"ACP sandbox reader loop error: {e}")
 
+    async def _get_session_control_record(self, session_id: str) -> dict[str, Any] | None:
+        async with self._sessions_lock:
+            sess = self._sessions.get(session_id)
+        if sess:
+            return self._control_record_from_handle(sess)
+        return self._load_control_record(session_id)
+
+    async def _attach_to_existing_session(self, control: dict[str, Any]) -> SandboxSessionHandle | None:
+        session_id = str(control.get("id") or "")
+        run_id = str(control.get("run_id") or "")
+        sandbox_session_id = str(control.get("sandbox_session_id") or "")
+        if not session_id or not run_id or not sandbox_session_id:
+            return None
+        try:
+            user_id = int(control.get("user_id"))
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            return None
+
+        hub = get_hub()
+        q = hub.subscribe_with_buffer(run_id)
+
+        async def _send_bytes(data: bytes) -> None:
+            try:
+                hub.push_stdin(run_id, data)
+            except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+                logger.debug(f"ACP sandbox stdin push failed (rehydrate): {e}")
+
+        client = ACPStreamClient(send_bytes=_send_bytes)
+        client.set_notification_handler(self._handle_notification)
+        client.set_request_handler(self._handle_request)
+        reader_task = asyncio.create_task(self._reader_loop(run_id, q, client))
+        try:
+            await client.start()
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                init_result = await client.call(
+                    "initialize",
+                    {
+                        "protocolVersion": 1,
+                        "clientCapabilities": {
+                            "fs": {"readTextFile": True, "writeTextFile": True},
+                            "terminal": True,
+                        },
+                        "clientInfo": {
+                            "name": "tldw-server",
+                            "title": "TLDW Server",
+                            "version": "0.1.0",
+                        },
+                    },
+                )
+                caps = init_result.result.get("agentCapabilities", {}) if init_result.result else {}
+                if isinstance(caps, dict) and caps:
+                    self._agent_capabilities = caps
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                reader_task.cancel()
+            with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                await client.close()
+            return None
+
+        ssh_port_raw = control.get("ssh_port")
+        try:
+            ssh_port = int(ssh_port_raw) if ssh_port_raw is not None else None
+        except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
+            ssh_port = None
+        if ssh_port is not None:
+            async with self._ssh_ports_lock:
+                self._ssh_ports_in_use.add(ssh_port)
+
+        return SandboxSessionHandle(
+            session_id=session_id,
+            user_id=user_id,
+            sandbox_session_id=sandbox_session_id,
+            run_id=run_id,
+            client=client,
+            reader_task=reader_task,
+            ssh_user=(str(control.get("ssh_user")) if control.get("ssh_user") is not None else None),
+            ssh_host=(str(control.get("ssh_host")) if control.get("ssh_host") is not None else None),
+            ssh_port=ssh_port,
+            ssh_private_key=(
+                str(control.get("ssh_private_key"))
+                if control.get("ssh_private_key") is not None
+                else None
+            ),
+            agent_capabilities=self._agent_capabilities,
+            persona_id=(str(control.get("persona_id")) if control.get("persona_id") is not None else None),
+            workspace_id=(str(control.get("workspace_id")) if control.get("workspace_id") is not None else None),
+            workspace_group_id=(
+                str(control.get("workspace_group_id"))
+                if control.get("workspace_group_id") is not None
+                else None
+            ),
+            scope_snapshot_id=(
+                str(control.get("scope_snapshot_id"))
+                if control.get("scope_snapshot_id") is not None
+                else None
+            ),
+        )
+
     async def _get_session(self, session_id: str, required: bool = True) -> SandboxSessionHandle | None:
         async with self._sessions_lock:
             sess = self._sessions.get(session_id)
-        if not sess and required:
+        if sess:
+            return sess
+
+        control = self._load_control_record(session_id)
+        if control:
+            restored = await self._attach_to_existing_session(control)
+            if restored is not None:
+                existing: SandboxSessionHandle | None = None
+                async with self._sessions_lock:
+                    existing = self._sessions.get(session_id)
+                    if existing is None:
+                        self._sessions[session_id] = restored
+                        existing = restored
+                if existing is not restored:
+                    with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                        restored.reader_task.cancel()
+                    with contextlib.suppress(_ACP_SANDBOX_NONCRITICAL_EXCEPTIONS):
+                        await restored.client.close()
+                else:
+                    self._store_control_record(existing)
+                return existing
+
+        if required:
             raise ACPResponseError("Unknown session")
-        return sess
+        return None
 
     def _generate_ssh_keypair(self) -> tuple[str, str]:
         try:

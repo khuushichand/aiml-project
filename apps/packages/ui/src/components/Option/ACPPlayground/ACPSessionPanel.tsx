@@ -1,21 +1,27 @@
 import React, { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Button, Empty, Popconfirm, Tooltip, Tag } from "antd"
-import { Plus, Folder, Trash2, X, ChevronRight, Bot } from "lucide-react"
+import { Button, Empty, Input, Popconfirm, Tooltip, Tag } from "antd"
+import { Plus, Folder, Trash2, X, ChevronRight, Bot, Copy, GitFork } from "lucide-react"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import { useStorage } from "@plasmohq/storage/hook"
-import type { ACPSession, ACPAgentType } from "@/services/acp/types"
+import type { ACPSession, ACPAgentType, ACPSessionState } from "@/services/acp/types"
 import { AGENT_TYPE_INFO } from "@/services/acp/constants"
 import { ACPSessionCreateModal } from "./ACPSessionCreateModal"
+import { getSessionMessageCount, getSessionTokenUsage } from "./sessionMetrics"
 
 interface ACPSessionPanelProps {
   onHide?: () => void
 }
 
+type SessionSortKey = "recent" | "oldest" | "name_asc" | "name_desc"
+
 export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
   const { t } = useTranslation(["playground", "option", "common"])
 
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [stateFilter, setStateFilter] = useState<ACPSessionState | "all">("all")
+  const [sortKey, setSortKey] = useState<SessionSortKey>("recent")
 
   // Server config
   const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
@@ -26,15 +32,52 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
   // Store
   const sessionsById = useACPSessionsStore((s) => s.sessions)
   const sessions = React.useMemo(
-    () =>
-      Object.values(sessionsById).sort(
-        (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
-      ),
+    () => Object.values(sessionsById),
     [sessionsById]
   )
+  const filteredSessions = React.useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase()
+    let next = sessions
+
+    if (normalizedQuery) {
+      next = next.filter((session) => {
+        const name = (session.name || "").toLowerCase()
+        const cwd = session.cwd.toLowerCase()
+        const agentType = (session.agentType || "").toLowerCase()
+        const tags = (session.tags || []).join(" ").toLowerCase()
+        return (
+          name.includes(normalizedQuery)
+          || cwd.includes(normalizedQuery)
+          || agentType.includes(normalizedQuery)
+          || tags.includes(normalizedQuery)
+        )
+      })
+    }
+
+    if (stateFilter !== "all") {
+      next = next.filter((session) => session.state === stateFilter)
+    }
+
+    return [...next].sort((a, b) => {
+      switch (sortKey) {
+        case "oldest":
+          return a.updatedAt.getTime() - b.updatedAt.getTime()
+        case "name_asc":
+          return (a.name || a.cwd).localeCompare(b.name || b.cwd, undefined, { sensitivity: "base" })
+        case "name_desc":
+          return (b.name || b.cwd).localeCompare(a.name || a.cwd, undefined, { sensitivity: "base" })
+        case "recent":
+        default:
+          return b.updatedAt.getTime() - a.updatedAt.getTime()
+      }
+    })
+  }, [sessions, searchQuery, stateFilter, sortKey])
   const activeSessionId = useACPSessionsStore((s) => s.activeSessionId)
   const setActiveSession = useACPSessionsStore((s) => s.setActiveSession)
   const closeSession = useACPSessionsStore((s) => s.closeSession)
+  const createSession = useACPSessionsStore((s) => s.createSession)
+  const replaceSessionId = useACPSessionsStore((s) => s.replaceSessionId)
+  const hasActiveFilters = searchQuery.trim().length > 0 || stateFilter !== "all" || sortKey !== "recent"
 
   const handleCreateSession = () => {
     setShowCreateModal(true)
@@ -51,15 +94,7 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
 
   const handleCloseSession = async (sessionId: string) => {
     try {
-      // Call backend to close session
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      }
-      if (authMode === "single-user" && apiKey) {
-        headers["X-API-KEY"] = apiKey
-      } else if (authMode === "multi-user" && accessToken) {
-        headers["Authorization"] = `Bearer ${accessToken}`
-      }
+      const headers = getAuthHeaders(authMode, apiKey, accessToken)
 
       await fetch(`${serverUrl}/api/v1/acp/sessions/close`, {
         method: "POST",
@@ -73,6 +108,116 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
       closeSession(sessionId)
     } catch (error) {
       console.error("Failed to close session:", error)
+    }
+  }
+
+  const handleCopySessionId = async (sessionId: string) => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(sessionId)
+      }
+    } catch (error) {
+      console.error("Failed to copy ACP session ID:", error)
+    }
+  }
+
+  const createLocalFork = (sourceSession: ACPSession): string => {
+    const fallbackName = `${sourceSession.name || sourceSession.cwd.split("/").filter(Boolean).pop() || "Session"} (fork)`
+    const forkSessionId = createSession({
+      cwd: sourceSession.cwd,
+      name: fallbackName,
+      agentType: sourceSession.agentType,
+      tags: sourceSession.tags ? [...sourceSession.tags] : undefined,
+      mcpServers: sourceSession.mcpServers?.map((server) => ({
+        ...server,
+        args: server.args ? [...server.args] : undefined,
+        env: server.env ? { ...server.env } : undefined,
+      })),
+    })
+
+    useACPSessionsStore.setState((state) => {
+      const forkSession = state.sessions[forkSessionId]
+      if (!forkSession) {
+        return state
+      }
+
+      return {
+        sessions: {
+          ...state.sessions,
+          [forkSessionId]: {
+            ...forkSession,
+            capabilities: sourceSession.capabilities ? { ...sourceSession.capabilities } : undefined,
+            updates: sourceSession.updates.map((update) => ({
+              ...update,
+              timestamp: new Date(update.timestamp),
+              data: { ...update.data },
+            })),
+            pendingPermissions: [],
+            forkParentSessionId: sourceSession.id,
+            state: "disconnected",
+            updatedAt: new Date(),
+          },
+        },
+      }
+    })
+
+    setActiveSession(forkSessionId)
+    return forkSessionId
+  }
+
+  const handleForkSession = async (sessionId: string) => {
+    const sourceSession = sessionsById[sessionId]
+    if (!sourceSession) {
+      return
+    }
+
+    try {
+      const headers = getAuthHeaders(authMode, apiKey, accessToken)
+      const response = await fetch(`${serverUrl}/api/v1/acp/sessions/${sessionId}/fork`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Fork endpoint unavailable (${response.status})`)
+      }
+
+      const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+      const serverSessionId = typeof payload?.session_id === "string"
+        ? payload.session_id
+        : typeof payload?.id === "string"
+          ? payload.id
+          : null
+
+      if (!serverSessionId) {
+        throw new Error("Fork endpoint did not return a session id")
+      }
+
+      const localForkSessionId = createSession({
+        cwd: sourceSession.cwd,
+        name: typeof payload?.name === "string" ? payload.name : `${sourceSession.name || "Session"} (fork)`,
+        agentType: sourceSession.agentType,
+        tags: sourceSession.tags ? [...sourceSession.tags] : undefined,
+        mcpServers: sourceSession.mcpServers?.map((server) => ({
+          ...server,
+          args: server.args ? [...server.args] : undefined,
+          env: server.env ? { ...server.env } : undefined,
+        })),
+      })
+
+      replaceSessionId(localForkSessionId, serverSessionId, {
+        name: typeof payload?.name === "string" ? payload.name : undefined,
+        forkParentSessionId: resolveForkParentSessionId(payload, sourceSession.id),
+        sandboxSessionId: typeof payload?.sandbox_session_id === "string" ? payload.sandbox_session_id : null,
+        sandboxRunId: typeof payload?.sandbox_run_id === "string" ? payload.sandbox_run_id : null,
+        sshWsUrl: typeof payload?.ssh_ws_url === "string" ? payload.ssh_ws_url : null,
+        sshUser: typeof payload?.ssh_user === "string" ? payload.ssh_user : null,
+      })
+
+      setActiveSession(serverSessionId)
+    } catch (_error) {
+      createLocalFork(sourceSession)
     }
   }
 
@@ -104,6 +249,32 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
     if (minutes < 60) return t("playground:acp.minutesAgo", "{{count}}m ago", { count: minutes })
     if (hours < 24) return t("playground:acp.hoursAgo", "{{count}}h ago", { count: hours })
     return t("playground:acp.daysAgo", "{{count}}d ago", { count: days })
+  }
+
+  const clearFilters = () => {
+    setSearchQuery("")
+    setStateFilter("all")
+    setSortKey("recent")
+  }
+
+  const getStateFilterLabel = (state: ACPSessionState | "all") => {
+    switch (state) {
+      case "connected":
+        return t("playground:acp.state.connected", "Connected")
+      case "running":
+        return t("playground:acp.state.running", "Running")
+      case "waiting_permission":
+        return t("playground:acp.state.waitingPermission", "Awaiting Permission")
+      case "error":
+        return t("playground:acp.state.error", "Error")
+      case "connecting":
+        return t("playground:acp.state.connecting", "Connecting...")
+      case "disconnected":
+        return t("playground:acp.state.disconnected", "Disconnected")
+      case "all":
+      default:
+        return t("playground:acp.filter.allStates", "All states")
+    }
   }
 
   return (
@@ -152,19 +323,91 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
             </Button>
           </Empty>
         ) : (
-          <div className="p-2">
-            {sessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isActive={session.id === activeSessionId}
-                onSelect={() => handleSelectSession(session.id)}
-                onClose={() => handleCloseSession(session.id)}
-                getStateColor={getSessionStateColor}
-                formatDate={formatDate}
-              />
-            ))}
-          </div>
+          <>
+            <div className="border-b border-border p-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t("playground:acp.searchSessions", "Search sessions")}
+                  allowClear
+                  size="small"
+                  aria-label={t("playground:acp.searchSessions", "Search sessions")}
+                />
+                {hasActiveFilters && (
+                  <Button size="small" type="text" onClick={clearFilters}>
+                    {t("playground:acp.clearFilters", "Clear")}
+                  </Button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="sr-only" htmlFor="acp-session-filter-state">
+                  {t("playground:acp.filterByState", "Filter by state")}
+                </label>
+                <select
+                  id="acp-session-filter-state"
+                  data-testid="acp-session-filter-state"
+                  value={stateFilter}
+                  onChange={(e) => setStateFilter(e.target.value as ACPSessionState | "all")}
+                  className="h-7 min-w-0 flex-1 rounded border border-border bg-bg px-2 text-xs text-text"
+                >
+                  {(["all", "connected", "running", "waiting_permission", "error", "connecting", "disconnected"] as const).map((state) => (
+                    <option key={state} value={state}>
+                      {getStateFilterLabel(state)}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="sr-only" htmlFor="acp-session-sort">
+                  {t("playground:acp.sortSessions", "Sort sessions")}
+                </label>
+                <select
+                  id="acp-session-sort"
+                  data-testid="acp-session-sort"
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value as SessionSortKey)}
+                  className="h-7 min-w-0 flex-1 rounded border border-border bg-bg px-2 text-xs text-text"
+                >
+                  <option value="recent">{t("playground:acp.sort.recent", "Recently updated")}</option>
+                  <option value="oldest">{t("playground:acp.sort.oldest", "Oldest updated")}</option>
+                  <option value="name_asc">{t("playground:acp.sort.nameAsc", "Name A-Z")}</option>
+                  <option value="name_desc">{t("playground:acp.sort.nameDesc", "Name Z-A")}</option>
+                </select>
+              </div>
+            </div>
+
+            {filteredSessions.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={t("playground:acp.noSessionsFiltered", "No sessions match the current filters")}
+                className="py-8"
+              >
+                <Button size="small" onClick={clearFilters}>
+                  {t("playground:acp.clearFilters", "Clear")}
+                </Button>
+              </Empty>
+            ) : (
+              <div className="p-2">
+                {filteredSessions.map((session) => (
+                  <SessionItem
+                    key={session.id}
+                    session={session}
+                    isActive={session.id === activeSessionId}
+                    messageCount={getSessionMessageCount(session)}
+                    tokenUsage={getSessionTokenUsage(session)}
+                    pendingPermissionCount={session.pendingPermissions.length}
+                    onSelect={() => handleSelectSession(session.id)}
+                    onCopySessionId={() => handleCopySessionId(session.id)}
+                    onFork={() => handleForkSession(session.id)}
+                    onClose={() => handleCloseSession(session.id)}
+                    getStateColor={getSessionStateColor}
+                    formatDate={formatDate}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -181,7 +424,12 @@ export const ACPSessionPanel: React.FC<ACPSessionPanelProps> = ({ onHide }) => {
 interface SessionItemProps {
   session: ACPSession
   isActive: boolean
+  messageCount: number
+  tokenUsage: number | null
+  pendingPermissionCount: number
   onSelect: () => void
+  onCopySessionId: () => void
+  onFork: () => void
   onClose: () => void
   getStateColor: (state: string) => string
   formatDate: (date: Date) => string
@@ -202,7 +450,12 @@ const getAgentTypeName = (agentType?: ACPAgentType): string => {
 const SessionItem: React.FC<SessionItemProps> = ({
   session,
   isActive,
+  messageCount,
+  tokenUsage,
+  pendingPermissionCount,
   onSelect,
+  onCopySessionId,
+  onFork,
   onClose,
   getStateColor,
   formatDate,
@@ -215,6 +468,8 @@ const SessionItem: React.FC<SessionItemProps> = ({
 
   return (
     <div
+      data-testid="acp-session-item"
+      data-session-id={session.id}
       className={`group mb-1 flex cursor-pointer items-center gap-2 rounded-lg p-2 transition-colors ${
         isActive
           ? "bg-primary/10 text-primary"
@@ -246,9 +501,65 @@ const SessionItem: React.FC<SessionItemProps> = ({
           <span className="shrink-0">·</span>
           <span className="shrink-0">{formatDate(session.updatedAt)}</span>
         </div>
+
+        <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+          <span className="rounded bg-surface2 px-1.5 py-0.5 text-text-muted">
+            {t("playground:acp.sessionMeta.messages", `Msgs ${messageCount}`)}
+          </span>
+          <span className="rounded bg-surface2 px-1.5 py-0.5 text-text-muted">
+            {t(
+              "playground:acp.sessionMeta.tokens",
+              `Tokens ${tokenUsage !== null ? tokenUsage.toLocaleString() : "--"}`
+            )}
+          </span>
+          <span className="rounded bg-surface2 px-1.5 py-0.5 text-text-muted">
+            {t("playground:acp.sessionMeta.permissions", `Perm ${pendingPermissionCount}`)}
+          </span>
+          {session.forkParentSessionId && (
+            <Tooltip title={session.forkParentSessionId}>
+              <span
+                className="rounded bg-surface2 px-1.5 py-0.5 text-text-muted"
+                data-testid={`acp-session-fork-parent-${session.id}`}
+              >
+                {t(
+                  "playground:acp.sessionMeta.fork",
+                  `Fork ${formatForkParentSessionId(session.forkParentSessionId)}`
+                )}
+              </span>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <Tooltip title={t("playground:acp.copySessionId", "Copy session ID")}>
+          <Button
+            type="text"
+            size="small"
+            icon={<Copy className="h-3 w-3" />}
+            onClick={(e) => {
+              e.stopPropagation()
+              onCopySessionId()
+            }}
+            aria-label={t("playground:acp.copySessionId", "Copy session ID")}
+            data-testid={`acp-session-copy-${session.id}`}
+            className="text-text-muted hover:text-text"
+          />
+        </Tooltip>
+        <Tooltip title={t("playground:acp.forkSession", "Fork session")}>
+          <Button
+            type="text"
+            size="small"
+            icon={<GitFork className="h-3 w-3" />}
+            onClick={(e) => {
+              e.stopPropagation()
+              onFork()
+            }}
+            aria-label={t("playground:acp.forkSession", "Fork session")}
+            data-testid={`acp-session-fork-${session.id}`}
+            className="text-text-muted hover:text-text"
+          />
+        </Tooltip>
         <Popconfirm
           title={t("playground:acp.closeSessionConfirm", "Close this session?")}
           onConfirm={(e) => {
@@ -264,6 +575,7 @@ const SessionItem: React.FC<SessionItemProps> = ({
             size="small"
             icon={<Trash2 className="h-3 w-3" />}
             onClick={(e) => e.stopPropagation()}
+            aria-label={t("playground:acp.closeSession", "Close session")}
             className="text-text-muted hover:text-error"
           />
         </Popconfirm>
@@ -275,3 +587,35 @@ const SessionItem: React.FC<SessionItemProps> = ({
     </div>
   )
 }
+
+const getAuthHeaders = (
+  authMode: string,
+  apiKey: string,
+  accessToken: string
+): Record<string, string> => {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+  if (authMode === "single-user" && apiKey) {
+    headers["X-API-KEY"] = apiKey
+  } else if (authMode === "multi-user" && accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`
+  }
+  return headers
+}
+
+const resolveForkParentSessionId = (
+  payload: Record<string, unknown> | null,
+  sourceSessionId: string
+): string => {
+  const candidate = payload?.fork_parent_session_id
+    ?? payload?.parent_session_id
+    ?? payload?.forked_from_session_id
+  return typeof candidate === "string" && candidate.length > 0
+    ? candidate
+    : sourceSessionId
+}
+
+const formatForkParentSessionId = (sessionId: string): string => (
+  sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId
+)

@@ -998,11 +998,20 @@ def load_settings():
     SANDBOX_MAX_MEM_MB = _sbx_int("SANDBOX_MAX_MEM_MB", "max_mem_mb", 8192)
     SANDBOX_WORKSPACE_CAP_MB = _sbx_int("SANDBOX_WORKSPACE_CAP_MB", "workspace_cap_mb", 256)
     # Queue/backpressure defaults for sandbox orchestrator
-    _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
-    _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
+    SANDBOX_QUEUE_MAX_LENGTH = _sbx_int("SANDBOX_QUEUE_MAX_LENGTH", "queue_max_length", 100)
+    SANDBOX_QUEUE_TTL_SEC = _sbx_int("SANDBOX_QUEUE_TTL_SEC", "queue_ttl_sec", 120)
+    SANDBOX_QUEUE_MAX_PER_USER = _sbx_int("SANDBOX_QUEUE_MAX_PER_USER", "queue_max_per_user", 0)
+    SANDBOX_QUEUE_MAX_PER_PERSONA = _sbx_int("SANDBOX_QUEUE_MAX_PER_PERSONA", "queue_max_per_persona", 0)
+    SANDBOX_QUEUE_MAX_PER_WORKSPACE = _sbx_int("SANDBOX_QUEUE_MAX_PER_WORKSPACE", "queue_max_per_workspace", 0)
+    SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP = _sbx_int("SANDBOX_QUEUE_MAX_PER_WORKSPACE_GROUP", "queue_max_per_workspace_group", 0)
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
+    SANDBOX_WS_MAX_CONNECTIONS_TOTAL = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_TOTAL", "ws_max_connections_total", 1024)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_USER = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_USER", "ws_max_connections_per_user", 64)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_PERSONA = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_PERSONA", "ws_max_connections_per_persona", 32)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_SESSION = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_SESSION", "ws_max_connections_per_session", 16)
+    SANDBOX_WS_MAX_CONNECTIONS_PER_RUN = _sbx_int("SANDBOX_WS_MAX_CONNECTIONS_PER_RUN", "ws_max_connections_per_run", 8)
     # Optional: signed WS URLs for log_stream_url issuance
     SANDBOX_WS_SIGNED_URL_TTL_SEC = _sbx_int("SANDBOX_WS_SIGNED_URL_TTL_SEC", "ws_signed_url_ttl_sec", 60)
     SANDBOX_WS_SIGNED_URLS = is_truthy(
@@ -1010,7 +1019,7 @@ def load_settings():
         or _sbx_get("ws_signed_urls", "false")
         or "false"
     )
-    os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
+    SANDBOX_WS_SIGNING_SECRET = os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
     # Test-only helper: when true, the WS endpoint will publish synthetic
     # start/end frames to ensure subscribers see frames immediately. Disabled
     # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
@@ -1044,7 +1053,7 @@ def load_settings():
     # Store backend (sqlite|memory) and path
     # Default to in-memory store for MVP to align with PRD (can be overridden to 'sqlite')
     SANDBOX_STORE_BACKEND = _sbx_env_or_cfg("SANDBOX_STORE_BACKEND", "store_backend", "memory").lower()
-    SANDBOX_STORE_DB_PATH = _sbx_get("store_db_path", None)
+    SANDBOX_STORE_DB_PATH = os.getenv("SANDBOX_STORE_DB_PATH") or _sbx_get("store_db_path", None)
 
     config_dict = {
         # General App
@@ -1684,6 +1693,18 @@ def load_settings():
         "PERSONA_MAX_TOOL_STEPS": (lambda _cp: (
             int(_cp.get('persona', 'max_tool_steps', fallback='3')) if _cp and _cp.has_section('persona') else 3
         ))(load_comprehensive_config()),
+        "PERSONA_MEMORY_READ_MODE": (lambda _env, _cp: (
+            str(_env).strip().lower() if _env is not None else (
+                _cp.get('persona', 'persona_memory_read_mode', fallback='legacy_only').strip().lower()
+                if _cp and _cp.has_section('persona') else 'legacy_only'
+            )
+        ))(os.getenv('PERSONA_MEMORY_READ_MODE'), load_comprehensive_config()),
+        "PERSONA_MEMORY_WRITE_MODE": (lambda _env, _cp: (
+            str(_env).strip().lower() if _env is not None else (
+                _cp.get('persona', 'persona_memory_write_mode', fallback='legacy_only').strip().lower()
+                if _cp and _cp.has_section('persona') else 'legacy_only'
+            )
+        ))(os.getenv('PERSONA_MEMORY_WRITE_MODE'), load_comprehensive_config()),
         "PERSONA_RBAC_ALLOW_EXPORT": (lambda _cp: (
             _cp.getboolean('persona.rbac', 'allow_export', fallback=False) if _cp and _cp.has_section('persona.rbac') else False
         ))(load_comprehensive_config()),

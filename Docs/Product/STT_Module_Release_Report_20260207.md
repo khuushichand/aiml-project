@@ -15,7 +15,7 @@ References:
 | Stage | Acceptance Outcome | Result | Evidence |
 |---|---|---|---|
 | Stage 1 (M1) | Unified WS STT VAD auto-commit latency + compatibility evidence published | Pass | `Docs/Performance/stt_stage1_ws_latency_baseline_20260207.jsonc`, `Docs/Performance/stt_stage1_vad_reference_fixture_20260207.jsonc`, `Docs/Product/STT_Module_Execution_Tracker_Checklist.md` |
-| Stage 2 (M2) | Kokoro override config/spec + precedence/test coverage + docs published | Pass | `Docs/Product/STT_Module_Execution_Tracker_Checklist.md`, `Docs/User_Guides/TTS_Getting_Started.md` |
+| Stage 2 (M2) | Kokoro override config/spec + precedence/test coverage + docs published | Pass | `Docs/Product/STT_Module_Execution_Tracker_Checklist.md`, `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md` |
 | Stage 3 (M3) | WS TTS endpoint + parity + sign-off artifacts completed | Pass | `Docs/Product/STT_TTS_WS_TTS_SIGNOFF_20260207.md`, `Docs/Audio_Streaming_Protocol.md`, `Docs/Operations/Audio_Streaming_Backpressure_Runbook.md` |
 | Stage 4 (M4) | Voice latency harness shipped with schema/sample/docs/troubleshooting | Pass | `Helper_Scripts/voice_latency_harness/run.py`, `Helper_Scripts/voice_latency_harness/README.md`, `Docs/Product/stt_stage4_voice_latency_harness_sample_20260207.jsonc` |
 | Stage 5 | Release report, known issues, rollback guide, and ops/support handoff completed | Pass | This document plus linked Stage 5 docs above |

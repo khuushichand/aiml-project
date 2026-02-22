@@ -317,4 +317,4 @@ docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
 
 - [Production Guide](./Production.md) - Security hardening for public deployment
 - [Monitoring Guide](../Monitoring/Metrics_Cheatsheet.md) - Set up metrics and alerts
-- [Backup Guide](../User_Guides/Backups_Using_Litestream.md) - Automated backups
+- [Backup Guide](../User_Guides/Server/Backups_Using_Litestream.md) - Automated backups

@@ -3,6 +3,7 @@
 Description=Ensure tldw worker (evals-abtest) is running
 
 [Timer]
+OnBootSec=30s
 OnStartupSec=30s
 Unit=tldw-worker-evals-abtest.service
 Persistent=true

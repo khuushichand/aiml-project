@@ -63,6 +63,7 @@ export const ACPPlayground: React.FC = () => {
   const addPendingPermission = useACPSessionsStore((s) => s.addPendingPermission)
   const removePendingPermission = useACPSessionsStore((s) => s.removePendingPermission)
   const clearPendingPermissions = useACPSessionsStore((s) => s.clearPendingPermissions)
+  const globalError = useACPSessionsStore((s) => s.globalError)
   const setGlobalError = useACPSessionsStore((s) => s.setGlobalError)
   const cleanupExpiredSessions = useACPSessionsStore((s) => s.cleanupExpiredSessions)
   const workspaceTabLabel = t("playground:acp.workspace.title", "Workspace")
@@ -71,6 +72,8 @@ export const ACPPlayground: React.FC = () => {
   const {
     state,
     isConnected,
+    error: websocketError,
+    connect,
     sendPrompt,
     cancel,
     approvePermission,
@@ -80,6 +83,7 @@ export const ACPPlayground: React.FC = () => {
     autoConnect: !!activeSessionId,
     onConnected: (message) => {
       updateSessionState(message.session_id, "connected")
+      setGlobalError(null)
       if (message.agent_capabilities) {
         setSessionCapabilities(message.session_id, message.agent_capabilities)
       }
@@ -137,6 +141,10 @@ export const ACPPlayground: React.FC = () => {
     }
     previousActiveSessionIdRef.current = activeSessionId
   }, [activeSessionId, updateSessionState, clearPendingPermissions])
+
+  useEffect(() => {
+    setGlobalError(null)
+  }, [activeSessionId, setGlobalError])
 
   const handleToggleLeftPane = () => {
     if (isMobile) {
@@ -209,6 +217,8 @@ export const ACPPlayground: React.FC = () => {
           state={state}
           isConnected={isConnected}
           updates={activeSession?.updates ?? []}
+          connect={connect}
+          error={globalError ?? websocketError}
           sendPrompt={sendPrompt}
           cancel={cancel}
         />
@@ -310,6 +320,8 @@ export const ACPPlayground: React.FC = () => {
             state={state}
             isConnected={isConnected}
             updates={activeSession?.updates ?? []}
+            connect={connect}
+            error={globalError ?? websocketError}
             sendPrompt={sendPrompt}
             cancel={cancel}
           />

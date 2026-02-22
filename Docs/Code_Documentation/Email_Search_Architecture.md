@@ -135,7 +135,7 @@ When adding an operator:
 2. Add planner SQL branch in `search_email_messages(...)`.
 3. Add unit tests in `tldw_Server_API/tests/DB_Management/test_email_native_stage1.py`.
 4. Add endpoint/integration tests in `tldw_Server_API/tests/MediaIngestion_NEW/integration/`.
-5. Update user guide in `Docs/User_Guides/Email_Operator_Search_Guide.md`.
+5. Update user guide in `Docs/User_Guides/Server/Email_Operator_Search_Guide.md`.
 
 ### Adding New Searchable Fields
 

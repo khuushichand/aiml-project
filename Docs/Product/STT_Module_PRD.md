@@ -151,7 +151,7 @@
      - **Status**: Implemented in unified WS path (fail-open); needs real-world threshold tuning + doc polish.
   2. **M2 - Phoneme/Lexicon Overrides**: configurable pronunciation maps for Kokoro with safe defaults and precedence rules; demo request shows changed pronunciation.
      - **Acceptance**: Given a documented test phrase and phoneme map, Kokoro output changes as expected in at least one integration fixture; added latency from applying overrides is ≤ 5% vs baseline on the reference setup.
-     - **Status**: Implemented. See `tldw_Server_API/app/core/TTS/phoneme_overrides.py`, `tldw_Server_API/tests/TTS/test_phoneme_overrides.py`, and docs in `Docs/User_Guides/TTS_Getting_Started.md`.
+     - **Status**: Implemented. See `tldw_Server_API/app/core/TTS/phoneme_overrides.py`, `tldw_Server_API/tests/TTS/test_phoneme_overrides.py`, and docs in `Docs/User_Guides/WebUI_Extension/TTS_Getting_Started.md`.
  3. **M3 - Optional WS TTS**: `/api/v1/audio/stream/tts` with backpressure/auth/quota parity and PCM streaming; passes slow-reader/disconnect tests. Ownership split with TTS PRD.
      - **Acceptance**: p50 `tts_ttfb_seconds` over WS ≤ 200ms on the reference setup; slow-reader and disconnect tests complete without resource leaks and emit `audio_stream_underruns_total`/error metrics as expected.
      - **Status**: Implemented with protocol/runbook/sign-off artifacts. See `tldw_Server_API/app/api/v1/endpoints/audio/audio_streaming.py`, `tldw_Server_API/tests/Audio/test_ws_tts_endpoint.py`, `Docs/Audio_Streaming_Protocol.md`, `Docs/Operations/Audio_Streaming_Backpressure_Runbook.md`, and `Docs/Product/STT_TTS_WS_TTS_SIGNOFF_20260207.md`.
