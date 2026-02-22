@@ -286,3 +286,83 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
     assert any(o.get("type") == "full_transcript" for o in outs)
     # Expect diarization summary
     assert any(o.get("type") == "diarization_summary" for o in outs)
+
+
+@pytest.mark.asyncio
+async def test_core_ws_finally_flushes_and_closes_transcriber(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.ws_server as wsmod
+
+    calls = []
+
+    class _FakeTranscriber:
+        def __init__(self, config, decode_fn=None):
+            self.decode_fn = decode_fn or (lambda _a, _b: "ok")
+
+        async def process_audio_chunk(self, audio):
+            return None
+
+        async def flush(self):
+            calls.append("flush")
+            return None
+
+        def close(self):
+            calls.append("close")
+
+        def reset(self):
+            calls.append("reset")
+
+        def get_full_transcript(self):
+            return ""
+
+    monkeypatch.setattr(wsmod, "ParakeetCoreTranscriber", _FakeTranscriber, raising=True)
+
+    ws = DummyWebSocket([json.dumps({"type": "stop"})])
+    await wsmod.websocket_parakeet_core(ws, decode_fn=lambda _a, _b: "ok")
+
+    assert "flush" in calls
+    assert "close" in calls
+    assert calls.index("flush") < calls.index("close")
+
+
+@pytest.mark.asyncio
+async def test_core_ws_model_reconfigure_closes_previous_transcriber(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.ws_server as wsmod
+
+    closes = []
+
+    class _FakeTranscriber:
+        _next_id = 0
+
+        def __init__(self, config, decode_fn=None):
+            type(self)._next_id += 1
+            self.transcriber_id = type(self)._next_id
+            self.decode_fn = decode_fn or (lambda _a, _b: "ok")
+
+        async def process_audio_chunk(self, audio):
+            return None
+
+        async def flush(self):
+            return None
+
+        def close(self):
+            closes.append(self.transcriber_id)
+
+        def reset(self):
+            return None
+
+        def get_full_transcript(self):
+            return ""
+
+    monkeypatch.setattr(wsmod, "ParakeetCoreTranscriber", _FakeTranscriber, raising=True)
+
+    ws = DummyWebSocket(
+        [
+            json.dumps({"type": "config", "model": "parakeet", "model_variant": "standard"}),
+            json.dumps({"type": "config", "model": "parakeet", "model_variant": "onnx"}),
+            json.dumps({"type": "stop"}),
+        ]
+    )
+    await wsmod.websocket_parakeet_core(ws, decode_fn=lambda _a, _b: "ok")
+
+    # Old transcriber should be closed during model swap, and active one on teardown.
+    assert len(closes) >= 2

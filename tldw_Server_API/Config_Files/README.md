@@ -260,16 +260,25 @@ Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry
 - `nemo_model_variant` (str), `nemo_device` (str), `nemo_cache_dir` (path)
 - `nemo_chunk_duration|nemo_overlap_duration` (sec)
 - `streaming_fallback_to_whisper` (bool)
+- `mlx_model_id` (str): default `mlx-community/parakeet-tdt-0.6b-v3`
+- `mlx_cache_dir` (path): optional local cache override for model artifacts
 - `mlx_chunk_duration|mlx_overlap_duration|buffered_chunk_duration|buffered_total_buffer` (sec)
 - `buffered_merge_algo` (str): e.g., `lcs`.
+- `mlx_decoding_mode` (str): `greedy|beam`
+- `mlx_beam_size|mlx_length_penalty|mlx_patience|mlx_duration_reward` (beam controls)
+- `mlx_sentence_max_words|mlx_sentence_silence_gap|mlx_sentence_max_duration` (sentence splitting controls)
+- `mlx_stream_context_left|mlx_stream_context_right|mlx_stream_depth` (native MLX streaming context/cache controls)
+- `mlx_stream_keep_original_attention` (bool): keep upstream full attention model during MLX streaming
 - `whisper_compute_type` (str): Optional faster-whisper compute type override; when unset or `"auto"` the server uses `float16` on CUDA and `int8` on CPU; examples: `float16`, `int8`, `int8_float16`.
 - Transcript cache toggles:
   - `disable_transcript_cache` (bool): When true, do not write `.segments.json` transcript cache files at all.
   - `disable_transcript_cache_pruning` (bool): When true, keep writing cache files but skip age/size-based pruning (cache may grow without bound).
   - `transcript_cache_max_files_per_source` (int): Max cached transcript files per base source; newest files are kept first. Leave empty for defaults or set 0/negative to disable this limit.
   - `transcript_cache_max_age_days` (int): Delete cached transcripts older than this many days. Leave empty for defaults or set 0/negative to disable.
-  - `transcript_cache_max_total_mb` (float): Cap total transcript cache size (MB) per directory; oldest files are evicted when exceeded. Leave empty for defaults or set 0/negative to disable.
+- `transcript_cache_max_total_mb` (float): Cap total transcript cache size (MB) per directory; oldest files are evicted when exceeded. Leave empty for defaults or set 0/negative to disable.
 - `skip_audio_prevalidation` (bool): When true, skip `ffprobe`-based audio validation and rely on `ffmpeg` + STT to surface bad files (useful for high-throughput deployments).
+- Runtime transcription requests do not auto-install `parakeet-mlx`; install dependencies during setup/deployment.
+- Design reference: `Docs/Design/STT_Parakeet_MLX_Parity.md`
 
 ## [external_providers]
 - Reserved for plugging in external providers (YAML/INI sub-configs).
