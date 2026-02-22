@@ -9,9 +9,12 @@ Runs as a background task to perform LLM-based enrichment:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 
 
 async def enrich_output(
@@ -147,7 +150,7 @@ async def enrich_output(
         _update_enrichment_status(collections_db, output_id, metadata, "failed", error=str(exc))
 
 
-def _reconstruct_items_data(collections_db, item_ids: list[int]) -> list[dict[str, Any]]:
+def _reconstruct_items_data(collections_db: CollectionsDatabase, item_ids: list[int]) -> list[dict[str, Any]]:
     """Reconstruct item data from IDs using DB abstraction. Best-effort."""
     items: list[dict[str, Any]] = []
     for item_id in item_ids:
@@ -168,7 +171,7 @@ def _reconstruct_items_data(collections_db, item_ids: list[int]) -> list[dict[st
 
 
 def _update_enrichment_status(
-    collections_db, output_id: int, metadata: dict[str, Any], status: str, *, error: str | None = None,
+    collections_db: CollectionsDatabase, output_id: int, metadata: dict[str, Any], status: str, *, error: str | None = None,
 ) -> None:
     """Update enrichment status in metadata."""
     metadata["enrichment_status"] = status
@@ -177,7 +180,7 @@ def _update_enrichment_status(
     _update_metadata(collections_db, output_id, metadata)
 
 
-def _update_metadata(collections_db, output_id: int, metadata: dict[str, Any]) -> None:
+def _update_metadata(collections_db: CollectionsDatabase, output_id: int, metadata: dict[str, Any]) -> None:
     """Persist metadata update to the DB via the collections DB abstraction."""
     try:
         collections_db.update_output_artifact_metadata(
