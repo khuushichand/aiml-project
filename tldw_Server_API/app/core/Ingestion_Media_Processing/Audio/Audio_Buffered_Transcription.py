@@ -104,9 +104,10 @@ def _merge_tokens_midpoint(
         return incoming
     if not incoming:
         return existing
-    cutoff_time = (_safe_float(existing[-1].get("end")) + _safe_float(incoming[0].get("start"))) / 2.0
-    return [token for token in existing if _safe_float(token.get("end")) <= cutoff_time] + [
-        token for token in incoming if _safe_float(token.get("start")) >= cutoff_time
+    cutoff_time = (existing[-1].get("end", 0.0) + incoming[0].get("start", 0.0)) / 2.0
+    return [token for token in existing if token.get("end", 0.0) <= cutoff_time] + [
+        token for token in incoming if token.get("start", 0.0) >= cutoff_time
+    ]
     ]
 
 
