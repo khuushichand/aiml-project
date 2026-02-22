@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import {
   useKeyboardShortcuts,
   type KeyboardShortcutConfig
@@ -31,7 +31,9 @@ export const useKanbanShortcuts = (actions: KanbanShortcutActions) => {
     []
   )
 
-  const shortcuts: KeyboardShortcutConfig[] = [
+  const showHelp = useCallback(() => setHelpOpen(true), [])
+
+  const shortcuts: KeyboardShortcutConfig[] = useMemo(() => [
     ...(actions.onNewCard
       ? [{
           shortcut: { key: "n", preventDefault: true, stopPropagation: false },
@@ -62,10 +64,10 @@ export const useKanbanShortcuts = (actions: KanbanShortcutActions) => {
       : []),
     {
       shortcut: { key: "?", shiftKey: true, preventDefault: true, stopPropagation: false },
-      action: guard(() => setHelpOpen(true)),
+      action: guard(showHelp),
       description: "Show keyboard shortcuts"
     }
-  ]
+  ], [actions.onNewCard, actions.onNewBoard, actions.onNewList, actions.onClosePanel, guard, showHelp])
 
   useKeyboardShortcuts(shortcuts)
 
