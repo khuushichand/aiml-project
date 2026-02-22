@@ -2687,11 +2687,9 @@ def create_segments_from_parakeet_mlx_artifact(
         if not sentence_text:
             continue
 
-        sentence_start = _coerce_float(sentence.get("start"))
-        sentence_end = _coerce_float(sentence.get("end"))
-        if sentence_start is None:
-            sentence_start = 0.0
-        if sentence_end is None or sentence_end < sentence_start:
+        sentence_start = _coerce_float(sentence.get("start"), 0.0)
+        sentence_end = _coerce_float(sentence.get("end"), sentence_start)
+        if sentence_end < sentence_start:
             sentence_end = sentence_start
 
         segment: dict[str, Any] = {
