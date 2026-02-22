@@ -44,6 +44,7 @@ def test_restore_snapshot_rejects_path_traversal_member(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Path traversal detected"):
         manager.restore_snapshot(session_id, snapshot_id, str(workspace))
 
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "ok"
     assert not (workspace.parent / "outside.txt").exists()
 
 
@@ -51,6 +52,7 @@ def test_restore_snapshot_rejects_symlink_member(tmp_path: Path) -> None:
     manager = SnapshotManager(storage_path=str(tmp_path / "snapshots"))
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "keep.txt").write_text("safe", encoding="utf-8")
 
     session_id = "sess-link"
     snapshot_id = "snap-link"
@@ -66,3 +68,4 @@ def test_restore_snapshot_rejects_symlink_member(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Refusing to extract link member"):
         manager.restore_snapshot(session_id, snapshot_id, str(workspace))
 
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "safe"

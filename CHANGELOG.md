@@ -6,19 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
-## [Version] Date
+## [0.1.23] 2026-02-22
 
 ### Added
--
+- Workspace account storage wiring in `/workspace-playground`:
+  - Added authenticated client support for `GET /api/v1/users/storage`.
+  - Added account quota fallback via `GET /api/v1/users/me/profile?sections=quotas`.
+  - Added workspace header support for account usage/quota alongside local payload usage.
+- Workspace persistence architecture upgrades:
+  - Added split-key persistence (`index` + per-workspace `snapshot`/`chat`) with legacy monolith migration.
+  - Added IndexedDB offload path for heavy chat/artifact payloads with localStorage pointer metadata.
+  - Added rollout controls for split-key and IndexedDB offload (env + localStorage feature flags).
+  - Added development diagnostics for workspace persistence payload size/write-count tracking.
+- Expanded regression coverage:
+  - Added API client tests for `/api/v1/users/storage`.
+  - Added workspace persistence tests for split-key migration/fallback, IndexedDB flag-off behavior, chat-retention bounds, and server-backed artifact truncation.
+  - Added backend user-profile quota tests for live storage override and fallback behavior.
+- Added and completed implementation plans for workspace UI refresh and workspace storage efficiency rollout.
 
 ### Changed
--
+- Workspace Playground layout and interaction model:
+  - Refined shell hierarchy and status signaling.
+  - Converted empty-state examples into actionable prompt chips that seed composer input.
+  - Reduced composer control clutter while preserving mode/model/advanced controls.
+  - Kept composer anchored at the viewport bottom with transcript scroll region above it.
+  - Improved center-pane width reflow as sidebars collapse (`comfortable`/`expanded`/`full` behavior).
+  - Removed residual max-width caps that left visible unused right-side space.
+- Storage indicator clarity and policy:
+  - Updated header copy to `Capacity Payload ... | Account ... | Browser ...` with clearer tooltip wording.
+  - Replaced hardcoded 5 MB payload budget with env-configurable workspace payload budget:
+    - `VITE_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB`
+    - `NEXT_PUBLIC_WORKSPACE_STORAGE_PAYLOAD_BUDGET_MB`
+  - Updated payload estimation to include both monolithic and split-key workspace storage entries.
+- Workspace persistence efficiency/safety:
+  - Persisted chat sessions now retain the most recent 250 messages per workspace.
+  - Oversized server-backed artifact payloads are truncated/stripped in local persistence while preserving server-backed references.
+- Characters manager table density styling:
+  - Refactored Ant Design table density selectors to shared `.ant-table-cell` targeting and centralized common vertical alignment for easier maintenance.
+- Backend quota sourcing:
+  - User profile quota assembly now prefers live storage metrics from `calculate_user_storage(...)` for `storage_used_mb` and `storage_quota_mb`, with fallback to stored user values on failure.
 
 ### Removed
-- 
+- No removals in this session.
 
 ### Fixed
--
+- Fixed workspace chat pane width reclaim issues when side panes were collapsed.
+- Fixed storage usage ambiguity by separating workspace payload budget, account quota usage, and browser-origin storage usage in the UI.
 
 
 ## [0.1.22] 2026-02-22

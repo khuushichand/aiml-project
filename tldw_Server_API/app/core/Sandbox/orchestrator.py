@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +115,8 @@ class SandboxOrchestrator:
             self._queue_ttl = int(_os.getenv("SANDBOX_QUEUE_TTL_SEC") or getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
             self._queue_ttl = 120
+        self._artifact_gc_lock = threading.RLock()
+        self._artifact_gc_last_run_monotonic = 0.0
         self._session_roots: dict[str, str] = {}
         self._artifacts: dict[str, dict[str, bytes]] = {}
 
@@ -678,6 +680,10 @@ class SandboxOrchestrator:
         worker_id: str,
         max_active_runs: int,
         lease_seconds: int = 30,
+        max_active_per_user: int = 0,
+        max_active_per_persona: int = 0,
+        max_active_per_workspace: int = 0,
+        max_active_per_workspace_group: int = 0,
     ) -> RunStatus | None:
         try:
             return self._store.try_admit_run_start(
@@ -685,6 +691,10 @@ class SandboxOrchestrator:
                 worker_id=str(worker_id),
                 max_active_runs=int(max_active_runs),
                 lease_seconds=int(lease_seconds),
+                max_active_per_user=int(max_active_per_user),
+                max_active_per_persona=int(max_active_per_persona),
+                max_active_per_workspace=int(max_active_per_workspace),
+                max_active_per_workspace_group=int(max_active_per_workspace_group),
             )
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"store.try_admit_run_start failed: {e}")
@@ -758,8 +768,7 @@ class SandboxOrchestrator:
     # -----------------
     # Artifacts
     # -----------------
-    def _artifact_dir(self, user_id: str, run_id: str) -> Path:
-        # Prefer an explicit shared artifacts root for cluster deployments
+    def _artifact_root(self) -> Path:
         root = os.getenv("SANDBOX_SHARED_ARTIFACTS_DIR")
         if not root:
             try:
@@ -772,7 +781,243 @@ class SandboxOrchestrator:
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 proj = "."
             root = Path(str(proj)) / "tmp_dir" / "sandbox"
-        return Path(str(root)) / user_id / "runs" / run_id / "artifacts"
+        return Path(str(root))
+
+    def _effective_artifact_ttl_hours(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_ARTIFACT_TTL_HOURS")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_ARTIFACT_TTL_HOURS", 24)
+            return max(0, int(raw))
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            return 24
+
+    def _effective_artifact_janitor_interval_sec(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC", 30)
+            return max(0, int(raw))
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            return 30
+
+    def _maybe_prune_expired_artifacts(self) -> None:
+        with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+            self.prune_expired_artifacts(force=False)
+
+    def prune_expired_artifacts(
+        self,
+        *,
+        force: bool = False,
+        now_utc: datetime | None = None,
+    ) -> dict[str, int]:
+        start_monotonic = time.monotonic()
+        ttl_hours = self._effective_artifact_ttl_hours()
+        interval_sec = self._effective_artifact_janitor_interval_sec()
+        now_monotonic = time.monotonic()
+        with self._artifact_gc_lock:
+            if not force and interval_sec > 0 and (now_monotonic - self._artifact_gc_last_run_monotonic) < interval_sec:
+                return {"removed_runs": 0, "removed_files": 0, "removed_bytes": 0}
+            self._artifact_gc_last_run_monotonic = now_monotonic
+
+        now = now_utc or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = now - timedelta(hours=ttl_hours)
+        removed_runs = 0
+        removed_files = 0
+        removed_bytes = 0
+        offset = 0
+        page_size = 500
+        while True:
+            try:
+                rows = self._store.list_runs(limit=page_size, offset=offset, sort_desc=False)
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                rows = []
+            if not rows:
+                break
+            for row in rows:
+                try:
+                    phase = str(row.get("phase") or "")
+                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                    phase = ""
+                if phase not in {
+                    RunPhase.completed.value,
+                    RunPhase.failed.value,
+                    RunPhase.killed.value,
+                    RunPhase.timed_out.value,
+                }:
+                    continue
+                try:
+                    rid = str(row.get("id") or "").strip()
+                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                    rid = ""
+                if not rid:
+                    continue
+                terminal_iso = row.get("finished_at") or row.get("started_at")
+                terminal_dt = None
+                try:
+                    if isinstance(terminal_iso, datetime):
+                        terminal_dt = terminal_iso
+                    elif terminal_iso:
+                        terminal_dt = datetime.fromisoformat(str(terminal_iso))
+                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                    terminal_dt = None
+                if terminal_dt is not None and terminal_dt.tzinfo is None:
+                    terminal_dt = terminal_dt.replace(tzinfo=timezone.utc)
+                if terminal_dt is None or terminal_dt > cutoff:
+                    continue
+                try:
+                    owner = str(row.get("user_id") or "").strip() or "unknown"
+                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                    owner = "unknown"
+                art_dir = self._artifact_dir(owner, rid)
+                if not art_dir.exists():
+                    with self._lock:
+                        self._artifacts.pop(rid, None)
+                    continue
+                dir_files = 0
+                dir_bytes = 0
+                for root, _dirs, files in os.walk(art_dir):
+                    for fn in files:
+                        full = Path(root) / fn
+                        try:
+                            dir_bytes += int(full.stat().st_size)
+                        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                            pass
+                        dir_files += 1
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                    shutil.rmtree(art_dir, ignore_errors=True)
+                if art_dir.exists():
+                    continue
+                with self._lock:
+                    self._artifacts.pop(rid, None)
+                if dir_bytes > 0:
+                    with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                        self._store.increment_user_artifact_bytes(owner, -dir_bytes)
+                removed_runs += 1
+                removed_files += dir_files
+                removed_bytes += dir_bytes
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        summary = {
+            "removed_runs": int(removed_runs),
+            "removed_files": int(removed_files),
+            "removed_bytes": int(removed_bytes),
+        }
+        try:
+            from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+            from tldw_Server_API.app.core.Metrics import observe_histogram as _obs
+
+            labels = {"mode": ("force" if force else "opportunistic")}
+            _inc("sandbox_artifact_janitor_runs_total", labels=labels)
+            if removed_runs > 0:
+                _inc("sandbox_artifact_janitor_removed_runs_total", value=float(removed_runs), labels=labels)
+            if removed_files > 0:
+                _inc("sandbox_artifact_janitor_removed_files_total", value=float(removed_files), labels=labels)
+            if removed_bytes > 0:
+                _inc("sandbox_artifact_janitor_removed_bytes_total", value=float(removed_bytes), labels=labels)
+            _obs(
+                "sandbox_artifact_janitor_duration_ms",
+                value=max(0.0, (time.monotonic() - start_monotonic) * 1000.0),
+                labels=labels,
+            )
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            pass
+        return summary
+
+    def reconcile_artifact_usage(self) -> dict[str, int]:
+        start_monotonic = time.monotonic()
+        disk_by_user: dict[str, int] = {}
+        root = self._artifact_root()
+        if root.exists():
+            for user_dir in root.iterdir():
+                try:
+                    if not user_dir.is_dir():
+                        continue
+                    runs_root = user_dir / "runs"
+                    if not runs_root.exists() or not runs_root.is_dir():
+                        continue
+                    user_total = 0
+                    for run_dir in runs_root.iterdir():
+                        if not run_dir.is_dir():
+                            continue
+                        art_dir = run_dir / "artifacts"
+                        if not art_dir.exists() or not art_dir.is_dir():
+                            continue
+                        for walk_root, _dirs, files in os.walk(art_dir):
+                            for fn in files:
+                                full = Path(walk_root) / fn
+                                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                                    user_total += int(full.stat().st_size)
+                    disk_by_user[str(user_dir.name)] = int(user_total)
+                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                    continue
+
+        usage_users: set[str] = set(disk_by_user.keys())
+        offset = 0
+        page_size = 500
+        while True:
+            try:
+                rows = self._store.list_usage(limit=page_size, offset=offset, sort_desc=False)
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                rows = []
+            if not rows:
+                break
+            for row in rows:
+                try:
+                    uid = str(row.get("user_id") or "").strip()
+                    if uid:
+                        usage_users.add(uid)
+                except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                    continue
+            if len(rows) < page_size:
+                break
+            offset += page_size
+
+        corrected_users = 0
+        corrected_bytes = 0
+        scanned_users = 0
+        for uid in sorted(usage_users):
+            scanned_users += 1
+            disk_bytes = int(disk_by_user.get(uid, 0))
+            try:
+                stored_bytes = int(self._store.get_user_artifact_bytes(uid))
+            except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+                stored_bytes = 0
+            delta = int(disk_bytes - stored_bytes)
+            if delta != 0:
+                with contextlib.suppress(_SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS):
+                    self._store.increment_user_artifact_bytes(uid, delta)
+                corrected_users += 1
+                corrected_bytes += abs(delta)
+
+        summary = {
+            "scanned_users": int(scanned_users),
+            "corrected_users": int(corrected_users),
+            "corrected_bytes": int(corrected_bytes),
+            "disk_users": int(len(disk_by_user)),
+        }
+        try:
+            from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+            from tldw_Server_API.app.core.Metrics import observe_histogram as _obs
+
+            _inc("sandbox_artifact_reconcile_runs_total")
+            if corrected_users > 0:
+                _inc("sandbox_artifact_reconcile_corrected_users_total", value=float(corrected_users))
+            if corrected_bytes > 0:
+                _inc("sandbox_artifact_reconcile_corrected_bytes_total", value=float(corrected_bytes))
+            _obs(
+                "sandbox_artifact_reconcile_duration_ms",
+                value=max(0.0, (time.monotonic() - start_monotonic) * 1000.0),
+            )
+        except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
+            pass
+        return summary
+
+    def _artifact_dir(self, user_id: str, run_id: str) -> Path:
+        return self._artifact_root() / user_id / "runs" / run_id / "artifacts"
 
     def _safe_rel(self, p: str) -> str:
         p = p.replace("\\", "/").lstrip("/")
@@ -845,6 +1090,7 @@ class SandboxOrchestrator:
             self._store.increment_user_artifact_bytes(owner, int(total_run))
 
     def list_artifacts(self, run_id: str) -> dict[str, int]:
+        self._maybe_prune_expired_artifacts()
         # Try filesystem, fallback to memory
         owner = None
         try:
@@ -869,6 +1115,7 @@ class SandboxOrchestrator:
             return {k: len(v) for k, v in mapping.items()}
 
     def get_artifact(self, run_id: str, path: str) -> bytes | None:
+        self._maybe_prune_expired_artifacts()
         owner = None
         try:
             owner = self._store.get_run_owner(run_id)

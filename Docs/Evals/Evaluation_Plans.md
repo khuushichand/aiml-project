@@ -146,6 +146,10 @@ https://github.com/OpenGVLab/GenExam
 https://huggingface.co/blog/community-evals
 https://inspect.aisi.org.uk/
 
+https://huggingface.co/datasets/Tevatron/browsecomp-plus
+https://huggingface.co/spaces/Tevatron/BrowseComp-Plus
+https://github.com/Alibaba-NLP/DeepResearch
+https://www.kaggle.com/benchmarks/google/dsqa
 
 
 

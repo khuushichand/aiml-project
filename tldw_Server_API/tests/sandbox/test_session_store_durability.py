@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
-
-import pytest
 
 from tldw_Server_API.app.core.config import clear_config_cache, settings as app_settings
 from tldw_Server_API.app.core.Sandbox.models import RunPhase, RuntimeType, RunSpec, SessionSpec
-from tldw_Server_API.app.core.Sandbox.orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
+from tldw_Server_API.app.core.Sandbox.orchestrator import SandboxOrchestrator
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.store import get_store
 
@@ -118,7 +115,7 @@ def test_cross_node_delete_invalidates_cached_session_state(monkeypatch, tmp_pat
         assert source.id not in orch_b._session_roots
 
 
-def test_destroy_session_rejects_when_active_runs_exist(monkeypatch, tmp_path: Path) -> None:
+def test_destroy_session_cancels_and_drains_when_active_runs_exist(monkeypatch, tmp_path: Path) -> None:
     _configure_sqlite_store(monkeypatch, tmp_path)
 
     orch = SandboxOrchestrator()
@@ -142,18 +139,11 @@ def test_destroy_session_rejects_when_active_runs_exist(monkeypatch, tmp_path: P
         body={"command": ["python", "-c", "print('queued')"], "session_id": session.id},
     )
 
-    with pytest.raises(SessionActiveRunsConflict) as excinfo:
-        orch.destroy_session(session.id)
-    assert excinfo.value.active_runs == 1
-
-    queued = orch.get_run(run.id)
-    assert queued is not None
-    queued.phase = RunPhase.completed
-    queued.exit_code = 0
-    queued.finished_at = datetime.now(timezone.utc)
-    orch.update_run(run.id, queued)
-
-    assert orch.destroy_session(session.id) is True
+    svc = SandboxService()
+    assert svc.destroy_session(session.id) is True
+    killed = orch.get_run(run.id)
+    assert killed is not None
+    assert killed.phase == RunPhase.killed
 
 
 def test_session_tenancy_metadata_roundtrips_across_orchestrators(monkeypatch, tmp_path: Path) -> None:

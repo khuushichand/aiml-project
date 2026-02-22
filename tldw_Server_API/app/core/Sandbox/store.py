@@ -113,6 +113,10 @@ class SandboxStore:
         worker_id: str,
         max_active_runs: int,
         lease_seconds: int = 30,
+        max_active_per_user: int = 0,
+        max_active_per_persona: int = 0,
+        max_active_per_workspace: int = 0,
+        max_active_per_workspace_group: int = 0,
     ) -> RunStatus | None:
         raise NotImplementedError
 
@@ -407,12 +411,20 @@ class InMemoryStore(SandboxStore):
         worker_id: str,
         max_active_runs: int,
         lease_seconds: int = 30,
+        max_active_per_user: int = 0,
+        max_active_per_persona: int = 0,
+        max_active_per_workspace: int = 0,
+        max_active_per_workspace_group: int = 0,
     ) -> RunStatus | None:
         wid = str(worker_id or "").strip()
         if not wid:
             return None
         limit = max(1, int(max_active_runs or 0))
         ttl = max(1, int(lease_seconds or 0))
+        per_user_limit = max(0, int(max_active_per_user or 0))
+        per_persona_limit = max(0, int(max_active_per_persona or 0))
+        per_workspace_limit = max(0, int(max_active_per_workspace or 0))
+        per_workspace_group_limit = max(0, int(max_active_per_workspace_group or 0))
         now = datetime.now(timezone.utc)
         with self._lock:
             st = self._runs.get(str(run_id))
@@ -424,14 +436,41 @@ class InMemoryStore(SandboxStore):
             exp = getattr(st, "claim_expires_at", None)
             if isinstance(exp, datetime) and exp <= now:
                 return None
+            target_user = self._owners.get(st.id)
+            target_persona = getattr(st, "persona_id", None)
+            target_workspace = getattr(st, "workspace_id", None)
+            target_workspace_group = getattr(st, "workspace_group_id", None)
             active = 0
+            active_user = 0
+            active_persona = 0
+            active_workspace = 0
+            active_workspace_group = 0
             for rs in self._runs.values():
+                is_active = False
                 if rs.phase == RunPhase.running:
-                    active += 1
+                    is_active = True
+                elif rs.phase == RunPhase.starting and getattr(rs, "started_at", None) is not None:
+                    is_active = True
+                if not is_active:
                     continue
-                if rs.phase == RunPhase.starting and getattr(rs, "started_at", None) is not None:
-                    active += 1
+                active += 1
+                if target_user and self._owners.get(rs.id) == target_user:
+                    active_user += 1
+                if target_persona and getattr(rs, "persona_id", None) == target_persona:
+                    active_persona += 1
+                if target_workspace and getattr(rs, "workspace_id", None) == target_workspace:
+                    active_workspace += 1
+                if target_workspace_group and getattr(rs, "workspace_group_id", None) == target_workspace_group:
+                    active_workspace_group += 1
             if active >= limit:
+                return None
+            if per_user_limit > 0 and target_user and active_user >= per_user_limit:
+                return None
+            if per_persona_limit > 0 and target_persona and active_persona >= per_persona_limit:
+                return None
+            if per_workspace_limit > 0 and target_workspace and active_workspace >= per_workspace_limit:
+                return None
+            if per_workspace_group_limit > 0 and target_workspace_group and active_workspace_group >= per_workspace_group_limit:
                 return None
             st.phase = RunPhase.starting
             st.started_at = now
@@ -542,7 +581,8 @@ class InMemoryStore(SandboxStore):
 
     def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
         with self._lock:
-            self._user_bytes[user_id] = int(self._user_bytes.get(user_id, 0)) + int(delta)
+            cur = int(self._user_bytes.get(user_id, 0))
+            self._user_bytes[user_id] = max(0, cur + int(delta))
 
     def list_runs(
         self,
@@ -1228,17 +1268,43 @@ class SQLiteStore(SandboxStore):
         worker_id: str,
         max_active_runs: int,
         lease_seconds: int = 30,
+        max_active_per_user: int = 0,
+        max_active_per_persona: int = 0,
+        max_active_per_workspace: int = 0,
+        max_active_per_workspace_group: int = 0,
     ) -> RunStatus | None:
         wid = str(worker_id or "").strip()
         if not wid:
             return None
         limit = max(1, int(max_active_runs or 0))
         ttl = max(1, int(lease_seconds or 0))
+        per_user_limit = max(0, int(max_active_per_user or 0))
+        per_persona_limit = max(0, int(max_active_per_persona or 0))
+        per_workspace_limit = max(0, int(max_active_per_workspace or 0))
+        per_workspace_group_limit = max(0, int(max_active_per_workspace_group or 0))
         now_iso = datetime.now(timezone.utc).isoformat()
         exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
         with self._lock, self._conn() as con:
             try:
                 con.execute("BEGIN IMMEDIATE")
+                cur_target = con.execute(
+                    (
+                        "SELECT user_id, persona_id, workspace_id, workspace_group_id "
+                        "FROM sandbox_runs "
+                        "WHERE id=? AND phase=? AND claim_owner=? "
+                        "AND (claim_expires_at IS NULL OR claim_expires_at > ?)"
+                    ),
+                    (
+                        str(run_id),
+                        RunPhase.queued.value,
+                        wid,
+                        now_iso,
+                    ),
+                )
+                target = cur_target.fetchone()
+                if not target:
+                    con.rollback()
+                    return None
                 cur_active = con.execute(
                     (
                         "SELECT COUNT(*) AS c FROM sandbox_runs "
@@ -1251,6 +1317,62 @@ class SQLiteStore(SandboxStore):
                 if active >= limit:
                     con.rollback()
                     return None
+                target_user = target["user_id"] if target and target["user_id"] is not None else None
+                target_persona = target["persona_id"] if target and target["persona_id"] is not None else None
+                target_workspace = target["workspace_id"] if target and target["workspace_id"] is not None else None
+                target_workspace_group = target["workspace_group_id"] if target and target["workspace_group_id"] is not None else None
+                if per_user_limit > 0 and target_user:
+                    cur_user = con.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE user_id=? AND (phase=? OR (phase=? AND started_at IS NOT NULL))"
+                        ),
+                        (target_user, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_user = cur_user.fetchone()
+                    active_user = int(row_user["c"]) if row_user and row_user["c"] is not None else 0
+                    if active_user >= per_user_limit:
+                        con.rollback()
+                        return None
+                if per_persona_limit > 0 and target_persona:
+                    cur_persona = con.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE persona_id=? AND (phase=? OR (phase=? AND started_at IS NOT NULL))"
+                        ),
+                        (target_persona, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_persona = cur_persona.fetchone()
+                    active_persona = int(row_persona["c"]) if row_persona and row_persona["c"] is not None else 0
+                    if active_persona >= per_persona_limit:
+                        con.rollback()
+                        return None
+                if per_workspace_limit > 0 and target_workspace:
+                    cur_workspace = con.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE workspace_id=? AND (phase=? OR (phase=? AND started_at IS NOT NULL))"
+                        ),
+                        (target_workspace, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_workspace = cur_workspace.fetchone()
+                    active_workspace = int(row_workspace["c"]) if row_workspace and row_workspace["c"] is not None else 0
+                    if active_workspace >= per_workspace_limit:
+                        con.rollback()
+                        return None
+                if per_workspace_group_limit > 0 and target_workspace_group:
+                    cur_workspace_group = con.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE workspace_group_id=? AND (phase=? OR (phase=? AND started_at IS NOT NULL))"
+                        ),
+                        (target_workspace_group, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_workspace_group = cur_workspace_group.fetchone()
+                    active_workspace_group = int(row_workspace_group["c"]) if row_workspace_group and row_workspace_group["c"] is not None else 0
+                    if active_workspace_group >= per_workspace_group_limit:
+                        con.rollback()
+                        return None
                 cur = con.execute(
                     (
                         "UPDATE sandbox_runs SET phase=?, started_at=?, finished_at=NULL, exit_code=NULL, "
@@ -1469,7 +1591,7 @@ class SQLiteStore(SandboxStore):
             cur = con.execute("SELECT artifact_bytes FROM sandbox_usage WHERE user_id=?", (user_id,))
             row = cur.fetchone()
             cur_val = int(row["artifact_bytes"]) if row and row["artifact_bytes"] is not None else 0
-            new_val = cur_val + int(delta)
+            new_val = max(0, cur_val + int(delta))
             con.execute(
                 "REPLACE INTO sandbox_usage(user_id, artifact_bytes) VALUES (?,?)",
                 (user_id, new_val),
@@ -2220,12 +2342,20 @@ class PostgresStore(SandboxStore):
         worker_id: str,
         max_active_runs: int,
         lease_seconds: int = 30,
+        max_active_per_user: int = 0,
+        max_active_per_persona: int = 0,
+        max_active_per_workspace: int = 0,
+        max_active_per_workspace_group: int = 0,
     ) -> RunStatus | None:
         wid = str(worker_id or "").strip()
         if not wid:
             return None
         limit = max(1, int(max_active_runs or 0))
         ttl = max(1, int(lease_seconds or 0))
+        per_user_limit = max(0, int(max_active_per_user or 0))
+        per_persona_limit = max(0, int(max_active_per_persona or 0))
+        per_workspace_limit = max(0, int(max_active_per_workspace or 0))
+        per_workspace_group_limit = max(0, int(max_active_per_workspace_group or 0))
         now_iso = datetime.now(timezone.utc).isoformat()
         exp_iso = (datetime.now(timezone.utc) + timedelta(seconds=ttl)).isoformat()
         with self._lock, self._conn() as con, con.cursor() as cur:
@@ -2233,6 +2363,19 @@ class PostgresStore(SandboxStore):
                 cur.execute("BEGIN")
                 # Serialize active-slot admission across nodes in cluster mode.
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("sandbox_active_run_slot_admission",))
+                cur.execute(
+                    (
+                        "SELECT user_id, persona_id, workspace_id, workspace_group_id "
+                        "FROM sandbox_runs "
+                        "WHERE id=%s AND phase=%s AND claim_owner=%s "
+                        "AND (claim_expires_at IS NULL OR claim_expires_at::timestamptz > %s::timestamptz)"
+                    ),
+                    (str(run_id), RunPhase.queued.value, wid, now_iso),
+                )
+                target = cur.fetchone() or {}
+                if not target:
+                    cur.execute("ROLLBACK")
+                    return None
                 cur.execute(
                     (
                         "SELECT COUNT(*) AS c FROM sandbox_runs "
@@ -2245,6 +2388,62 @@ class PostgresStore(SandboxStore):
                 if active >= limit:
                     cur.execute("ROLLBACK")
                     return None
+                target_user = target.get("user_id")
+                target_persona = target.get("persona_id")
+                target_workspace = target.get("workspace_id")
+                target_workspace_group = target.get("workspace_group_id")
+                if per_user_limit > 0 and target_user:
+                    cur.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE user_id=%s AND (phase=%s OR (phase=%s AND started_at IS NOT NULL))"
+                        ),
+                        (target_user, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_user = cur.fetchone() or {}
+                    active_user = int(row_user.get("c") or 0)
+                    if active_user >= per_user_limit:
+                        cur.execute("ROLLBACK")
+                        return None
+                if per_persona_limit > 0 and target_persona:
+                    cur.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE persona_id=%s AND (phase=%s OR (phase=%s AND started_at IS NOT NULL))"
+                        ),
+                        (target_persona, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_persona = cur.fetchone() or {}
+                    active_persona = int(row_persona.get("c") or 0)
+                    if active_persona >= per_persona_limit:
+                        cur.execute("ROLLBACK")
+                        return None
+                if per_workspace_limit > 0 and target_workspace:
+                    cur.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE workspace_id=%s AND (phase=%s OR (phase=%s AND started_at IS NOT NULL))"
+                        ),
+                        (target_workspace, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_workspace = cur.fetchone() or {}
+                    active_workspace = int(row_workspace.get("c") or 0)
+                    if active_workspace >= per_workspace_limit:
+                        cur.execute("ROLLBACK")
+                        return None
+                if per_workspace_group_limit > 0 and target_workspace_group:
+                    cur.execute(
+                        (
+                            "SELECT COUNT(*) AS c FROM sandbox_runs "
+                            "WHERE workspace_group_id=%s AND (phase=%s OR (phase=%s AND started_at IS NOT NULL))"
+                        ),
+                        (target_workspace_group, RunPhase.running.value, RunPhase.starting.value),
+                    )
+                    row_workspace_group = cur.fetchone() or {}
+                    active_workspace_group = int(row_workspace_group.get("c") or 0)
+                    if active_workspace_group >= per_workspace_group_limit:
+                        cur.execute("ROLLBACK")
+                        return None
                 cur.execute(
                     """
                     UPDATE sandbox_runs
@@ -2467,8 +2666,9 @@ class PostgresStore(SandboxStore):
             with con.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO sandbox_usage(user_id, artifact_bytes) VALUES (%s, %s)
-                    ON CONFLICT (user_id) DO UPDATE SET artifact_bytes = COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes
+                    INSERT INTO sandbox_usage(user_id, artifact_bytes) VALUES (%s, GREATEST(0, %s))
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET artifact_bytes = GREATEST(0, COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes)
                     """,
                     (user_id, d),
                 )

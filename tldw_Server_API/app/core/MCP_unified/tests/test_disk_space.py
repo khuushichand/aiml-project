@@ -6,7 +6,7 @@ import tldw_Server_API.app.core.MCP_unified.modules.disk_space as disk_space_mod
 from tldw_Server_API.app.core.MCP_unified.modules.disk_space import get_free_disk_space_gb
 
 
-def test_get_free_disk_space_gb_uses_statvfs(monkeypatch):
+def test_get_free_disk_space_gb_uses_statvfs(monkeypatch, tmp_path):
     statvfs_result = namedtuple("statvfs_result", ["f_bavail", "f_frsize"])
     monkeypatch.setattr(
         disk_space_module.os,
@@ -14,12 +14,12 @@ def test_get_free_disk_space_gb_uses_statvfs(monkeypatch):
         lambda _path: statvfs_result(1024, 4096),
     )
 
-    free_gb = get_free_disk_space_gb("/tmp")  # nosec B108
+    free_gb = get_free_disk_space_gb(tmp_path)
 
     assert free_gb == pytest.approx((1024 * 4096) / (1024 ** 3))
 
 
-def test_get_free_disk_space_gb_falls_back_to_disk_usage(monkeypatch):
+def test_get_free_disk_space_gb_falls_back_to_disk_usage(monkeypatch, tmp_path):
     usage_result = namedtuple("usage_result", ["total", "used", "free"])
 
     def _raise_attr_error(_path):
@@ -32,6 +32,6 @@ def test_get_free_disk_space_gb_falls_back_to_disk_usage(monkeypatch):
         lambda _path: usage_result(100, 40, 60 * (1024 ** 3)),
     )
 
-    free_gb = get_free_disk_space_gb("C:/temp")
+    free_gb = get_free_disk_space_gb(tmp_path)
 
     assert free_gb == pytest.approx(60.0)

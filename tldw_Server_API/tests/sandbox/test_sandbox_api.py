@@ -96,7 +96,7 @@ def test_start_run_scaffold_returns_completed_with_metadata(monkeypatch) -> None
         assert r3.status_code == 409
 
 
-def test_delete_session_conflicts_when_active_runs_exist(monkeypatch) -> None:
+def test_delete_session_cancels_and_drains_active_runs(monkeypatch) -> None:
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "0")
 
     with _client(monkeypatch) as client:
@@ -127,17 +127,9 @@ def test_delete_session_conflicts_when_active_runs_exist(monkeypatch) -> None:
         assert run_resp.json()["phase"] == "queued"
 
         delete_resp = client.delete(f"/api/v1/sandbox/sessions/{session_id}")
-        assert delete_resp.status_code == 409
-        detail = delete_resp.json().get("detail")
-        assert isinstance(detail, dict)
-        assert detail.get("error") == "session_has_active_runs"
-        assert int(detail.get("active_runs") or 0) >= 1
-        assert detail.get("session_id") == session_id
+        assert delete_resp.status_code == 200
+        assert delete_resp.json().get("ok") is True
 
-        cancel_resp = client.post(f"/api/v1/sandbox/runs/{run_id}/cancel")
-        assert cancel_resp.status_code == 200
-        assert bool(cancel_resp.json().get("cancelled")) is True
-
-        delete_after_cancel = client.delete(f"/api/v1/sandbox/sessions/{session_id}")
-        assert delete_after_cancel.status_code == 200
-        assert delete_after_cancel.json().get("ok") is True
+        run_after = client.get(f"/api/v1/sandbox/runs/{run_id}")
+        assert run_after.status_code == 200
+        assert run_after.json().get("phase") == "killed"

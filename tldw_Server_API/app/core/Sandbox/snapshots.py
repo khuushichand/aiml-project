@@ -186,6 +186,18 @@ class SnapshotManager:
         if not workspace_path:
             raise ValueError("Invalid workspace path")
 
+        workspace_root = Path(workspace_path)
+        backup_path = workspace_root.parent / f".restore_backup_{uuid.uuid4().hex}"
+
+        # Take a backup first so failed restore can roll back atomically.
+        try:
+            if workspace_root.exists() and workspace_root.is_dir():
+                shutil.copytree(workspace_path, str(backup_path), dirs_exist_ok=False)
+            else:
+                os.makedirs(workspace_path, exist_ok=True)
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            raise OSError(f"Failed to backup workspace before restore: {e}") from e
+
         # Clear current workspace (but keep the directory)
         try:
             if os.path.isdir(workspace_path):
@@ -199,19 +211,42 @@ class SnapshotManager:
             else:
                 os.makedirs(workspace_path, exist_ok=True)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                if backup_path.exists():
+                    if os.path.isdir(workspace_path):
+                        shutil.rmtree(workspace_path, ignore_errors=True)
+                    os.makedirs(workspace_path, exist_ok=True)
+                    shutil.copytree(str(backup_path), workspace_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path, ignore_errors=True)
             raise OSError(f"Failed to clear workspace: {e}") from e
 
         # Extract snapshot
         try:
             with tarfile.open(snapshot_path, "r:gz") as tar:
-                workspace_root = Path(workspace_path)
                 for member in tar.getmembers():
                     self._validate_tar_member(member, workspace_root)
                     tar.extract(member, workspace_path)
         except ValueError:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                if backup_path.exists():
+                    if os.path.isdir(workspace_path):
+                        shutil.rmtree(workspace_path, ignore_errors=True)
+                    os.makedirs(workspace_path, exist_ok=True)
+                    shutil.copytree(str(backup_path), workspace_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path, ignore_errors=True)
             raise
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                if backup_path.exists():
+                    if os.path.isdir(workspace_path):
+                        shutil.rmtree(workspace_path, ignore_errors=True)
+                    os.makedirs(workspace_path, exist_ok=True)
+                    shutil.copytree(str(backup_path), workspace_path, dirs_exist_ok=True)
+                    shutil.rmtree(backup_path, ignore_errors=True)
             raise OSError(f"Failed to extract snapshot: {e}") from e
+        finally:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
+                shutil.rmtree(backup_path, ignore_errors=True)
 
         return True
 

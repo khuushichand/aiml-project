@@ -33,7 +33,15 @@ def _configure_sqlite_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     clear_config_cache()
 
 
-def _enqueue(orch: SandboxOrchestrator, *, user_id: str, command: str) -> str:
+def _enqueue(
+    orch: SandboxOrchestrator,
+    *,
+    user_id: str,
+    command: str,
+    persona_id: str | None = None,
+    workspace_id: str | None = None,
+    workspace_group_id: str | None = None,
+) -> str:
     status = orch.enqueue_run(
         user_id=user_id,
         spec=RunSpec(
@@ -41,6 +49,9 @@ def _enqueue(orch: SandboxOrchestrator, *, user_id: str, command: str) -> str:
             runtime=RuntimeType.docker,
             base_image="python:3.11-slim",
             command=["echo", command],
+            persona_id=persona_id,
+            workspace_id=workspace_id,
+            workspace_group_id=workspace_group_id,
         ),
         spec_version="1.0",
         idem_key=None,
@@ -209,3 +220,103 @@ def test_start_admission_respects_active_run_limit(
     )
     assert admitted_b_after is not None
     assert admitted_b_after.phase == RunPhase.starting
+
+
+@pytest.mark.parametrize(
+    "quota_kwargs,run_a,run_b,run_c",
+    [
+        (
+            {"max_active_per_user": 1},
+            {"user_id": "user-1", "persona_id": "p1", "workspace_id": "w1", "workspace_group_id": "g1"},
+            {"user_id": "user-1", "persona_id": "p2", "workspace_id": "w2", "workspace_group_id": "g2"},
+            {"user_id": "user-2", "persona_id": "p3", "workspace_id": "w3", "workspace_group_id": "g3"},
+        ),
+        (
+            {"max_active_per_persona": 1},
+            {"user_id": "user-1", "persona_id": "persona-shared", "workspace_id": "w1", "workspace_group_id": "g1"},
+            {"user_id": "user-2", "persona_id": "persona-shared", "workspace_id": "w2", "workspace_group_id": "g2"},
+            {"user_id": "user-3", "persona_id": "persona-other", "workspace_id": "w3", "workspace_group_id": "g3"},
+        ),
+        (
+            {"max_active_per_workspace": 1},
+            {"user_id": "user-1", "persona_id": "p1", "workspace_id": "workspace-shared", "workspace_group_id": "g1"},
+            {"user_id": "user-2", "persona_id": "p2", "workspace_id": "workspace-shared", "workspace_group_id": "g2"},
+            {"user_id": "user-3", "persona_id": "p3", "workspace_id": "workspace-other", "workspace_group_id": "g3"},
+        ),
+        (
+            {"max_active_per_workspace_group": 1},
+            {"user_id": "user-1", "persona_id": "p1", "workspace_id": "w1", "workspace_group_id": "wg-shared"},
+            {"user_id": "user-2", "persona_id": "p2", "workspace_id": "w2", "workspace_group_id": "wg-shared"},
+            {"user_id": "user-3", "persona_id": "p3", "workspace_id": "w3", "workspace_group_id": "wg-other"},
+        ),
+    ],
+)
+def test_start_admission_enforces_per_tenant_active_quotas(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    quota_kwargs: dict[str, int],
+    run_a: dict[str, str],
+    run_b: dict[str, str],
+    run_c: dict[str, str],
+) -> None:
+    _configure_sqlite_store(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANDBOX_QUEUE_MAX_LENGTH", "20")
+    monkeypatch.setenv("SANDBOX_QUEUE_TTL_SEC", "120")
+
+    orch = SandboxOrchestrator()
+    run_id_a = _enqueue(
+        orch,
+        user_id=run_a["user_id"],
+        command="quota-a",
+        persona_id=run_a["persona_id"],
+        workspace_id=run_a["workspace_id"],
+        workspace_group_id=run_a["workspace_group_id"],
+    )
+    run_id_b = _enqueue(
+        orch,
+        user_id=run_b["user_id"],
+        command="quota-b",
+        persona_id=run_b["persona_id"],
+        workspace_id=run_b["workspace_id"],
+        workspace_group_id=run_b["workspace_group_id"],
+    )
+    run_id_c = _enqueue(
+        orch,
+        user_id=run_c["user_id"],
+        command="quota-c",
+        persona_id=run_c["persona_id"],
+        workspace_id=run_c["workspace_id"],
+        workspace_group_id=run_c["workspace_group_id"],
+    )
+
+    assert orch.try_claim_run(run_id_a, worker_id="worker-a", lease_seconds=30) is not None
+    assert orch.try_claim_run(run_id_b, worker_id="worker-b", lease_seconds=30) is not None
+    assert orch.try_claim_run(run_id_c, worker_id="worker-c", lease_seconds=30) is not None
+
+    admitted_a = orch.try_admit_run_start(
+        run_id_a,
+        worker_id="worker-a",
+        max_active_runs=3,
+        lease_seconds=30,
+        **quota_kwargs,
+    )
+    admitted_b = orch.try_admit_run_start(
+        run_id_b,
+        worker_id="worker-b",
+        max_active_runs=3,
+        lease_seconds=30,
+        **quota_kwargs,
+    )
+    admitted_c = orch.try_admit_run_start(
+        run_id_c,
+        worker_id="worker-c",
+        max_active_runs=3,
+        lease_seconds=30,
+        **quota_kwargs,
+    )
+
+    assert admitted_a is not None
+    assert admitted_a.phase == RunPhase.starting
+    assert admitted_b is None
+    assert admitted_c is not None
+    assert admitted_c.phase == RunPhase.starting

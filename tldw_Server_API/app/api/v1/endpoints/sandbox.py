@@ -151,7 +151,7 @@ class SandboxArtifactGuardRoute(APIRoute):
 
 router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtifactGuardRoute)
 
-_service = SandboxService()
+_service = SandboxService(enable_background_tasks=True)
 
 _SANDBOX_WS_QUOTA_LOCK = threading.Lock()
 _SANDBOX_WS_ACTIVE_TOTAL = 0
@@ -682,10 +682,11 @@ async def delete_session(
     try:
         ok = _service.destroy_session(session_id)
     except SessionActiveRunsConflict as e:
+        err = str(e) or "session_has_active_runs"
         raise HTTPException(
             status_code=409,
             detail={
-                "error": "session_has_active_runs",
+                "error": err,
                 "active_runs": int(getattr(e, "active_runs", 0) or 0),
                 "session_id": str(session_id),
             },

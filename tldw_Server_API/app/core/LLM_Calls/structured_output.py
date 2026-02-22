@@ -1,3 +1,11 @@
+"""Utilities for parsing structured JSON output returned by LLMs.
+
+The parser supports two modes:
+- `strict`: parse only direct JSON candidates and enforce wrapper/list shape rules.
+- `lenient`: apply recovery heuristics (think-tag stripping, fenced block extraction,
+  balanced-fragment probing, fallback wrapper keys, optional string-item coercion).
+"""
+
 from __future__ import annotations
 
 import json
@@ -24,6 +32,13 @@ class StructuredOutputSchemaError(StructuredOutputParseError):
 
 @dataclass(frozen=True)
 class StructuredOutputOptions:
+    """Configuration for `parse_structured_output`.
+
+    `parse_mode` accepts `strict` or `lenient` (default). Strict mode minimizes
+    recovery heuristics, while lenient mode attempts multiple candidate extraction
+    strategies before failing.
+    """
+
     parse_mode: str = "lenient"
     strip_think_tags: bool = True
     wrapper_key: str | None = None
@@ -32,10 +47,12 @@ class StructuredOutputOptions:
 
     @property
     def strict(self) -> bool:
+        """Return `True` when parser behavior should be strict."""
         return str(self.parse_mode or "lenient").strip().lower() == "strict"
 
 
 def _strip_think_tags(text: str) -> str:
+    """Remove `<think>...</think>` spans and surrounding whitespace."""
     return _THINK_TAG_RE.sub("", text).strip()
 
 
@@ -44,6 +61,13 @@ def _extract_balanced_json_fragments(
     *,
     max_fragments: int,
 ) -> list[str]:
+    """Extract up to `max_fragments` balanced JSON object/array slices from text.
+
+    This is a tolerant scanner used in lenient mode. It tracks braces/brackets and
+    JSON string boundaries so braces inside string literals do not terminate a
+    fragment early.
+    """
+
     fragments: list[str] = []
     if not text:
         return fragments
@@ -85,6 +109,16 @@ def _extract_balanced_json_fragments(
 
 
 def _build_parse_candidates(text: str, *, options: StructuredOutputOptions) -> list[str]:
+    """Build ordered, de-duplicated JSON candidates from model output text.
+
+    Candidate order is intentional:
+    1. JSON fenced blocks.
+    2. Raw full text.
+    3. In lenient mode only: balanced JSON fragments from raw text.
+
+    For each candidate, lenient mode may also try a think-tag-stripped version.
+    """
+
     raw = text.strip()
     if not raw:
         return []
@@ -127,6 +161,19 @@ def parse_structured_output(
     *,
     options: StructuredOutputOptions | None = None,
 ) -> Any:
+    """Parse a model payload into a JSON-compatible Python value.
+
+    Args:
+        payload: Raw model output (text, dict, list, or None).
+        options: Optional parser configuration. Defaults to lenient mode.
+
+    Returns:
+        Parsed JSON as native Python structures.
+
+    Raises:
+        StructuredOutputNoPayloadError: No parseable JSON candidate was found.
+    """
+
     resolved = options or StructuredOutputOptions()
     if isinstance(payload, (dict, list)):
         return payload
@@ -160,6 +207,22 @@ def extract_items(
     allow_string_items: bool = False,
     fallback_wrapper_keys: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
+    """Normalize parsed output into a list of item objects.
+
+    Behavior differs by mode:
+    - Strict mode enforces exact wrapper/list expectations and rejects fallback keys.
+    - Lenient mode may fall back to alternate wrapper keys, wrap a top-level object
+      as a single-item list, and optionally coerce string items to `{"text": ...}`.
+
+    Args:
+        payload: Parsed JSON value (usually from `parse_structured_output`).
+        wrapper_key: Preferred key that should contain the list of items.
+        strict: If `True`, enforce strict structure checks.
+        allow_top_level_list: Whether list payloads are accepted without a wrapper.
+        allow_string_items: Whether lenient mode should coerce string list items.
+        fallback_wrapper_keys: Alternate keys to probe in lenient mode.
+    """
+
     items: Any = payload
     selected_wrapper = wrapper_key
 

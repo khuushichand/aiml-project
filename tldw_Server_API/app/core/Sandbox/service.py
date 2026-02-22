@@ -20,7 +20,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 )
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Metrics import observe_histogram
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 from tldw_Server_API.app.core.testing import is_truthy
 
 from .models import (
@@ -31,7 +31,7 @@ from .models import (
     Session,
     SessionSpec,
 )
-from .orchestrator import SandboxOrchestrator
+from .orchestrator import SandboxOrchestrator, SessionActiveRunsConflict
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
 from .runners.docker_runner import DockerRunner, docker_available
 from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
@@ -68,7 +68,7 @@ class SandboxService:
     Actual execution is intentionally not implemented at this stage.
     """
 
-    def __init__(self, policy: SandboxPolicy | None = None) -> None:
+    def __init__(self, policy: SandboxPolicy | None = None, *, enable_background_tasks: bool = False) -> None:
         cfg = SandboxPolicyConfig.from_settings()
         self.policy = policy or SandboxPolicy(cfg)
         self._orch = SandboxOrchestrator(self.policy)
@@ -80,6 +80,12 @@ class SandboxService:
         self._snapshots = SnapshotManager(
             storage_path=os.getenv("SANDBOX_SNAPSHOT_PATH")
         )
+        self._maintenance_lock = threading.RLock()
+        self._maintenance_stop = threading.Event()
+        self._maintenance_thread: threading.Thread | None = None
+        self._last_reconcile_monotonic = 0.0
+        if enable_background_tasks:
+            self.start_background_tasks()
 
     class InvalidSpecVersion(Exception):
         def __init__(self, provided: str, supported: list[str]) -> None:
@@ -165,6 +171,187 @@ class SandboxService:
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             return 8
 
+    def _background_janitor_enabled(self) -> bool:
+        try:
+            raw = os.getenv("SANDBOX_ARTIFACT_JANITOR_BACKGROUND_ENABLED")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_ARTIFACT_JANITOR_BACKGROUND_ENABLED", True)
+            return bool(is_truthy(str(raw)))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return True
+
+    def _effective_artifact_janitor_interval_sec(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_ARTIFACT_JANITOR_INTERVAL_SEC", 30)
+            return max(1, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 30
+
+    def _effective_artifact_reconcile_interval_sec(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_ARTIFACT_RECONCILE_INTERVAL_SEC")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_ARTIFACT_RECONCILE_INTERVAL_SEC", 300)
+            return max(1, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 300
+
+    def start_background_tasks(self) -> None:
+        if not self._background_janitor_enabled():
+            return
+        with self._maintenance_lock:
+            if self._maintenance_thread is not None and self._maintenance_thread.is_alive():
+                return
+            self._maintenance_stop.clear()
+            self._maintenance_thread = threading.Thread(
+                target=self._artifact_maintenance_loop,
+                daemon=True,
+                name="sandbox-artifact-janitor",
+            )
+            self._maintenance_thread.start()
+
+    def stop_background_tasks(self) -> None:
+        with self._maintenance_lock:
+            t = self._maintenance_thread
+            self._maintenance_stop.set()
+        if t is not None:
+            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                t.join(timeout=1.0)
+        with self._maintenance_lock:
+            self._maintenance_thread = None
+
+    def run_artifact_maintenance_once(self, *, trigger: str = "manual") -> dict[str, int]:
+        start = time.monotonic()
+        janitor_summary = self._orch.prune_expired_artifacts(force=True)
+        reconcile_summary: dict[str, int] = {
+            "scanned_users": 0,
+            "corrected_users": 0,
+            "corrected_bytes": 0,
+            "disk_users": 0,
+        }
+        now_mono = time.monotonic()
+        reconcile_interval = self._effective_artifact_reconcile_interval_sec()
+        should_reconcile = (
+            self._last_reconcile_monotonic <= 0.0
+            or (now_mono - self._last_reconcile_monotonic) >= float(reconcile_interval)
+        )
+        if should_reconcile:
+            reconcile_summary = self._orch.reconcile_artifact_usage()
+            self._last_reconcile_monotonic = now_mono
+
+        duration_ms = max(0.0, (time.monotonic() - start) * 1000.0)
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+            increment_counter("sandbox_artifact_maintenance_cycles_total", labels={"trigger": str(trigger)})
+            observe_histogram("sandbox_artifact_maintenance_cycle_duration_ms", value=duration_ms, labels={"trigger": str(trigger)})
+
+        if (
+            int(janitor_summary.get("removed_runs", 0) or 0) > 0
+            or int(janitor_summary.get("removed_files", 0) or 0) > 0
+            or int(janitor_summary.get("removed_bytes", 0) or 0) > 0
+            or int(reconcile_summary.get("corrected_users", 0) or 0) > 0
+            or int(reconcile_summary.get("corrected_bytes", 0) or 0) > 0
+        ):
+            self._audit_artifact_maintenance(janitor_summary, reconcile_summary, trigger=trigger, duration_ms=duration_ms)
+
+        merged = {
+            "janitor_removed_runs": int(janitor_summary.get("removed_runs", 0) or 0),
+            "janitor_removed_files": int(janitor_summary.get("removed_files", 0) or 0),
+            "janitor_removed_bytes": int(janitor_summary.get("removed_bytes", 0) or 0),
+            "reconcile_scanned_users": int(reconcile_summary.get("scanned_users", 0) or 0),
+            "reconcile_corrected_users": int(reconcile_summary.get("corrected_users", 0) or 0),
+            "reconcile_corrected_bytes": int(reconcile_summary.get("corrected_bytes", 0) or 0),
+            "reconcile_disk_users": int(reconcile_summary.get("disk_users", 0) or 0),
+        }
+        return merged
+
+    def _artifact_maintenance_loop(self) -> None:
+        while not self._maintenance_stop.is_set():
+            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                self.run_artifact_maintenance_once(trigger="background")
+            interval = self._effective_artifact_janitor_interval_sec()
+            if self._maintenance_stop.wait(timeout=float(interval)):
+                break
+
+    def _audit_artifact_maintenance(
+        self,
+        janitor_summary: dict[str, int],
+        reconcile_summary: dict[str, int],
+        *,
+        trigger: str,
+        duration_ms: float,
+    ) -> None:
+        try:
+            async def _alog() -> None:
+                svc = UnifiedAuditService(db_path=None)
+                await svc.initialize(start_background_tasks=False)
+                try:
+                    ctx = AuditContext(
+                        user_id=None,
+                        session_id=None,
+                        method="INTERNAL",
+                        endpoint="/api/v1/sandbox/artifacts/maintenance",
+                    )
+                    await svc.log_event(
+                        event_type=AuditEventType.DATA_DELETE,
+                        category=AuditEventCategory.DATA_MODIFICATION,
+                        severity=AuditSeverity.INFO,
+                        context=ctx,
+                        resource_type="sandbox.artifacts",
+                        resource_id=None,
+                        action="maintenance_cycle",
+                        result="success",
+                        duration_ms=duration_ms,
+                        metadata={
+                            "trigger": str(trigger),
+                            "janitor_removed_runs": int(janitor_summary.get("removed_runs", 0) or 0),
+                            "janitor_removed_files": int(janitor_summary.get("removed_files", 0) or 0),
+                            "janitor_removed_bytes": int(janitor_summary.get("removed_bytes", 0) or 0),
+                            "reconcile_scanned_users": int(reconcile_summary.get("scanned_users", 0) or 0),
+                            "reconcile_corrected_users": int(reconcile_summary.get("corrected_users", 0) or 0),
+                            "reconcile_corrected_bytes": int(reconcile_summary.get("corrected_bytes", 0) or 0),
+                            "reconcile_disk_users": int(reconcile_summary.get("disk_users", 0) or 0),
+                        },
+                    )
+                finally:
+                    await svc.stop()
+
+            try:
+                asyncio.run(_alog())
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+                loop.create_task(_alog())
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"audit(artifact.maintenance) failed: {e}")
+
+    def _effective_active_limit(self, env_key: str, settings_attr: str) -> int:
+        try:
+            raw = os.getenv(env_key)
+            if raw is None:
+                raw = getattr(app_settings, settings_attr, 0)
+            return max(0, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 0
+
+    def _effective_snapshot_max_count(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_SNAPSHOT_MAX_COUNT")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_SNAPSHOT_MAX_COUNT", 10)
+            return max(1, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 10
+
+    def _effective_snapshot_max_size_mb(self) -> int:
+        try:
+            raw = os.getenv("SANDBOX_SNAPSHOT_MAX_SIZE_MB")
+            if raw is None:
+                raw = getattr(app_settings, "SANDBOX_SNAPSHOT_MAX_SIZE_MB", 256)
+            return max(1, int(raw))
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+            return 256
+
     def _background_executor(self) -> ThreadPoolExecutor:
         workers = self._effective_max_concurrent_runs()
         with self._bg_executor_lock:
@@ -188,12 +375,23 @@ class SandboxService:
     def _admit_run_starting(self, run_id: str) -> RunStatus | None:
         max_active_runs = self._effective_max_concurrent_runs()
         lease_seconds = self._effective_claim_lease_seconds()
+        max_active_per_user = self._effective_active_limit("SANDBOX_ACTIVE_MAX_PER_USER", "SANDBOX_ACTIVE_MAX_PER_USER")
+        max_active_per_persona = self._effective_active_limit("SANDBOX_ACTIVE_MAX_PER_PERSONA", "SANDBOX_ACTIVE_MAX_PER_PERSONA")
+        max_active_per_workspace = self._effective_active_limit("SANDBOX_ACTIVE_MAX_PER_WORKSPACE", "SANDBOX_ACTIVE_MAX_PER_WORKSPACE")
+        max_active_per_workspace_group = self._effective_active_limit(
+            "SANDBOX_ACTIVE_MAX_PER_WORKSPACE_GROUP",
+            "SANDBOX_ACTIVE_MAX_PER_WORKSPACE_GROUP",
+        )
         while True:
             admitted = self._orch.try_admit_run_start(
                 run_id,
                 worker_id=self._claim_worker_id,
                 max_active_runs=max_active_runs,
                 lease_seconds=lease_seconds,
+                max_active_per_user=max_active_per_user,
+                max_active_per_persona=max_active_per_persona,
+                max_active_per_workspace=max_active_per_workspace,
+                max_active_per_workspace_group=max_active_per_workspace_group,
             )
             if admitted is not None:
                 return admitted
@@ -468,6 +666,59 @@ class SandboxService:
 
     def destroy_session(self, session_id: str) -> bool:
         try:
+            return bool(self._orch.destroy_session(session_id))
+        except SessionActiveRunsConflict:
+            timeout_sec = 10.0
+            try:
+                raw_timeout = os.getenv("SANDBOX_SESSION_DELETE_DRAIN_TIMEOUT_SEC")
+                if raw_timeout is None:
+                    raw_timeout = getattr(app_settings, "SANDBOX_SESSION_DELETE_DRAIN_TIMEOUT_SEC", 10)
+                timeout_sec = max(0.0, float(raw_timeout))
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
+                timeout_sec = 10.0
+
+            active_run_ids: list[str] = []
+            for phase in (RunPhase.queued, RunPhase.starting, RunPhase.running):
+                offset = 0
+                page_size = 500
+                while True:
+                    rows = self._orch.list_runs(
+                        session_id=str(session_id),
+                        phase=phase.value,
+                        limit=page_size,
+                        offset=offset,
+                        sort_desc=True,
+                    )
+                    if not rows:
+                        break
+                    for row in rows:
+                        rid = str(row.get("id") or "").strip()
+                        if rid:
+                            active_run_ids.append(rid)
+                    if len(rows) < page_size:
+                        break
+                    offset += page_size
+            for rid in sorted(set(active_run_ids)):
+                with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
+                    self.cancel_run(rid)
+
+            deadline = time.time() + timeout_sec
+            while True:
+                remaining = (
+                    self._orch.count_runs(session_id=str(session_id), phase=RunPhase.queued.value)
+                    + self._orch.count_runs(session_id=str(session_id), phase=RunPhase.starting.value)
+                    + self._orch.count_runs(session_id=str(session_id), phase=RunPhase.running.value)
+                )
+                if remaining <= 0:
+                    break
+                if time.time() >= deadline:
+                    raise SessionActiveRunsConflict(
+                        session_id=str(session_id),
+                        active_runs=remaining,
+                        message="session_cancel_drain_timeout",
+                    )
+                time.sleep(0.05)
+
             return bool(self._orch.destroy_session(session_id))
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"destroy_session failed: {e}")
@@ -926,7 +1177,15 @@ class SandboxService:
         ws = self._orch.get_session_workspace_path(session_id)
         if not ws:
             raise ValueError("Session not found or no workspace")
-        return self._snapshots.create_snapshot(session_id, ws)
+        result = self._snapshots.create_snapshot(session_id, ws)
+        deleted = self._snapshots.enforce_quota(
+            session_id,
+            max_snapshots=self._effective_snapshot_max_count(),
+            max_size_mb=self._effective_snapshot_max_size_mb(),
+        )
+        if deleted:
+            result["evicted_snapshot_ids"] = list(deleted)
+        return result
 
     def restore_snapshot(self, session_id: str, snapshot_id: str) -> bool:
         """Restore a session's workspace from a snapshot.
