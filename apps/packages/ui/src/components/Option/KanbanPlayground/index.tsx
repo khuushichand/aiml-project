@@ -283,6 +283,16 @@ export const KanbanPlayground = () => {
   )
 
   const renderContent = () => {
+    const isLoading = selectedBoardId ? boardLoading : boardsLoading
+
+    if (isLoading) {
+      return (
+        <div className="flex items-center justify-center h-96">
+          <Spin size="large" />
+        </div>
+      )
+    }
+
     if (!selectedBoardId) {
       return (
         <BoardGallery
@@ -290,14 +300,6 @@ export const KanbanPlayground = () => {
           onSelectBoard={setSelectedBoardId}
           onCreateBoard={() => setCreateModalOpen(true)}
         />
-      )
-    }
-
-    if (boardLoading) {
-      return (
-        <div className="flex items-center justify-center h-96">
-          <Spin size="large" />
-        </div>
       )
     }
 
