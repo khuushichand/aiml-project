@@ -49,6 +49,8 @@ import {
 import { countToggleImpact, summarizeSourceSelection } from "./bulk-action-summary"
 import {
   restoreDeletedSources,
+  resolveBulkSourceUndoWindow,
+  resolveSourceUndoWindowSeconds,
   SOURCE_DELETE_UNDO_WINDOW_SECONDS,
   toSourceRestoreId
 } from "./source-undo"
@@ -361,16 +363,16 @@ export const SourcesTab: React.FC = () => {
         message.success(t("watchlists:sources.deleted", "Feed deleted"))
         return
       }
-      const undoWindowSeconds =
-        Number(deleteResult?.restore_window_seconds) > 0
-          ? Number(deleteResult.restore_window_seconds)
-          : SOURCE_DELETE_UNDO_WINDOW_SECONDS
+      const undoWindowSeconds = resolveSourceUndoWindowSeconds(
+        deleteResult?.restore_window_seconds,
+        SOURCE_DELETE_UNDO_WINDOW_SECONDS
+      )
 
       showUndoNotification({
         title: t("watchlists:sources.undoDeleteTitle", "Feed deleted"),
         description: t(
           "watchlists:sources.undoDeleteDescription",
-          "Undo restores this feed for {{seconds}} seconds.",
+          "Undo restores this feed's tags, groups, and active state for {{seconds}} seconds.",
           { seconds: undoWindowSeconds }
         ),
         duration: undoWindowSeconds,
@@ -378,8 +380,22 @@ export const SourcesTab: React.FC = () => {
           void loadSources()
         },
         onUndo: async () => {
-          await restoreWatchlistSource(toSourceRestoreId(deletedSource))
-          await loadSources()
+          try {
+            await restoreWatchlistSource(toSourceRestoreId(deletedSource))
+          } catch (restoreErr) {
+            const restoreError = mapWatchlistsError(restoreErr, {
+              t,
+              context: t("watchlists:sources.title", "Feeds"),
+              operationLabel: t("watchlists:errors.operation.retry", "retry"),
+              fallbackMessage: t(
+                "watchlists:sources.undoRestoreError",
+                "Could not restore this feed. Refresh Feeds and retry while the undo timer is active."
+              )
+            })
+            throw new Error(restoreError.description)
+          } finally {
+            await loadSources()
+          }
         }
       })
     } catch (err) {
@@ -554,29 +570,43 @@ export const SourcesTab: React.FC = () => {
       )
       let successCount = 0
       const removedSources: WatchlistSource[] = []
+      const successfulDeletePayloads: Array<{ restore_window_seconds?: number | string | null }> = []
       results.forEach((result, idx) => {
         if (result.status === "fulfilled") {
           const removedSource = deletedSources[idx]
           removeSource(removedSource.id)
           removedSources.push(removedSource)
+          successfulDeletePayloads.push(result.value)
           successCount += 1
         }
       })
       const failedCount = deletedSources.length - successCount
 
       if (successCount > 0) {
+        const undoWindow = resolveBulkSourceUndoWindow(
+          successfulDeletePayloads,
+          SOURCE_DELETE_UNDO_WINDOW_SECONDS
+        )
+        const undoDescription = t(
+          "watchlists:sources.undoBulkDeleteDescription",
+          "Undo restores deleted feeds, tags, groups, and active states for {{seconds}} seconds.",
+          { seconds: undoWindow.seconds }
+        )
+        const variableWindowHint = undoWindow.hasMixedWindows
+          ? ` ${t(
+              "watchlists:sources.undoBulkDeleteVariableWindowHint",
+              "Some feeds expire sooner; use Undo before this timer ends."
+            )}`
+          : ""
+
         showUndoNotification({
           title: t(
             "watchlists:sources.undoBulkDeleteTitle",
             "{{count}} feeds deleted",
             { count: successCount }
           ),
-          description: t(
-            "watchlists:sources.undoBulkDeleteDescription",
-            "Undo restores deleted feeds for {{seconds}} seconds.",
-            { seconds: SOURCE_DELETE_UNDO_WINDOW_SECONDS }
-          ),
-          duration: SOURCE_DELETE_UNDO_WINDOW_SECONDS,
+          description: `${undoDescription}${variableWindowHint}`,
+          duration: undoWindow.seconds,
           onDismiss: () => {
             void loadSources()
           },
@@ -590,7 +620,7 @@ export const SourcesTab: React.FC = () => {
               throw new Error(
                 t(
                   "watchlists:sources.undoBulkRestorePartialError",
-                  "{{restored}} restored, {{failed}} failed to restore",
+                  "{{restored}} restored, {{failed}} failed to restore. Refresh Feeds and retry while the undo timer is active.",
                   {
                     restored: restoreSummary.restored,
                     failed: restoreSummary.failed

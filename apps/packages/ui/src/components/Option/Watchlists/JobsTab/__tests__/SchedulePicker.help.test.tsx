@@ -71,4 +71,37 @@ describe("SchedulePicker contextual help", () => {
       })
     )
   })
+
+  it("shows invalid-format guidance before apply when cron fields are incomplete", () => {
+    const onChange = vi.fn()
+    render(<SchedulePicker value={null} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole("switch"))
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        "Advanced schedule expression (cron, e.g., 0 9 * * MON)"
+      ),
+      { target: { value: "0 9 * *" } }
+    )
+
+    expect(
+      screen.getByText("Use exactly 5 cron fields: minute hour day-of-month month day-of-week.")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it("offers quick examples for advanced cron entry", () => {
+    const onChange = vi.fn()
+    render(<SchedulePicker value={null} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole("switch"))
+    fireEvent.click(screen.getByTestId("schedule-example-daily0900"))
+    expect(
+      screen.getByPlaceholderText("Advanced schedule expression (cron, e.g., 0 9 * * MON)")
+    ).toHaveValue("0 9 * * *")
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }))
+    expect(onChange).toHaveBeenCalledWith("0 9 * * *")
+  })
 })

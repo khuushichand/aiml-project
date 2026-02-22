@@ -1,6 +1,7 @@
 import type { WatchlistRun } from "@/types/watchlists"
 
 type NotificationKind = "completed" | "failed"
+export type RunNotificationKind = NotificationKind | "stalled"
 export type RunFailureKind =
   | "auth"
   | "rate_limit"
@@ -15,6 +16,23 @@ interface RunNotificationDecision {
   hint?: string | null
 }
 
+export interface RunNotificationEvent {
+  eventKey: string
+  kind: RunNotificationKind
+  runId: number
+  hint?: string | null
+}
+
+export interface RunNotificationGroup {
+  groupKey: string
+  kind: RunNotificationKind
+  count: number
+  runIds: number[]
+  eventKeys: string[]
+  deepLinkRunId: number
+  hint: string | null
+}
+
 type Translator = (
   key: string,
   defaultValue?: string,
@@ -23,6 +41,11 @@ type Translator = (
 
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running", "queued"])
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"])
+const RUN_NOTIFICATION_PRIORITY: Record<RunNotificationKind, number> = {
+  failed: 0,
+  stalled: 1,
+  completed: 2
+}
 
 const normalizeStatus = (status: string | null | undefined): string =>
   String(status || "").trim().toLowerCase()
@@ -36,11 +59,12 @@ const parseEpochMs = (value: string | null | undefined): number | null => {
 const resolveHintCopy = (
   t: Translator | undefined,
   key: string,
-  fallback: string
+  fallback: string,
+  options?: Record<string, unknown>
 ): string => {
   if (!t) return fallback
   try {
-    const translated = t(key, fallback)
+    const translated = t(key, fallback, options)
     if (!translated || translated === key) {
       return fallback
     }
@@ -167,6 +191,96 @@ export const resolveRunTransitionNotification = (
   }
 
   return null
+}
+
+export const buildRunStateNotificationKey = (
+  runId: number,
+  status: string | null | undefined
+): string => `${runId}:${normalizeStatus(status)}`
+
+export const buildRunStalledNotificationKey = (runId: number): string =>
+  `${runId}:stalled`
+
+export const getRunStalledHint = (
+  stalledMinutes: number,
+  t?: Translator
+): string =>
+  resolveHintCopy(
+    t,
+    "watchlists:notifications.failureHints.stalled",
+    "Run appears stalled after {{minutes}} minutes. Open Activity to inspect logs, then cancel or retry.",
+    { minutes: Math.max(1, stalledMinutes) }
+  )
+
+export const resolveStalledRunNotification = (
+  run: Pick<WatchlistRun, "id" | "status" | "started_at" | "finished_at">,
+  nowMs: number,
+  stalledThresholdMs: number,
+  t?: Translator
+): RunNotificationEvent | null => {
+  const status = normalizeStatus(run.status)
+  if (!ACTIVE_RUN_STATUSES.has(status)) return null
+  if (run.finished_at) return null
+  const startedAtMs = parseEpochMs(run.started_at)
+  if (startedAtMs == null) return null
+  const elapsedMs = nowMs - startedAtMs
+  if (elapsedMs < stalledThresholdMs) return null
+  const stalledMinutes = Math.floor(elapsedMs / 60_000)
+  return {
+    eventKey: buildRunStalledNotificationKey(run.id),
+    kind: "stalled",
+    runId: run.id,
+    hint: getRunStalledHint(stalledMinutes, t)
+  }
+}
+
+export const dedupeRunNotificationEvents = (
+  events: RunNotificationEvent[],
+  seenKeys: Set<string>
+): RunNotificationEvent[] => {
+  const next: RunNotificationEvent[] = []
+  events.forEach((event) => {
+    if (seenKeys.has(event.eventKey)) return
+    seenKeys.add(event.eventKey)
+    next.push(event)
+  })
+  return next
+}
+
+export const groupRunNotificationEvents = (
+  events: RunNotificationEvent[]
+): RunNotificationGroup[] => {
+  const byKind = new Map<RunNotificationKind, RunNotificationGroup>()
+
+  events.forEach((event) => {
+    const existing = byKind.get(event.kind)
+    if (existing) {
+      existing.count += 1
+      existing.runIds.push(event.runId)
+      existing.eventKeys.push(event.eventKey)
+      if (event.runId > existing.deepLinkRunId) {
+        existing.deepLinkRunId = event.runId
+      }
+      if (!existing.hint && event.hint) {
+        existing.hint = event.hint
+      }
+      return
+    }
+
+    byKind.set(event.kind, {
+      groupKey: String(event.kind),
+      kind: event.kind,
+      count: 1,
+      runIds: [event.runId],
+      eventKeys: [event.eventKey],
+      deepLinkRunId: event.runId,
+      hint: event.hint || null
+    })
+  })
+
+  return Array.from(byKind.values()).sort(
+    (a, b) => RUN_NOTIFICATION_PRIORITY[a.kind] - RUN_NOTIFICATION_PRIORITY[b.kind]
+  )
 }
 
 export const shouldNotifyNewTerminalRun = (

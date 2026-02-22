@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
+  Checkbox,
   Divider,
   Form,
   Input,
@@ -30,6 +31,20 @@ import { TemplateCodeEditor, type TemplateCodeEditorHandle } from "./TemplateCod
 import { TemplateVariablesPanel } from "./TemplateVariablesPanel"
 import { TemplateSnippetPalette } from "./TemplateSnippetPalette"
 import { TemplatePreviewPane } from "./TemplatePreviewPane"
+import {
+  buildTemplateSavePayload,
+  hasTemplateAdvancedContext,
+  shouldWarnOnTemplateModeChange,
+  type TemplateAuthoringMode
+} from "./template-mode"
+import {
+  buildTemplateFromRecipe,
+  createDefaultTemplateRecipeOptions,
+  TEMPLATE_RECIPE_DEFINITIONS,
+  type TemplateRecipeId,
+  type TemplateRecipeOptions
+} from "./template-recipes"
+import { trackWatchlistsPreventionTelemetry } from "@/utils/watchlists-prevention-telemetry"
 
 interface TemplateEditorProps {
   template: WatchlistTemplate | null
@@ -47,6 +62,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [saving, setSaving] = useState(false)
   const [loadingVersion, setLoadingVersion] = useState(false)
   const [activeTab, setActiveTab] = useState<"editor" | "preview" | "docs">("editor")
+  const [authoringMode, setAuthoringMode] = useState<TemplateAuthoringMode>("basic")
   const [templateVersions, setTemplateVersions] = useState<WatchlistTemplateVersionSummary[]>([])
   const [selectedVersion, setSelectedVersion] = useState<number | undefined>(undefined)
   const [loadedVersion, setLoadedVersion] = useState<number | null>(null)
@@ -54,10 +70,21 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const editorRef = useRef<TemplateCodeEditorHandle>(null)
   const [validationErrors, setValidationErrors] = useState<Array<{ line?: number | null; column?: number | null; message: string }>>([])
   const [availableRuns, setAvailableRuns] = useState<Array<{ id: number; label: string }>>([])
+  const [selectedRecipeId, setSelectedRecipeId] = useState<TemplateRecipeId>("briefing_md")
+  const [recipeOptions, setRecipeOptions] = useState<TemplateRecipeOptions>(
+    createDefaultTemplateRecipeOptions()
+  )
 
   const isEditing = !!template
+  const authoringContext = isEditing ? "edit" : "create"
   const formatValue = Form.useWatch("format", form)
   const contentValue = Form.useWatch("content", form)
+  const selectedRecipeDefinition = useMemo(
+    () =>
+      TEMPLATE_RECIPE_DEFINITIONS.find((definition) => definition.id === selectedRecipeId) ||
+      TEMPLATE_RECIPE_DEFINITIONS[0],
+    [selectedRecipeId]
+  )
 
   const loadTemplate = async (templateName: string, version?: number) => {
     setLoadingVersion(true)
@@ -78,6 +105,12 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
 
   useEffect(() => {
     if (open && template) {
+      void trackWatchlistsPreventionTelemetry({
+        type: "watchlists_authoring_started",
+        surface: "template_editor",
+        mode: "advanced",
+        context: "edit"
+      })
       Promise.all([
         getWatchlistTemplate(template.name),
         getWatchlistTemplateVersions(template.name).catch(() => ({ items: [] }))
@@ -93,6 +126,9 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           setLoadedContentBaseline(result.content || "")
           setTemplateVersions(Array.isArray(versions.items) ? versions.items : [])
           setSelectedVersion(undefined)
+          setAuthoringMode("advanced")
+          setSelectedRecipeId("briefing_md")
+          setRecipeOptions(createDefaultTemplateRecipeOptions())
         })
         .catch((err) => {
           console.error("Failed to load template:", err)
@@ -101,14 +137,27 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           setSelectedVersion(undefined)
           setLoadedVersion(null)
           setLoadedContentBaseline("")
+          setAuthoringMode("advanced")
+          setSelectedRecipeId("briefing_md")
+          setRecipeOptions(createDefaultTemplateRecipeOptions())
         })
     } else if (open) {
+      void trackWatchlistsPreventionTelemetry({
+        type: "watchlists_authoring_started",
+        surface: "template_editor",
+        mode: "basic",
+        context: "create"
+      })
       form.resetFields()
       form.setFieldsValue({ format: "html", content: DEFAULT_HTML_TEMPLATE })
       setTemplateVersions([])
       setSelectedVersion(undefined)
       setLoadedVersion(null)
       setLoadedContentBaseline(DEFAULT_HTML_TEMPLATE)
+      setAuthoringMode("basic")
+      setActiveTab("editor")
+      setSelectedRecipeId("briefing_md")
+      setRecipeOptions(createDefaultTemplateRecipeOptions())
     }
   }, [open, template, form, t])
 
@@ -175,14 +224,14 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         setValidationErrors([])
       }
       setSaving(true)
-      const payload: WatchlistTemplateCreate = {
-        name: values.name,
-        description: values.description || null,
-        content: values.content,
-        format: values.format,
-        overwrite: isEditing
-      }
+      const payload: WatchlistTemplateCreate = buildTemplateSavePayload(values, isEditing)
       await createWatchlistTemplate(payload)
+      void trackWatchlistsPreventionTelemetry({
+        type: "watchlists_authoring_saved",
+        surface: "template_editor",
+        mode: authoringMode,
+        context: authoringContext
+      })
       message.success(
         isEditing
           ? t("watchlists:templates.updated", "Template updated")
@@ -214,6 +263,40 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     return String(contentValue || "") !== loadedContentBaseline
   }, [contentValue, isEditing, loadedContentBaseline, loadedVersion])
 
+  const hasAdvancedTemplateContext = hasTemplateAdvancedContext({
+    isEditing,
+    selectedVersion,
+    activeTab,
+    hasVersionDrift,
+    validationErrorCount: validationErrors.length
+  })
+
+  const handleAuthoringModeChange = (nextMode: TemplateAuthoringMode) => {
+    if (shouldWarnOnTemplateModeChange({
+      currentMode: authoringMode,
+      nextMode,
+      hasAdvancedContext: hasAdvancedTemplateContext
+    })) {
+      message.info(
+        t(
+          "watchlists:templates.modeHiddenToolsNotice",
+          "Advanced template tools are hidden in Basic mode. Your content and version context are preserved."
+        )
+      )
+    }
+    if (authoringMode !== nextMode && nextMode === "basic" && activeTab === "docs") {
+      setActiveTab("editor")
+    }
+    void trackWatchlistsPreventionTelemetry({
+      type: "watchlists_authoring_mode_changed",
+      surface: "template_editor",
+      from_mode: authoringMode,
+      to_mode: nextMode,
+      context: authoringContext
+    })
+    setAuthoringMode(nextMode)
+  }
+
   const insertSnippet = (snippet: string) => {
     if (editorRef.current) {
       editorRef.current.insertSnippet(snippet)
@@ -226,6 +309,47 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       form.setFieldsValue({ content: `${current}${needsSpacer ? "\n\n" : ""}${snippet}` })
     }
     setActiveTab("editor")
+  }
+
+  const setRecipeOption = (
+    key: keyof TemplateRecipeOptions,
+    checked: boolean
+  ) => {
+    setRecipeOptions((previous) => ({
+      ...previous,
+      [key]: checked
+    }))
+  }
+
+  const handleApplyRecipe = () => {
+    const generated = buildTemplateFromRecipe(selectedRecipeId, recipeOptions)
+    const valuesToSet: Record<string, string> = {
+      format: generated.format,
+      content: generated.content
+    }
+    if (!isEditing) {
+      const currentName = String(form.getFieldValue("name") || "").trim()
+      const currentDescription = String(form.getFieldValue("description") || "").trim()
+      if (!currentName) {
+        valuesToSet.name = generated.suggestedName
+      }
+      if (!currentDescription) {
+        valuesToSet.description = generated.suggestedDescription
+      }
+    }
+    form.setFieldsValue(valuesToSet)
+    form.setFields([
+      { name: "content", touched: true },
+      { name: "format", touched: true }
+    ])
+    void trackWatchlistsPreventionTelemetry({
+      type: "watchlists_template_recipe_applied",
+      surface: "template_editor",
+      recipe: selectedRecipeId,
+      mode: authoringMode
+    })
+    setValidationErrors([])
+    message.success(t("watchlists:templates.recipe.applied", "Template recipe applied."))
   }
 
   const QUICK_SNIPPETS = [
@@ -241,41 +365,141 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       key: "editor",
       label: t("watchlists:templates.editor.tab", "Editor"),
       children: (
-        <div className="space-y-3">
-          <div className="rounded-lg border border-border p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1 text-xs font-medium text-text-muted">
-                {t("watchlists:templates.quickInsert", "Quick insert snippets")}
-                <WatchlistsHelpTooltip topic="jinja2" />
-              </div>
-              <Button size="small" type="link" onClick={() => setActiveTab("docs")}>
-                {t("watchlists:templates.openDocs", "Open variables & sample context")}
-              </Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_SNIPPETS.map((s, i) => (
-                <Button key={i} size="small" onClick={() => insertSnippet(s.snippet)}>
-                  {s.label}
+        authoringMode === "advanced" ? (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-border p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1 text-xs font-medium text-text-muted">
+                  {t("watchlists:templates.quickInsert", "Quick insert snippets")}
+                  <WatchlistsHelpTooltip topic="jinja2" />
+                </div>
+                <Button size="small" type="link" onClick={() => setActiveTab("docs")}>
+                  {t("watchlists:templates.openDocs", "Open variables & sample context")}
                 </Button>
-              ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {QUICK_SNIPPETS.map((s, i) => (
+                  <Button key={i} size="small" onClick={() => insertSnippet(s.snippet)}>
+                    {s.label}
+                  </Button>
+                ))}
+              </div>
             </div>
+            <Form.Item
+              name="content"
+              rules={[{ required: true, message: t("watchlists:templates.contentRequired", "Template content is required") }]}
+              className="mb-0"
+            >
+              <TemplateCodeEditor
+                ref={editorRef}
+                value={contentValue || ""}
+                onChange={(v) => form.setFieldsValue({ content: v })}
+                format={formatValue === "md" ? "md" : "html"}
+                height={400}
+                validationErrors={validationErrors}
+              />
+            </Form.Item>
           </div>
-
-          <Form.Item
-            name="content"
-            rules={[{ required: true, message: t("watchlists:templates.contentRequired", "Template content is required") }]}
-            className="mb-0"
-          >
-            <TemplateCodeEditor
-              ref={editorRef}
-              value={contentValue || ""}
-              onChange={(v) => form.setFieldsValue({ content: v })}
-              format={formatValue === "md" ? "md" : "html"}
-              height={400}
-              validationErrors={validationErrors}
-            />
-          </Form.Item>
-        </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-lg border border-border bg-surface p-3" data-testid="template-recipe-builder">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-text-muted">
+                  {t("watchlists:templates.recipe.title", "Recipe builder")}
+                </div>
+                <Button
+                  size="small"
+                  data-testid="template-recipe-apply"
+                  onClick={handleApplyRecipe}
+                >
+                  {t("watchlists:templates.recipe.apply", "Apply recipe")}
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <div className="mb-1 text-xs text-text-muted">
+                    {t("watchlists:templates.recipe.recipeType", "Template recipe")}
+                  </div>
+                  <Select
+                    size="small"
+                    value={selectedRecipeId}
+                    onChange={(value) => setSelectedRecipeId(value as TemplateRecipeId)}
+                    options={TEMPLATE_RECIPE_DEFINITIONS.map((definition) => ({
+                      value: definition.id,
+                      label: t(definition.labelKey, definition.fallbackLabel)
+                    }))}
+                  />
+                  <div className="mt-1 text-xs text-text-muted">
+                    {t(
+                      selectedRecipeDefinition.descriptionKey,
+                      selectedRecipeDefinition.fallbackDescription
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Checkbox
+                    checked={recipeOptions.includeLinks}
+                    onChange={(event) => setRecipeOption("includeLinks", event.target.checked)}
+                  >
+                    {t("watchlists:templates.recipe.options.includeLinks", "Include source links")}
+                  </Checkbox>
+                  {selectedRecipeDefinition.supports.executiveSummary ? (
+                    <Checkbox
+                      checked={recipeOptions.includeExecutiveSummary}
+                      onChange={(event) =>
+                        setRecipeOption("includeExecutiveSummary", event.target.checked)
+                      }
+                    >
+                      {t(
+                        "watchlists:templates.recipe.options.includeExecutiveSummary",
+                        "Include executive summary section"
+                      )}
+                    </Checkbox>
+                  ) : null}
+                  {selectedRecipeDefinition.supports.publishedAt ? (
+                    <Checkbox
+                      checked={recipeOptions.includePublishedAt}
+                      onChange={(event) =>
+                        setRecipeOption("includePublishedAt", event.target.checked)
+                      }
+                    >
+                      {t(
+                        "watchlists:templates.recipe.options.includePublishedAt",
+                        "Include published timestamp"
+                      )}
+                    </Checkbox>
+                  ) : null}
+                  {selectedRecipeDefinition.supports.tags ? (
+                    <Checkbox
+                      checked={recipeOptions.includeTags}
+                      onChange={(event) => setRecipeOption("includeTags", event.target.checked)}
+                    >
+                      {t("watchlists:templates.recipe.options.includeTags", "Include item tags")}
+                    </Checkbox>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div className="text-xs text-text-muted">
+              {t(
+                "watchlists:templates.modeBasicEditorHint",
+                "Basic mode uses a simplified editor. Switch to Advanced for snippets, variable docs, and validation markers."
+              )}
+            </div>
+            <Form.Item
+              name="content"
+              rules={[{ required: true, message: t("watchlists:templates.contentRequired", "Template content is required") }]}
+              className="mb-0"
+            >
+              <Input.TextArea
+                rows={18}
+                value={contentValue || ""}
+                onChange={(event) => form.setFieldsValue({ content: event.target.value })}
+                placeholder={t("watchlists:templates.contentPlaceholder", "Enter Jinja2 template...")}
+              />
+            </Form.Item>
+          </div>
+        )
       )
     },
     {
@@ -308,7 +532,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         </div>
       )
     }
-  ]
+  ].filter((item) => authoringMode === "advanced" || item.key !== "docs")
 
   return (
     <Modal
@@ -332,6 +556,47 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
       }
     >
       <Form form={form} layout="vertical" className="mt-4">
+        <div className="mb-4 rounded-lg border border-border bg-surface p-3">
+          <div className="mb-2 text-sm font-medium">
+            {t("watchlists:templates.modeLabel", "Editing mode")}
+          </div>
+          <Radio.Group
+            value={authoringMode}
+            onChange={(event) =>
+              handleAuthoringModeChange(event.target.value as TemplateAuthoringMode)
+            }
+            optionType="button"
+            buttonStyle="solid"
+            size="small"
+          >
+            <Radio.Button value="basic" data-testid="template-editor-mode-basic">
+              {t("watchlists:templates.modeBasic", "Basic")}
+            </Radio.Button>
+            <Radio.Button value="advanced" data-testid="template-editor-mode-advanced">
+              {t("watchlists:templates.modeAdvanced", "Advanced")}
+            </Radio.Button>
+          </Radio.Group>
+          <div className="mt-2 text-xs text-text-muted">
+            {authoringMode === "basic"
+              ? t(
+                "watchlists:templates.modeHelpBasic",
+                "Basic mode keeps editing focused on name, format, content, and preview."
+              )
+              : t(
+                "watchlists:templates.modeHelpAdvanced",
+                "Advanced mode unlocks snippets, variable docs, and version tools."
+              )}
+          </div>
+          {authoringMode === "basic" && hasAdvancedTemplateContext && (
+            <div className="mt-2 text-xs text-text-muted">
+              {t(
+                "watchlists:templates.modeHiddenToolsNotice",
+                "Advanced template tools are hidden in Basic mode. Your content and version context are preserved."
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-3 gap-4">
           <Form.Item
             name="name"
@@ -362,7 +627,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
           </Form.Item>
         </div>
 
-        {isEditing && (
+        {isEditing && authoringMode === "advanced" && (
           <>
             <Divider className="my-3" />
             <div className="mb-4 rounded-lg border border-border p-3">
@@ -404,6 +669,15 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
               )}
             </div>
           </>
+        )}
+
+        {isEditing && authoringMode === "basic" && (
+          <div className="mb-4 text-xs text-text-muted">
+            {t(
+              "watchlists:templates.modeVersionToolsHidden",
+              "Version tools are available in Advanced mode."
+            )}
+          </div>
         )}
 
         <Tabs

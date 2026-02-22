@@ -34,15 +34,21 @@ import {
   WATCHLISTS_TAB_HELP_DOCS
 } from "./shared/help-docs"
 import {
+  buildRunStateNotificationKey,
+  dedupeRunNotificationEvents,
+  groupRunNotificationEvents,
   getRunFailureHint,
+  resolveStalledRunNotification,
   resolveRunTransitionNotification,
   shouldNotifyNewTerminalRun
 } from "./RunsTab/run-notifications"
 import { trackWatchlistsIaExperimentTransition } from "@/utils/watchlists-ia-experiment-telemetry"
+import { trackWatchlistsOnboardingTelemetry } from "@/utils/watchlists-onboarding-telemetry"
 
 const RUN_NOTIFICATIONS_POLL_MS = 15_000
 const RUN_NOTIFICATIONS_PAGE_SIZE = 25
 const RUN_NOTIFICATIONS_MIN_POLL_MS = 100
+const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 const GUIDED_TOUR_STORAGE_KEY = "watchlists:guided-tour:v1"
 
 type GuidedTourTab = "sources" | "jobs" | "runs" | "items" | "outputs"
@@ -59,6 +65,9 @@ const clampTourStep = (step: number): number => {
   if (!Number.isFinite(step)) return 0
   return Math.max(0, Math.min(Math.floor(step), GUIDED_TOUR_LAST_STEP))
 }
+
+const toGuidedTourStep = (step: number): 1 | 2 | 3 | 4 | 5 =>
+  (clampTourStep(step) + 1) as 1 | 2 | 3 | 4 | 5
 
 const readGuidedTourState = (): GuidedTourState => {
   if (typeof window === "undefined") return { status: "idle", step: 0 }
@@ -118,6 +127,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
   const notification = useAntdNotification()
 
   const activeTab = useWatchlistsStore((s) => s.activeTab)
+  const overviewHealth = useWatchlistsStore((s) => s.overviewHealth)
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const resetStore = useWatchlistsStore((s) => s.resetStore)
@@ -137,12 +147,35 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     overview: t("watchlists:help.tabs.overview", "Overview guidance"),
     sources: t("watchlists:help.tabs.sources", "Feeds setup"),
     jobs: t("watchlists:help.tabs.jobs", "Monitor scheduling"),
-    runs: t("watchlists:help.tabs.runs", "Activity diagnostics"),
+    runs: t("watchlists:help.tabs.runs", "Activity guidance"),
     items: t("watchlists:help.tabs.items", "Article review"),
-    outputs: t("watchlists:help.tabs.outputs", "Report outputs"),
+    outputs: t("watchlists:help.tabs.outputs", "Reports guidance"),
     templates: t("watchlists:help.tabs.templates", "Template authoring"),
     settings: t("watchlists:help.tabs.settings", "Workspace settings")
   } as const
+
+  const taskShortcuts = [
+    {
+      key: "sources" as const,
+      label: t("watchlists:quickActions.sources", "Set up feeds")
+    },
+    {
+      key: "jobs" as const,
+      label: t("watchlists:quickActions.jobs", "Configure monitors")
+    },
+    {
+      key: "runs" as const,
+      label: t("watchlists:quickActions.runs", "Check activity")
+    },
+    {
+      key: "items" as const,
+      label: t("watchlists:quickActions.items", "Review articles")
+    },
+    {
+      key: "outputs" as const,
+      label: t("watchlists:quickActions.outputs", "View reports")
+    }
+  ]
 
   const activeTabHelpHref = WATCHLISTS_TAB_HELP_DOCS[activeTab] || WATCHLISTS_MAIN_DOCS_URL
   const activeTabHelpLabel = tabHelpLabels[activeTab] || t("watchlists:help.docs", "Watchlists docs")
@@ -153,7 +186,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.sources.title", "1. Add feeds"),
       description: t(
         "watchlists:guide.steps.sources.description",
-        "Add RSS/site sources so monitors have content to fetch."
+        "Feeds are inputs for monitors. Add RSS/site sources before scheduling runs."
       )
     },
     {
@@ -161,7 +194,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.jobs.title", "2. Create monitors"),
       description: t(
         "watchlists:guide.steps.jobs.description",
-        "Define monitor schedules and scopes for your feeds."
+        "Monitors turn feed inputs into scheduled runs and downstream outputs."
       )
     },
     {
@@ -169,7 +202,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.runs.title", "3. Check activity"),
       description: t(
         "watchlists:guide.steps.runs.description",
-        "Use Activity to inspect run status, logs, and failures."
+        "Activity shows run status, logs, and failures for each monitor."
       )
     },
     {
@@ -177,7 +210,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.items.title", "4. Review articles"),
       description: t(
         "watchlists:guide.steps.items.description",
-        "Triaging article output keeps your feed review queue clean."
+        "Articles are captured content from successful runs, ready for triage."
       )
     },
     {
@@ -185,7 +218,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       title: t("watchlists:guide.steps.outputs.title", "5. Deliver reports"),
       description: t(
         "watchlists:guide.steps.outputs.description",
-        "Use Reports for generated briefings and output verification."
+        "Reports contain generated briefings and delivery outcomes."
       )
     }
   ]
@@ -201,12 +234,17 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     setGuidedTourOpen(true)
     setShowGuidedTourCompletion(false)
     setActiveTab(GUIDED_TOUR_TABS[0])
+    void trackWatchlistsOnboardingTelemetry({ type: "guided_tour_started" })
+    void trackWatchlistsOnboardingTelemetry({ type: "guided_tour_step_viewed", step: 1 })
   }, [setActiveTab])
 
   const resumeGuidedTour = useCallback(() => {
     const step = clampTourStep(guidedTourState.step)
     setGuidedTourOpen(true)
     setActiveTab(GUIDED_TOUR_TABS[step])
+    const stepNumber = toGuidedTourStep(step)
+    void trackWatchlistsOnboardingTelemetry({ type: "guided_tour_resumed", step: stepNumber })
+    void trackWatchlistsOnboardingTelemetry({ type: "guided_tour_step_viewed", step: stepNumber })
   }, [guidedTourState.step, setActiveTab])
 
   const handleSkipGuidedTour = useCallback(() => {
@@ -215,7 +253,11 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       status: "dismissed"
     }))
     setGuidedTourOpen(false)
-  }, [])
+    void trackWatchlistsOnboardingTelemetry({
+      type: "guided_tour_dismissed",
+      step: toGuidedTourStep(guidedTourState.step)
+    })
+  }, [guidedTourState.step])
 
   const handleGuidedTourBack = useCallback(() => {
     const nextStep = clampTourStep(guidedTourState.step - 1)
@@ -228,11 +270,16 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       setGuidedTourState({ status: "completed", step: GUIDED_TOUR_LAST_STEP })
       setGuidedTourOpen(false)
       setShowGuidedTourCompletion(true)
+      void trackWatchlistsOnboardingTelemetry({ type: "guided_tour_completed" })
       return
     }
     const nextStep = clampTourStep(guidedTourState.step + 1)
     setGuidedTourState({ status: "in_progress", step: nextStep })
     setActiveTab(GUIDED_TOUR_TABS[nextStep])
+    void trackWatchlistsOnboardingTelemetry({
+      type: "guided_tour_step_viewed",
+      step: toGuidedTourStep(nextStep)
+    })
   }, [guidedTourState.step, setActiveTab])
 
   // Reset store on unmount — use ref to avoid re-firing if selector returns new reference
@@ -249,6 +296,11 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     setActiveTab("runs")
     openRunDetail(runId)
   }, [notification, openRunDetail, setActiveTab])
+
+  const openRunsTabFromNotification = useCallback((key: string) => {
+    notification.destroy(key)
+    setActiveTab("runs")
+  }, [notification, setActiveTab])
 
   const showRunNotification = useCallback((run: WatchlistRun, kind: "completed" | "failed", hint?: string | null) => {
     const key = `watchlists-run-${run.id}-${run.status}`
@@ -292,6 +344,83 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     })
   }, [notification, openRunFromNotification, t])
 
+  const showGroupedRunNotification = useCallback(
+    (group: { kind: "completed" | "failed" | "stalled"; count: number; deepLinkRunId: number; hint: string | null }) => {
+      const key = `watchlists-run-group-${group.kind}-${group.deepLinkRunId}-${group.count}`
+      const onOpenPrimaryRun = () => openRunFromNotification(group.deepLinkRunId, key)
+      const onOpenActivity = () => openRunsTabFromNotification(key)
+
+      const mode: "success" | "warning" | "error" =
+        group.kind === "failed"
+          ? "error"
+          : group.kind === "stalled"
+            ? "warning"
+            : "success"
+      const messageText =
+        group.kind === "failed"
+          ? t("watchlists:notifications.runFailedGroupedTitle", "Multiple runs failed")
+          : group.kind === "stalled"
+            ? t("watchlists:notifications.runStalledTitle", "Run appears stalled")
+            : t("watchlists:notifications.runCompletedGroupedTitle", "Runs completed")
+      const descriptionText =
+        group.kind === "failed"
+          ? t("watchlists:notifications.runFailedGroupedDescription", "{{count}} runs failed. {{hint}}", {
+              count: group.count,
+              hint: group.hint || t(
+                "watchlists:notifications.failureHints.unknownEmpty",
+                "Open run details to inspect logs and retry."
+              )
+            })
+          : group.kind === "stalled"
+            ? t("watchlists:notifications.runStalledDescription", "{{count}} runs appear stalled. {{hint}}", {
+                count: group.count,
+                hint: group.hint || t(
+                  "watchlists:notifications.failureHints.stalled",
+                  "Open Activity to inspect logs, then cancel or retry."
+                )
+              })
+            : t("watchlists:notifications.runCompletedGroupedDescription", "{{count}} runs completed successfully.", {
+                count: group.count
+              })
+
+      notification[mode]({
+        key,
+        message: messageText,
+        description: descriptionText,
+        placement: "bottomRight",
+        duration: mode === "success" ? 8 : 0,
+        onClick: onOpenPrimaryRun,
+        btn: (
+          <div className="flex items-center gap-2">
+            <Button
+              size="small"
+              type="link"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onOpenPrimaryRun()
+              }}
+            >
+              {t("watchlists:notifications.viewRun", "View run")}
+            </Button>
+            <Button
+              size="small"
+              type="link"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onOpenActivity()
+              }}
+            >
+              {t("watchlists:notifications.openActivity", "Open Activity")}
+            </Button>
+          </div>
+        )
+      })
+    },
+    [notification, openRunFromNotification, openRunsTabFromNotification, t]
+  )
+
   const pollRunNotifications = useCallback(async () => {
     try {
       const response = await fetchWatchlistRuns({
@@ -302,18 +431,28 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       const previousStatusMap = runStatusRef.current
       const nextStatusMap = new Map<number, string>()
       const initialized = initializedRunPollingRef.current
+      const nowMs = Date.now()
+      const runById = new Map<number, WatchlistRun>()
+      const candidateEvents: Array<{
+        eventKey: string
+        kind: "completed" | "failed" | "stalled"
+        runId: number
+        hint?: string | null
+      }> = []
 
       nextRuns.forEach((run) => {
+        runById.set(run.id, run)
         nextStatusMap.set(run.id, String(run.status || ""))
         const previousStatus = previousStatusMap.get(run.id)
-        const runStateKey = `${run.id}:${String(run.status || "").toLowerCase()}`
-        if (notifiedRunStatesRef.current.has(runStateKey)) return
 
         const transition = resolveRunTransitionNotification(previousStatus, run, t)
         if (initialized && transition) {
-          notifiedRunStatesRef.current.add(runStateKey)
-          showRunNotification(run, transition.kind, transition.hint)
-          return
+          candidateEvents.push({
+            eventKey: buildRunStateNotificationKey(run.id, run.status),
+            kind: transition.kind,
+            runId: run.id,
+            hint: transition.hint || null
+          })
         }
 
         if (
@@ -324,9 +463,42 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           const status = String(run.status || "").toLowerCase()
           const kind = status === "failed" ? "failed" : "completed"
           const hint = kind === "failed" ? getRunFailureHint(run.error_msg, t) : null
-          notifiedRunStatesRef.current.add(runStateKey)
-          showRunNotification(run, kind, hint)
+          candidateEvents.push({
+            eventKey: buildRunStateNotificationKey(run.id, run.status),
+            kind,
+            runId: run.id,
+            hint
+          })
         }
+
+        if (initialized) {
+          const stalled = resolveStalledRunNotification(
+            run,
+            nowMs,
+            RUN_STALLED_THRESHOLD_MS,
+            t
+          )
+          if (stalled) {
+            candidateEvents.push(stalled)
+          }
+        }
+      })
+
+      const freshEvents = dedupeRunNotificationEvents(
+        candidateEvents,
+        notifiedRunStatesRef.current
+      )
+      const groupedEvents = groupRunNotificationEvents(freshEvents)
+
+      groupedEvents.forEach((group) => {
+        if (group.count === 1 && group.kind !== "stalled") {
+          const run = runById.get(group.deepLinkRunId)
+          if (!run) return
+          const event = freshEvents.find((entry) => entry.eventKey === group.eventKeys[0])
+          showRunNotification(run, group.kind, event?.hint || group.hint)
+          return
+        }
+        showGroupedRunNotification(group)
       })
 
       runStatusRef.current = nextStatusMap
@@ -334,7 +506,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     } catch (err) {
       console.debug("Watchlists run notification polling failed:", err)
     }
-  }, [showRunNotification, t])
+  }, [showGroupedRunNotification, showRunNotification, t])
 
   useEffect(() => {
     if (!isOnline) return
@@ -350,6 +522,21 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       }
     }
   }, [isOnline, pollRunNotifications])
+
+  const overviewBadges = overviewHealth?.tabBadges || {
+    sources: 0,
+    runs: 0,
+    outputs: 0
+  }
+  const tabAttentionBadge = (count: number): React.ReactNode =>
+    count > 0 ? (
+      <span
+        className="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-semibold leading-4 text-white"
+        aria-label={t("watchlists:tabs.attentionBadgeAria", "{{count}} attention items", { count })}
+      >
+        {count > 99 ? "99+" : count}
+      </span>
+    ) : null
 
   const tabItems: TabsProps["items"] = [
     {
@@ -368,6 +555,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         <span className="flex items-center gap-2">
           <Rss className="h-4 w-4" />
           {t("watchlists:tabs.sources", "Feeds")}
+          {tabAttentionBadge(overviewBadges.sources)}
         </span>
       ),
       children: <SourcesTab />
@@ -388,6 +576,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         <span className="flex items-center gap-2">
           <Play className="h-4 w-4" />
           {t("watchlists:tabs.runs", "Activity")}
+          {tabAttentionBadge(overviewBadges.runs)}
         </span>
       ),
       children: <RunsTab />
@@ -408,6 +597,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         <span className="flex items-center gap-2">
           <FileOutput className="h-4 w-4" />
           {t("watchlists:tabs.outputs", "Reports")}
+          {tabAttentionBadge(overviewBadges.outputs)}
         </span>
       ),
       children: <OutputsTab />
@@ -552,6 +742,22 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             </div>
           )}
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-text-muted">
+            {t("watchlists:quickActions.label", "Jump to")}
+          </span>
+          {taskShortcuts.map((shortcut) => (
+            <Button
+              key={shortcut.key}
+              size="small"
+              type={activeTab === shortcut.key ? "primary" : "default"}
+              onClick={() => setActiveTab(shortcut.key)}
+              data-testid={`watchlists-task-open-${shortcut.key}`}
+            >
+              {shortcut.label}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {showGuidedTourCompletion && (
@@ -562,7 +768,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           title={t("watchlists:guide.completedTitle", "Guided tour complete")}
           description={t(
             "watchlists:guide.completedDescription",
-            "Next: monitor Activity for run health and Articles for review triage."
+            "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings."
           )}
           action={(
             <div className="flex flex-wrap gap-2">

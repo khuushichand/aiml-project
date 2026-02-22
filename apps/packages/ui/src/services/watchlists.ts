@@ -567,6 +567,14 @@ export const downloadWatchlistOutput = async (outputId: number): Promise<string>
   })
 }
 
+export const downloadWatchlistOutputBinary = async (outputId: number): Promise<ArrayBuffer> => {
+  return bgRequest<ArrayBuffer>({
+    path: `/api/v1/watchlists/outputs/${outputId}/download` as any,
+    method: "GET",
+    responseType: "arrayBuffer"
+  })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Templates API
 // ─────────────────────────────────────────────────────────────────────────────

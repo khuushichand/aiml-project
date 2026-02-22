@@ -4,6 +4,7 @@
  */
 
 import { createWithEqualityFn } from "zustand/traditional"
+import type { WatchlistsOverviewHealthModel } from "@/services/watchlists-overview"
 import type {
   WatchlistGroup,
   WatchlistJob,
@@ -82,6 +83,11 @@ interface SettingsState {
   settings: WatchlistSettings | null
   settingsLoading: boolean
   settingsError: string | null
+}
+
+interface OverviewHealthState {
+  overviewHealth: WatchlistsOverviewHealthModel | null
+  overviewHealthUpdatedAt: string | null
 }
 
 interface UIState {
@@ -171,6 +177,13 @@ interface SettingsActions {
   setSettingsError: (error: string | null) => void
 }
 
+interface OverviewHealthActions {
+  setOverviewHealth: (
+    health: WatchlistsOverviewHealthModel | null,
+    updatedAt?: string | null
+  ) => void
+}
+
 interface UIActions {
   setActiveTab: (tab: WatchlistTab) => void
   openSourceForm: (editId?: number | null) => void
@@ -196,6 +209,7 @@ export type WatchlistsState = SourcesState &
   OutputsState &
   TemplatesState &
   SettingsState &
+  OverviewHealthState &
   UIState &
   SourcesActions &
   JobsActions &
@@ -203,6 +217,7 @@ export type WatchlistsState = SourcesState &
   OutputsActions &
   TemplatesActions &
   SettingsActions &
+  OverviewHealthActions &
   UIActions
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -273,6 +288,11 @@ const initialSettingsState: SettingsState = {
   settingsError: null
 }
 
+const initialOverviewHealthState: OverviewHealthState = {
+  overviewHealth: null,
+  overviewHealthUpdatedAt: null
+}
+
 const initialUIState: UIState = {
   activeTab: "overview",
   sourceFormOpen: false,
@@ -292,6 +312,7 @@ const initialState = {
   ...initialOutputsState,
   ...initialTemplatesState,
   ...initialSettingsState,
+  ...initialOverviewHealthState,
   ...initialUIState
 }
 
@@ -446,6 +467,9 @@ export const useWatchlistsStore = createWithEqualityFn<WatchlistsState>()((set) 
   setSettings: (settings) => set({ settings }),
   setSettingsLoading: (settingsLoading) => set({ settingsLoading }),
   setSettingsError: (settingsError) => set({ settingsError }),
+
+  setOverviewHealth: (overviewHealth, overviewHealthUpdatedAt = null) =>
+    set({ overviewHealth, overviewHealthUpdatedAt }),
 
   // ─────────────────────────────────────────────────────────────────────────
   // UI Actions

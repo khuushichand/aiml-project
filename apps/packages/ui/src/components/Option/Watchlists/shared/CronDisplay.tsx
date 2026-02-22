@@ -115,14 +115,13 @@ export const CronDisplay: React.FC<CronDisplayProps> = ({
     </span>
   )
 
-  if (showTooltip) {
-    const tooltipText = `Runs on this cadence. Advanced schedule expression: ${expression}`
-    return (
-      <Tooltip title={tooltipText}>
-        {content}
-      </Tooltip>
-    )
-  }
+  const tooltipText = showTooltip
+    ? `Runs on this cadence. Advanced schedule expression: ${expression}`
+    : `Cron fields: minute hour day-of-month month day-of-week. Expression: ${expression}`
 
-  return content
+  return (
+    <Tooltip title={tooltipText}>
+      {content}
+    </Tooltip>
+  )
 }

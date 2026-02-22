@@ -55,5 +55,32 @@ describe("mapWatchlistsError", () => {
     expect(mapped.kind).toBe("rate_limit")
     expect(mapped.description).toContain("Reduce monitor frequency")
   })
-})
 
+  it("maps DNS lookup failures to host-resolution guidance", () => {
+    const mapped = mapWatchlistsError(
+      new Error("dnsResolutionError: Name resolution failed for feed host"),
+      {
+        t,
+        context: "feed preflight",
+        operationLabel: "test"
+      }
+    )
+
+    expect(mapped.kind).toBe("dns")
+    expect(mapped.description).toContain("source host resolves")
+  })
+
+  it("maps TLS failures to certificate guidance", () => {
+    const mapped = mapWatchlistsError(
+      new Error("TLS handshake failed: certificate verify failed"),
+      {
+        t,
+        context: "run retry",
+        operationLabel: "retry"
+      }
+    )
+
+    expect(mapped.kind).toBe("tls")
+    expect(mapped.description).toContain("TLS certificate settings")
+  })
+})

@@ -4,9 +4,14 @@ import {
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
   getDeliveryStatusLabel,
+  getOutputArtifactLabel,
+  getOutputArtifactTagColor,
   getOutputDeliveryStatuses,
+  getOutputFileExtension,
+  getOutputMimeType,
   getOutputTemplateName,
-  getOutputTemplateVersion
+  getOutputTemplateVersion,
+  isAudioOutput
 } from "../outputMetadata"
 
 describe("outputMetadata helpers", () => {
@@ -118,5 +123,28 @@ describe("outputMetadata helpers", () => {
       visible: deliveries,
       hidden: []
     })
+  })
+
+  it("classifies audio outputs and derives mime + extension", () => {
+    const audioOutput = { format: "mp3", type: "tts_audio" }
+    const markdownOutput = { format: "md", type: "briefing" }
+
+    expect(isAudioOutput(audioOutput)).toBe(true)
+    expect(isAudioOutput(markdownOutput)).toBe(false)
+    expect(getOutputMimeType(audioOutput.format)).toBe("audio/mpeg")
+    expect(getOutputMimeType(markdownOutput.format)).toBe("text/markdown")
+    expect(getOutputFileExtension(audioOutput)).toBe("mp3")
+    expect(getOutputFileExtension(markdownOutput)).toBe("md")
+  })
+
+  it("returns artifact labels and tag colors by output kind", () => {
+    expect(getOutputArtifactLabel({ format: "mp3", type: "tts_audio" })).toBe("Audio")
+    expect(getOutputArtifactTagColor({ format: "mp3", type: "tts_audio" })).toBe("purple")
+
+    expect(getOutputArtifactLabel({ format: "html", type: "briefing" })).toBe("HTML")
+    expect(getOutputArtifactTagColor({ format: "html", type: "briefing" })).toBe("blue")
+
+    expect(getOutputArtifactLabel({ format: "md", type: "briefing" })).toBe("Markdown")
+    expect(getOutputArtifactTagColor({ format: "md", type: "briefing" })).toBe("green")
   })
 })

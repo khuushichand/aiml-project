@@ -95,9 +95,10 @@ vi.mock("antd", () => {
   )
 
   return {
-    Alert: ({ title, description, action, children }: any) => (
+    Alert: ({ title, message, description, action, children }: any) => (
       <div>
         {title ? <div>{title}</div> : null}
+        {message ? <div>{message}</div> : null}
         {description ? <div>{description}</div> : null}
         {action}
         {children}
@@ -241,6 +242,36 @@ describe("RunDetailDrawer source column", () => {
     })
   })
 
+  it("shows mapped load failure with retry action", async () => {
+    mocks.getRunDetailsMock
+      .mockRejectedValueOnce(new Error("Failed to fetch"))
+      .mockResolvedValueOnce(baseRunDetails)
+    mocks.fetchWatchlistSourcesMock.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      size: 1000,
+      has_more: false
+    })
+
+    render(<RunDetailDrawer open runId={10} onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Could not load run details.")).toBeInTheDocument()
+      expect(screen.getByText("Check server connection and try again. Details: Failed to fetch")).toBeInTheDocument()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+    })
+
+    screen.getByRole("button", { name: "Retry" }).click()
+
+    await waitFor(() => {
+      expect(mocks.getRunDetailsMock).toHaveBeenCalledTimes(2)
+    })
+  })
+
   it("falls back to source id when source lookup data is unavailable", async () => {
     mocks.fetchWatchlistSourcesMock.mockResolvedValue({
       items: [],
@@ -304,7 +335,10 @@ describe("RunDetailDrawer source column", () => {
     render(<RunDetailDrawer open runId={10} onClose={vi.fn()} />)
 
     await waitFor(() => {
-      expect(screen.getByText("Failed to load details")).toBeInTheDocument()
+      expect(screen.getByText("Could not load run details.")).toBeInTheDocument()
+      expect(
+        screen.getByText("Retry the request. If the problem continues, review server diagnostics. Details: Failed to load details")
+      ).toBeInTheDocument()
     })
   })
 

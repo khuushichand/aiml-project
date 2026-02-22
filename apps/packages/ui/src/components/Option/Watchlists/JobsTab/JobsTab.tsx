@@ -28,7 +28,11 @@ import type { WatchlistJob } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { CronDisplay } from "../shared"
 import { JobFormModal } from "./JobFormModal"
-import { JOB_DELETE_UNDO_WINDOW_SECONDS, toJobRestoreId } from "./job-undo"
+import {
+  JOB_DELETE_UNDO_WINDOW_SECONDS,
+  resolveJobUndoWindowSeconds,
+  toJobRestoreId
+} from "./job-undo"
 import {
   buildScopeTooltipLines,
   summarizeFilters,
@@ -185,16 +189,16 @@ export const JobsTab: React.FC = () => {
         message.success(t("watchlists:jobs.deleted", "Monitor deleted"))
         return
       }
-      const undoWindowSeconds =
-        Number(deleteResult?.restore_window_seconds) > 0
-          ? Number(deleteResult.restore_window_seconds)
-          : JOB_DELETE_UNDO_WINDOW_SECONDS
+      const undoWindowSeconds = resolveJobUndoWindowSeconds(
+        deleteResult?.restore_window_seconds,
+        JOB_DELETE_UNDO_WINDOW_SECONDS
+      )
 
       showUndoNotification({
         title: t("watchlists:jobs.undoDeleteTitle", "Monitor deleted"),
         description: t(
           "watchlists:jobs.undoDeleteDescription",
-          "Undo restores this monitor for {{seconds}} seconds.",
+          "Undo restores this monitor's schedule, feed scope, and delivery settings for {{seconds}} seconds.",
           { seconds: undoWindowSeconds }
         ),
         duration: undoWindowSeconds,
@@ -202,8 +206,22 @@ export const JobsTab: React.FC = () => {
           void loadJobs()
         },
         onUndo: async () => {
-          await restoreWatchlistJob(toJobRestoreId(deletedJob))
-          await loadJobs()
+          try {
+            await restoreWatchlistJob(toJobRestoreId(deletedJob))
+          } catch (restoreErr) {
+            const restoreError = mapWatchlistsError(restoreErr, {
+              t,
+              context: t("watchlists:jobs.title", "Monitors"),
+              operationLabel: t("watchlists:errors.operation.retry", "retry"),
+              fallbackMessage: t(
+                "watchlists:jobs.undoRestoreError",
+                "Could not restore this monitor. Refresh Monitors and retry while the undo timer is active."
+              )
+            })
+            throw new Error(restoreError.description)
+          } finally {
+            await loadJobs()
+          }
         }
       })
     } catch (err) {

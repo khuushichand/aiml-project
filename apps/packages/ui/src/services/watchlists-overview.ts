@@ -1,12 +1,14 @@
 import {
   fetchScrapedItems,
   fetchWatchlistJobs,
+  fetchWatchlistOutputs,
   fetchWatchlistRuns,
   fetchWatchlistSources
 } from "@/services/watchlists"
 import type {
   PaginatedResponse,
   WatchlistJob,
+  WatchlistOutput,
   WatchlistRun,
   WatchlistSource
 } from "@/types/watchlists"
@@ -35,9 +37,35 @@ const DEGRADED_SOURCE_STATUSES = new Set([
 ])
 
 export type SourceHealthBucket = "healthy" | "degraded" | "inactive" | "unknown"
+export type OverviewHealthStatus = "healthy" | "attention" | "inactive" | "unknown"
 
 export interface WatchlistsOverviewFailedRun extends WatchlistRun {
   job_name?: string
+}
+
+export interface WatchlistsOverviewAttention {
+  total: number
+  sources: number
+  jobs: number
+  runs: number
+  outputs: number
+}
+
+export interface WatchlistsOverviewTabBadges {
+  sources: number
+  runs: number
+  outputs: number
+}
+
+export interface WatchlistsOverviewHealthModel {
+  statuses: {
+    sources: OverviewHealthStatus
+    jobs: OverviewHealthStatus
+    runs: OverviewHealthStatus
+    outputs: OverviewHealthStatus
+  }
+  attention: WatchlistsOverviewAttention
+  tabBadges: WatchlistsOverviewTabBadges
 }
 
 export interface WatchlistsOverviewData {
@@ -53,6 +81,7 @@ export interface WatchlistsOverviewData {
     total: number
     active: number
     nextRunAt: string | null
+    attention: number
   }
   items: {
     unread: number
@@ -60,8 +89,16 @@ export interface WatchlistsOverviewData {
   runs: {
     running: number
     pending: number
+    failed: number
     recentFailed: WatchlistsOverviewFailedRun[]
   }
+  outputs: {
+    total: number
+    expired: number
+    deliveryIssues: number
+    attention: number
+  }
+  health: WatchlistsOverviewHealthModel
   systemHealth: "healthy" | "degraded"
 }
 
@@ -81,6 +118,50 @@ const parseEpochMs = (value: string | null | undefined): number | null => {
   if (!value) return null
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+const DELIVERY_ATTENTION_STATUSES = new Set([
+  "failed",
+  "error",
+  "partial",
+  "warning"
+])
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+const hasDeliveryIssue = (metadata: unknown): boolean => {
+  const record = asRecord(metadata)
+  if (!record) return false
+  const deliveries = record.deliveries
+  if (Array.isArray(deliveries)) {
+    return deliveries.some((entry) => {
+      const normalized = normalizeStatus(
+        asRecord(entry)?.status as string | null | undefined
+      )
+      return DELIVERY_ATTENTION_STATUSES.has(normalized)
+    })
+  }
+  if (asRecord(deliveries)) {
+    return Object.values(deliveries).some((entry) => {
+      if (typeof entry === "string") {
+        return DELIVERY_ATTENTION_STATUSES.has(normalizeStatus(entry))
+      }
+      const normalized = normalizeStatus(
+        asRecord(entry)?.status as string | null | undefined
+      )
+      return DELIVERY_ATTENTION_STATUSES.has(normalized)
+    })
+  }
+  if (deliveries != null) {
+    const flattened = JSON.stringify(deliveries).toLowerCase()
+    for (const status of DELIVERY_ATTENTION_STATUSES) {
+      if (flattened.includes(status)) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 const fetchAllPages = async <T>(
@@ -141,6 +222,120 @@ export const getEarliestNextRunAt = (
   return earliestIso
 }
 
+const classifyOutputsAttention = (
+  outputs: Pick<WatchlistOutput, "id" | "expired" | "metadata">[]
+): { expired: number; deliveryIssues: number; attention: number } => {
+  let expired = 0
+  let deliveryIssues = 0
+  const attentionIds = new Set<number>()
+
+  outputs.forEach((output) => {
+    if (output.expired) {
+      expired += 1
+      attentionIds.add(output.id)
+    }
+    const deliveryIssue =
+      hasDeliveryIssue(output.metadata) ||
+      (() => {
+        const flattened = JSON.stringify(output).toLowerCase()
+        if (!flattened.includes("deliver")) return false
+        for (const status of DELIVERY_ATTENTION_STATUSES) {
+          if (flattened.includes(status)) {
+            return true
+          }
+        }
+        return false
+      })()
+
+    if (deliveryIssue) {
+      deliveryIssues += 1
+      attentionIds.add(output.id)
+    }
+  })
+
+  return {
+    expired,
+    deliveryIssues,
+    attention: attentionIds.size
+  }
+}
+
+export const buildOverviewHealthModel = (params: {
+  sources: { total: number; degraded: number; inactive: number }
+  jobs: { total: number; active: number; attention: number }
+  runs: { running: number; pending: number; failed: number }
+  outputs: { total: number; attention: number }
+}): WatchlistsOverviewHealthModel => {
+  const sourcesStatus: OverviewHealthStatus =
+    params.sources.degraded > 0
+      ? "attention"
+      : params.sources.total > 0 && params.sources.inactive >= params.sources.total
+        ? "inactive"
+        : params.sources.total > 0
+          ? "healthy"
+          : "unknown"
+
+  const jobsStatus: OverviewHealthStatus =
+    params.jobs.attention > 0
+      ? "attention"
+      : params.jobs.total > 0 && params.jobs.active <= 0
+        ? "inactive"
+        : params.jobs.total > 0
+          ? "healthy"
+          : "unknown"
+
+  const runsStatus: OverviewHealthStatus =
+    params.runs.failed > 0
+      ? "attention"
+      : params.runs.running + params.runs.pending > 0
+        ? "healthy"
+        : "unknown"
+
+  const outputsStatus: OverviewHealthStatus =
+    params.outputs.attention > 0
+      ? "attention"
+      : params.outputs.total > 0
+        ? "healthy"
+        : "unknown"
+
+  const attention: WatchlistsOverviewAttention = {
+    sources: Math.max(0, params.sources.degraded),
+    jobs: Math.max(0, params.jobs.attention),
+    runs: Math.max(0, params.runs.failed),
+    outputs: Math.max(0, params.outputs.attention),
+    total: 0
+  }
+  attention.total = attention.sources + attention.jobs + attention.runs + attention.outputs
+
+  return {
+    statuses: {
+      sources: sourcesStatus,
+      jobs: jobsStatus,
+      runs: runsStatus,
+      outputs: outputsStatus
+    },
+    attention,
+    tabBadges: {
+      sources: attention.sources,
+      runs: attention.runs,
+      outputs: attention.outputs
+    }
+  }
+}
+
+export const getOverviewTabBadges = (
+  model: WatchlistsOverviewHealthModel | null | undefined
+): WatchlistsOverviewTabBadges => {
+  if (!model) {
+    return {
+      sources: 0,
+      runs: 0,
+      outputs: 0
+    }
+  }
+  return model.tabBadges
+}
+
 export const fetchWatchlistsOverviewData = async (): Promise<WatchlistsOverviewData> => {
   const [
     sourcesResult,
@@ -148,14 +343,16 @@ export const fetchWatchlistsOverviewData = async (): Promise<WatchlistsOverviewD
     unreadResult,
     runningResult,
     pendingResult,
-    failedResult
+    failedResult,
+    outputsResult
   ] = await Promise.all([
     fetchAllPages((params) => fetchWatchlistSources(params)),
     fetchAllPages((params) => fetchWatchlistJobs(params)),
     fetchScrapedItems({ reviewed: false, page: 1, size: 1 }),
     fetchWatchlistRuns({ q: "running", page: 1, size: 1 }),
     fetchWatchlistRuns({ q: "pending", page: 1, size: 1 }),
-    fetchWatchlistRuns({ q: "failed", page: 1, size: 5 })
+    fetchWatchlistRuns({ q: "failed", page: 1, size: 5 }),
+    fetchWatchlistOutputs({ page: 1, size: 100 })
   ])
 
   let healthy = 0
@@ -176,6 +373,9 @@ export const fetchWatchlistsOverviewData = async (): Promise<WatchlistsOverviewD
     jobs.map((job) => [job.id, job.name])
   )
   const activeJobs = jobs.filter((job) => job.active).length
+  const jobsWithoutSchedule = jobs.filter(
+    (job) => job.active && parseEpochMs(job.next_run_at) == null
+  ).length
   const recentFailed = (Array.isArray(failedResult.items) ? failedResult.items : [])
     .slice(0, 5)
     .map((run) => ({
@@ -186,9 +386,35 @@ export const fetchWatchlistsOverviewData = async (): Promise<WatchlistsOverviewD
   const unreadTotal = asFiniteNumber(unreadResult.total, 0)
   const runningTotal = asFiniteNumber(runningResult.total, 0)
   const pendingTotal = asFiniteNumber(pendingResult.total, 0)
+  const failedTotal = asFiniteNumber(failedResult.total, recentFailed.length)
+  const outputs = Array.isArray(outputsResult.items) ? outputsResult.items : []
+  const outputsTotals = classifyOutputsAttention(outputs)
+  const outputsTotal = asFiniteNumber(outputsResult.total, outputs.length)
+
+  const health = buildOverviewHealthModel({
+    sources: {
+      total: asFiniteNumber(sourcesResult.total, sourcesResult.items.length),
+      degraded,
+      inactive
+    },
+    jobs: {
+      total: asFiniteNumber(jobsResult.total, jobs.length),
+      active: activeJobs,
+      attention: jobsWithoutSchedule
+    },
+    runs: {
+      running: runningTotal,
+      pending: pendingTotal,
+      failed: failedTotal
+    },
+    outputs: {
+      total: outputsTotal,
+      attention: outputsTotals.attention
+    }
+  })
 
   const systemHealth: "healthy" | "degraded" =
-    degraded > 0 || recentFailed.length > 0 ? "degraded" : "healthy"
+    health.attention.total > 0 ? "degraded" : "healthy"
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -202,7 +428,8 @@ export const fetchWatchlistsOverviewData = async (): Promise<WatchlistsOverviewD
     jobs: {
       total: asFiniteNumber(jobsResult.total, jobs.length),
       active: activeJobs,
-      nextRunAt: getEarliestNextRunAt(jobs)
+      nextRunAt: getEarliestNextRunAt(jobs),
+      attention: jobsWithoutSchedule
     },
     items: {
       unread: unreadTotal
@@ -210,8 +437,16 @@ export const fetchWatchlistsOverviewData = async (): Promise<WatchlistsOverviewD
     runs: {
       running: runningTotal,
       pending: pendingTotal,
+      failed: failedTotal,
       recentFailed
     },
+    outputs: {
+      total: outputsTotal,
+      expired: outputsTotals.expired,
+      deliveryIssues: outputsTotals.deliveryIssues,
+      attention: outputsTotals.attention
+    },
+    health,
     systemHealth
   }
 }

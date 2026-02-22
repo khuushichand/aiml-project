@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   Button,
@@ -27,12 +27,17 @@ import { StatusTag } from "../shared"
 import { RunDetailDrawer } from "./RunDetailDrawer"
 import { Download, Square } from "lucide-react"
 import { mapWatchlistsError } from "../shared/watchlists-error"
+import {
+  getRunFailureHint,
+  resolveStalledRunNotification
+} from "./run-notifications"
 
 const POLL_INTERVAL_MS = 5000
 const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
 const RUNS_API_PAGE_SIZE = 200
 const RUNS_CSV_SERVER_PAGE_SIZE = 1000
 const RUNS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:runs:advanced-filters:v1"
+const RUN_STALLED_THRESHOLD_MS = 45 * 60_000
 type RunsCsvTalliesMode = "none" | "per_run" | "aggregate"
 
 const resolveRunsCsvServerThreshold = (): number => {
@@ -665,6 +670,48 @@ export const RunsTab: React.FC = () => {
     .filter(Boolean)
     .join(" • ")
 
+  const runsAttention = useMemo(() => {
+    const runItems = Array.isArray(runs) ? runs : []
+    const failedRuns = runItems.filter(
+      (run) => String(run.status || "").toLowerCase() === "failed"
+    )
+    const stalledEvents = runItems
+      .map((run) =>
+        resolveStalledRunNotification(
+          run,
+          Date.now(),
+          RUN_STALLED_THRESHOLD_MS,
+          t
+        )
+      )
+      .filter((event): event is NonNullable<typeof event> => Boolean(event))
+
+    if (!failedRuns.length && !stalledEvents.length) return null
+
+    const newestFailedRun = [...failedRuns].sort((a, b) => b.id - a.id)[0] || null
+    const failedHint = newestFailedRun
+      ? getRunFailureHint(newestFailedRun.error_msg, t)
+      : null
+    const fallbackHint = stalledEvents[0]?.hint || null
+
+    return {
+      failedCount: failedRuns.length,
+      stalledCount: stalledEvents.length,
+      newestFailedRunId: newestFailedRun?.id ?? null,
+      description: t(
+        "watchlists:runs.attention.description",
+        "{{failed}} failed run{{failedPlural}} and {{stalled}} stalled run{{stalledPlural}} need review.",
+        {
+          failed: failedRuns.length,
+          failedPlural: failedRuns.length === 1 ? "" : "s",
+          stalled: stalledEvents.length,
+          stalledPlural: stalledEvents.length === 1 ? "" : "s"
+        }
+      ),
+      hint: failedHint || fallbackHint
+    }
+  }, [runs, t])
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -793,6 +840,37 @@ export const RunsTab: React.FC = () => {
       <div className="text-sm text-text-muted">
         {t("watchlists:runs.description", "View execution history and logs for your watchlist monitors.")}
       </div>
+
+      {runsAttention && (
+        <Alert
+          type="warning"
+          showIcon
+          title={t("watchlists:runs.attention.title", "Reliability attention required")}
+          description={
+            `${runsAttention.description}${runsAttention.hint ? ` ${runsAttention.hint}` : ""}`.trim()
+          }
+          action={(
+            <div className="flex flex-wrap gap-2">
+              {runsAttention.newestFailedRunId != null && (
+                <Button
+                  size="small"
+                  onClick={() => openRunDetail(runsAttention.newestFailedRunId as number)}
+                >
+                  {t("watchlists:runs.attention.viewFailedRun", "View newest failed run")}
+                </Button>
+              )}
+              {runsAttention.failedCount > 0 && runsStatusFilter !== "failed" && (
+                <Button
+                  size="small"
+                  onClick={() => setRunsStatusFilter("failed")}
+                >
+                  {t("watchlists:runs.attention.filterFailed", "Show failed runs")}
+                </Button>
+              )}
+            </div>
+          )}
+        />
+      )}
 
       {runsLoadError && (
         <Alert

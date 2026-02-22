@@ -58,10 +58,11 @@ vi.mock("antd", () => {
         {children}
       </button>
     ),
-    Alert: ({ message, description }: any) => (
+    Alert: ({ message, description, action }: any) => (
       <div>
         <span>{message}</span>
         <span>{description}</span>
+        {action}
       </div>
     ),
     message: {
@@ -180,11 +181,18 @@ describe("SourceFormModal test-source preflight", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test Feed" }))
 
     await waitFor(() => {
-      expect(mocks.messageError).toHaveBeenCalledWith("Source test failed")
-      expect(screen.getByText("Source test failed")).toBeInTheDocument()
+      expect(mocks.messageError).toHaveBeenCalledWith("Could not test feed preflight.")
+      expect(screen.getByText("Could not test feed preflight.")).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
       expect(
         screen.getByText(/Use a canonical YouTube feed URL \(channel_id or playlist_id\) and retry\./)
       ).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+
+    await waitFor(() => {
+      expect(mocks.testWatchlistSourceDraft).toHaveBeenCalledTimes(2)
     })
   })
 })

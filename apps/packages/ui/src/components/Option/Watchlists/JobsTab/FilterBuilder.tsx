@@ -95,6 +95,39 @@ const cloneFilters = (filters: WatchlistFilter[]): WatchlistFilter[] =>
     value: { ...(filter.value as Record<string, unknown>) }
   }))
 
+const FILTER_PREVIEW_PANEL_ID = "watchlists-filter-preview-panel"
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => String(entry || "").trim())
+    .filter((entry) => entry.length > 0)
+}
+
+const toStringOrNull = (value: unknown): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const formatList = (values: string[]): string => {
+  if (values.length === 0) return "—"
+  return values.join(", ")
+}
+
+const getRegexValidationError = (pattern: unknown, flags: unknown): string | null => {
+  const normalizedPattern = typeof pattern === "string" ? pattern.trim() : ""
+  const normalizedFlags = typeof flags === "string" ? flags.trim() : ""
+  if (!normalizedPattern) return null
+  try {
+    // Validate user-provided regex while preserving advanced use-cases.
+    void new RegExp(normalizedPattern, normalizedFlags)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
 export const FilterBuilder: React.FC<FilterBuilderProps> = ({
   value,
   onChange,
@@ -105,6 +138,78 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
   const [advancedMode, setAdvancedMode] = React.useState(false)
   const [advancedJson, setAdvancedJson] = React.useState("")
   const [advancedError, setAdvancedError] = React.useState<string | null>(null)
+
+  const getFilterSummary = React.useCallback(
+    (filter: WatchlistFilter): string => {
+      const filterValue = filter.value as Record<string, unknown>
+      const actionLabel = t(`watchlists:jobs.filters.action.${filter.action}`, filter.action)
+
+      if (filter.type === "keyword") {
+        const keywords = toStringArray(filterValue.keywords)
+        const matchMode = String(filterValue.match || filterValue.mode || "any")
+        const matchLabel =
+          matchMode === "all"
+            ? t("watchlists:filters.summary.matchAll", "all terms")
+            : t("watchlists:filters.summary.matchAny", "any term")
+        if (keywords.length === 0) {
+          return t("watchlists:filters.summary.keywordEmpty", "{{action}} items with no keyword terms yet.", {
+            action: actionLabel
+          })
+        }
+        return t(
+          "watchlists:filters.summary.keyword",
+          "{{action}} items containing {{keywords}} ({{matchLabel}}).",
+          {
+            action: actionLabel,
+            keywords: formatList(keywords),
+            matchLabel
+          }
+        )
+      }
+
+      if (filter.type === "author") {
+        const names = toStringArray(filterValue.names || filterValue.authors)
+        if (names.length === 0) {
+          return t("watchlists:filters.summary.authorEmpty", "{{action}} items with no author list yet.", {
+            action: actionLabel
+          })
+        }
+        return t("watchlists:filters.summary.author", "{{action}} items by {{authors}}.", {
+          action: actionLabel,
+          authors: formatList(names)
+        })
+      }
+
+      if (filter.type === "regex") {
+        const fieldKey = String(filterValue.field || "title")
+        const fieldLabel = t(`watchlists:filters.field${fieldKey.charAt(0).toUpperCase()}${fieldKey.slice(1)}`, fieldKey)
+        const pattern = toStringOrNull(filterValue.pattern) || t("watchlists:filters.summary.regexMissingPattern", "(missing pattern)")
+        const flags = toStringOrNull(filterValue.flags)
+        const renderedPattern = `/${pattern}/${flags || ""}`
+        return t("watchlists:filters.summary.regex", "{{action}} when {{field}} matches {{pattern}}.", {
+          action: actionLabel,
+          field: fieldLabel.toLowerCase(),
+          pattern: renderedPattern
+        })
+      }
+
+      if (filter.type === "date_range") {
+        const since = toStringOrNull(filterValue.since || filterValue.start) || t("watchlists:filters.summary.anyDate", "any date")
+        const until = toStringOrNull(filterValue.until || filterValue.end) || t("watchlists:filters.summary.anyDate", "any date")
+        return t("watchlists:filters.summary.dateRange", "{{action}} items published from {{since}} to {{until}}.", {
+          action: actionLabel,
+          since,
+          until
+        })
+      }
+
+      return t("watchlists:filters.summary.fallback", "{{action}} using {{type}} filter.", {
+        action: actionLabel,
+        type: filter.type
+      })
+    },
+    [t]
+  )
 
   const handleAddFilter = () => {
     onChange([...value, createEmptyFilter()])
@@ -291,36 +396,63 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
           />
         )
 
-      case "regex":
+      case "regex": {
+        const regexError = getRegexValidationError(filterValue.pattern, filterValue.flags)
         return (
-          <div className="flex-1 flex gap-2">
-            <Input
-              placeholder={t("watchlists:filters.regexPlaceholder", "Regular expression pattern")}
-              value={(filterValue.pattern as string) || ""}
-              onChange={(e) =>
-                handleUpdateFilter(index, {
-                  value: { ...filterValue, pattern: e.target.value }
-                })
-              }
-              className="flex-1"
-            />
-            <Select
-              value={(filterValue.field as string) || "title"}
-              onChange={(field) =>
-                handleUpdateFilter(index, {
-                  value: { ...filterValue, field }
-                })
-              }
-              className="w-28"
-              options={[
-                { value: "title", label: t("watchlists:filters.fieldTitle", "Title") },
-                { value: "summary", label: t("watchlists:filters.fieldSummary", "Summary") },
-                { value: "content", label: t("watchlists:filters.fieldContent", "Content") },
-                { value: "author", label: t("watchlists:filters.fieldAuthor", "Author") }
-              ]}
-            />
+          <div className="flex-1 space-y-2">
+            <div className="flex gap-2">
+              <Input
+                placeholder={t("watchlists:filters.regexPlaceholder", "Regular expression pattern")}
+                value={(filterValue.pattern as string) || ""}
+                onChange={(e) =>
+                  handleUpdateFilter(index, {
+                    value: { ...filterValue, pattern: e.target.value }
+                  })
+                }
+                className="flex-1"
+              />
+              <Select
+                value={(filterValue.field as string) || "title"}
+                onChange={(field) =>
+                  handleUpdateFilter(index, {
+                    value: { ...filterValue, field }
+                  })
+                }
+                className="w-28"
+                options={[
+                  { value: "title", label: t("watchlists:filters.fieldTitle", "Title") },
+                  { value: "summary", label: t("watchlists:filters.fieldSummary", "Summary") },
+                  { value: "content", label: t("watchlists:filters.fieldContent", "Content") },
+                  { value: "author", label: t("watchlists:filters.fieldAuthor", "Author") }
+                ]}
+              />
+              <Input
+                placeholder={t("watchlists:filters.regexFlags", "Flags")}
+                value={(filterValue.flags as string) || ""}
+                onChange={(e) =>
+                  handleUpdateFilter(index, {
+                    value: { ...filterValue, flags: e.target.value }
+                  })
+                }
+                className="w-20"
+              />
+            </div>
+            <div className="text-xs text-text-muted">
+              {t(
+                "watchlists:filters.regexExamples",
+                "Examples: sponsored|promo, (?i)breaking, \\bAI\\b"
+              )}
+            </div>
+            {regexError ? (
+              <div className="text-xs text-danger" data-testid={`filter-regex-error-${index}`}>
+                {t("watchlists:filters.regexInvalid", "Regex pattern is invalid: {{error}}", {
+                  error: regexError
+                })}
+              </div>
+            ) : null}
           </div>
         )
+      }
 
       case "date_range":
         return (
@@ -399,6 +531,18 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
           >
             {t("watchlists:filters.addPreset", "Add preset")}
           </Button>
+          {preview ? (
+            <Button
+              size="small"
+              data-testid="filter-preview-impact-button"
+              onClick={() => {
+                const node = document.getElementById(FILTER_PREVIEW_PANEL_ID)
+                node?.scrollIntoView?.({ behavior: "smooth", block: "start" })
+              }}
+            >
+              {t("watchlists:filters.previewImpact", "Preview impact")}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -451,81 +595,89 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
         value.map((filter, index) => (
           <div
             key={index}
-            className="flex items-start gap-3 p-3 border border-border rounded-lg bg-surface"
+            className="space-y-2 border border-border rounded-lg bg-surface p-3"
           >
-            {/* Filter type */}
-            <Select
-              value={filter.type}
-              onChange={(type) => handleTypeChange(index, type)}
-              className="w-28"
-              options={FILTER_TYPES}
-            />
+            <div className="flex items-start gap-3">
+              {/* Filter type */}
+              <Select
+                value={filter.type}
+                onChange={(type) => handleTypeChange(index, type)}
+                className="w-28"
+                options={FILTER_TYPES}
+              />
 
-            {/* Filter action */}
-            <Select
-              value={filter.action}
-              onChange={(action) => handleUpdateFilter(index, { action })}
-              className="w-24"
-              options={FILTER_ACTIONS.map((a) => ({
-                ...a,
-                label: (
-                  <Tag color={a.color} className="m-0">
-                    {a.label}
-                  </Tag>
-                )
-              }))}
-            />
+              {/* Filter action */}
+              <Select
+                value={filter.action}
+                onChange={(action) => handleUpdateFilter(index, { action })}
+                className="w-24"
+                options={FILTER_ACTIONS.map((a) => ({
+                  ...a,
+                  label: (
+                    <Tag color={a.color} className="m-0">
+                      {a.label}
+                    </Tag>
+                  )
+                }))}
+              />
 
-            <InputNumber
-              min={0}
-              value={typeof filter.priority === "number" ? filter.priority : null}
-              onChange={(priority) =>
-                handleUpdateFilter(index, {
-                  priority: typeof priority === "number" ? priority : undefined
-                })
-              }
-              className="w-24"
-              size="small"
-              placeholder={t("watchlists:filters.priority", "Priority")}
-            />
-
-            {/* Filter value (type-specific) */}
-            {renderFilterValue(filter, index)}
-
-            {/* Active toggle and delete */}
-            <div className="flex items-center gap-2">
-              <Tooltip title={t("watchlists:filters.moveUp", "Move up")}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ArrowUp className="h-4 w-4" />}
-                  onClick={() => handleMoveFilter(index, -1)}
-                  disabled={index === 0}
-                />
-              </Tooltip>
-              <Tooltip title={t("watchlists:filters.moveDown", "Move down")}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ArrowDown className="h-4 w-4" />}
-                  onClick={() => handleMoveFilter(index, 1)}
-                  disabled={index === value.length - 1}
-                />
-              </Tooltip>
-              <Switch
-                checked={filter.is_active !== false}
-                onChange={(checked) =>
-                  handleUpdateFilter(index, { is_active: checked })
+              <InputNumber
+                min={0}
+                value={typeof filter.priority === "number" ? filter.priority : null}
+                onChange={(priority) =>
+                  handleUpdateFilter(index, {
+                    priority: typeof priority === "number" ? priority : undefined
+                  })
                 }
+                className="w-24"
                 size="small"
+                placeholder={t("watchlists:filters.priority", "Priority")}
               />
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<Trash2 className="h-4 w-4" />}
-                onClick={() => handleRemoveFilter(index)}
-              />
+
+              {/* Filter value (type-specific) */}
+              {renderFilterValue(filter, index)}
+
+              {/* Active toggle and delete */}
+              <div className="flex items-center gap-2">
+                <Tooltip title={t("watchlists:filters.moveUp", "Move up")}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ArrowUp className="h-4 w-4" />}
+                    onClick={() => handleMoveFilter(index, -1)}
+                    disabled={index === 0}
+                  />
+                </Tooltip>
+                <Tooltip title={t("watchlists:filters.moveDown", "Move down")}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ArrowDown className="h-4 w-4" />}
+                    onClick={() => handleMoveFilter(index, 1)}
+                    disabled={index === value.length - 1}
+                  />
+                </Tooltip>
+                <Switch
+                  checked={filter.is_active !== false}
+                  onChange={(checked) =>
+                    handleUpdateFilter(index, { is_active: checked })
+                  }
+                  size="small"
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<Trash2 className="h-4 w-4" />}
+                  onClick={() => handleRemoveFilter(index)}
+                />
+              </div>
+            </div>
+            <div
+              className="rounded-md border border-border/70 bg-background px-2 py-1 text-xs text-text-muted"
+              data-testid={`filter-rule-summary-${index}`}
+            >
+              {getFilterSummary(filter)}
             </div>
           </div>
         ))
@@ -541,7 +693,11 @@ export const FilterBuilder: React.FC<FilterBuilderProps> = ({
       </Button>
 
       {preview && (
-        <div className="rounded-lg border border-border bg-surface p-3" data-testid="filter-preview-panel">
+        <div
+          id={FILTER_PREVIEW_PANEL_ID}
+          className="rounded-lg border border-border bg-surface p-3"
+          data-testid="filter-preview-panel"
+        >
           <div className="text-xs font-medium text-text-muted">
             {t("watchlists:filters.preview.title", "Sample filter preview")}
           </div>

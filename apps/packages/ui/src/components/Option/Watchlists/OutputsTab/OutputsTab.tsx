@@ -29,7 +29,8 @@ import {
   fetchWatchlistJobs,
   fetchWatchlistOutputs,
   fetchWatchlistTemplates,
-  downloadWatchlistOutput
+  downloadWatchlistOutput,
+  downloadWatchlistOutputBinary
 } from "@/services/watchlists"
 import type { WatchlistJob, WatchlistOutput, WatchlistTemplate } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
@@ -39,9 +40,14 @@ import {
   buildRegenerateOutputRequest,
   getDeliveryStatusColor,
   getDeliveryStatusLabel,
+  getOutputArtifactLabel,
+  getOutputArtifactTagColor,
   getOutputDeliveryStatuses,
+  getOutputFileExtension,
+  getOutputMimeType,
   getOutputTemplateName,
-  getOutputTemplateVersion
+  getOutputTemplateVersion,
+  isAudioOutput
 } from "./outputMetadata"
 
 const OUTPUTS_ADVANCED_FILTERS_STORAGE_KEY = "watchlists:outputs:advanced-filters:v1"
@@ -189,13 +195,14 @@ export const OutputsTab: React.FC = () => {
   // Handle download
   const handleDownload = async (output: WatchlistOutput) => {
     try {
-      const content = await downloadWatchlistOutput(output.id)
-      const mimeType = output.format === "html" ? "text/html" : "text/markdown"
-      const blob = new Blob([content], { type: mimeType })
+      const mimeType = getOutputMimeType(output.format)
+      const blob = isAudioOutput(output)
+        ? new Blob([await downloadWatchlistOutputBinary(output.id)], { type: mimeType })
+        : new Blob([await downloadWatchlistOutput(output.id)], { type: mimeType })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `${output.title || `output-${output.id}`}.${output.format}`
+      a.download = `${output.title || `output-${output.id}`}.${getOutputFileExtension(output)}`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -266,8 +273,11 @@ export const OutputsTab: React.FC = () => {
       key: "title",
       ellipsis: true,
       render: (title: string | null, record) => (
-        <span className="font-medium">
-          {title || `Output #${record.id}`}
+        <span className="inline-flex items-center gap-2">
+          <span className="font-medium">{title || `Output #${record.id}`}</span>
+          <Tag color={getOutputArtifactTagColor(record)}>
+            {getOutputArtifactLabel(record)}
+          </Tag>
         </span>
       )
     },
@@ -296,9 +306,9 @@ export const OutputsTab: React.FC = () => {
       dataIndex: "format",
       key: "format",
       width: 100,
-      render: (format: string) => (
-        <Tag color={format === "html" ? "blue" : "green"}>
-          {format.toUpperCase()}
+      render: (_format: string, record) => (
+        <Tag color={getOutputArtifactTagColor(record)}>
+          {getOutputArtifactLabel(record)}
         </Tag>
       )
     },

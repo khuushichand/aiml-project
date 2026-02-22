@@ -11,6 +11,19 @@ export interface DeliveryDisclosureSummary {
   hidden: DeliveryStatusSummary[]
 }
 
+const AUDIO_OUTPUT_FORMATS = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac", "opus"])
+const OUTPUT_MIME_TYPES: Record<string, string> = {
+  md: "text/markdown",
+  html: "text/html",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  flac: "audio/flac",
+  opus: "audio/ogg"
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
@@ -27,6 +40,60 @@ const asPositiveInteger = (value: unknown): number | undefined => {
 
 const getMetadataRecord = (metadata: unknown): Record<string, unknown> | null =>
   isRecord(metadata) ? metadata : null
+
+const normalizeOutputFormat = (format: unknown): string =>
+  asNonEmptyString(format)?.toLowerCase() || ""
+
+const isAudioTypeHint = (typeValue: unknown): boolean => {
+  const normalized = asNonEmptyString(typeValue)?.toLowerCase() || ""
+  return normalized.includes("audio") || normalized.includes("tts")
+}
+
+export const isAudioOutput = (
+  output: Pick<WatchlistOutput, "format" | "type"> | null | undefined
+): boolean => {
+  if (!output) return false
+  const normalizedFormat = normalizeOutputFormat(output.format)
+  return AUDIO_OUTPUT_FORMATS.has(normalizedFormat) || isAudioTypeHint(output.type)
+}
+
+export const getOutputMimeType = (format: unknown): string => {
+  const normalized = normalizeOutputFormat(format)
+  return OUTPUT_MIME_TYPES[normalized] || "application/octet-stream"
+}
+
+export const getOutputFileExtension = (
+  output: Pick<WatchlistOutput, "format" | "type"> | null | undefined
+): string => {
+  if (!output) return "txt"
+  const normalizedFormat = normalizeOutputFormat(output.format)
+  if (normalizedFormat.length > 0) return normalizedFormat
+  if (isAudioTypeHint(output.type)) return "mp3"
+  return "txt"
+}
+
+export const getOutputArtifactLabel = (
+  output: Pick<WatchlistOutput, "format" | "type"> | null | undefined
+): string => {
+  if (!output) return "Output"
+  if (isAudioOutput(output)) return "Audio"
+  const normalized = normalizeOutputFormat(output.format)
+  if (normalized === "html") return "HTML"
+  if (normalized === "md" || normalized === "markdown") return "Markdown"
+  if (normalized.length > 0) return normalized.toUpperCase()
+  return "Output"
+}
+
+export const getOutputArtifactTagColor = (
+  output: Pick<WatchlistOutput, "format" | "type"> | null | undefined
+): string => {
+  if (!output) return "default"
+  if (isAudioOutput(output)) return "purple"
+  const normalized = normalizeOutputFormat(output.format)
+  if (normalized === "html") return "blue"
+  if (normalized === "md" || normalized === "markdown") return "green"
+  return "default"
+}
 
 export const getOutputTemplateName = (metadata: unknown): string | undefined => {
   const record = getMetadataRecord(metadata)

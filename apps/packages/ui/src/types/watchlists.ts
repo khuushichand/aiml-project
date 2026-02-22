@@ -100,6 +100,12 @@ export interface JobScope {
 }
 
 export interface JobOutputPrefs {
+  generate_audio?: boolean
+  target_audio_minutes?: number
+  audio_voice?: string
+  audio_speed?: number
+  background_audio_uri?: string
+  voice_map?: Record<string, string>
   retention?: {
     default_seconds?: number
     temporary_seconds?: number
@@ -262,7 +268,7 @@ export interface ScrapedItemUpdate {
 // Output Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type OutputFormat = "md" | "html"
+export type OutputFormat = "md" | "html" | "mp3" | "wav" | "ogg" | "m4a" | "aac" | "flac" | string
 
 export interface WatchlistOutput {
   id: number

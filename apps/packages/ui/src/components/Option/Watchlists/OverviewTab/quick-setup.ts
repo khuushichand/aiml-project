@@ -5,6 +5,7 @@ import type {
 } from "@/types/watchlists"
 
 export type QuickSetupSchedulePreset = "none" | "hourly" | "daily" | "weekdays"
+export type QuickSetupGoal = "briefing" | "triage"
 
 export interface QuickSetupValues {
   sourceName: string
@@ -13,6 +14,7 @@ export interface QuickSetupValues {
   monitorName: string
   schedulePreset: QuickSetupSchedulePreset
   runNow: boolean
+  setupGoal: QuickSetupGoal
 }
 
 export const QUICK_SETUP_DEFAULT_VALUES: QuickSetupValues = {
@@ -21,7 +23,8 @@ export const QUICK_SETUP_DEFAULT_VALUES: QuickSetupValues = {
   sourceType: "rss",
   monitorName: "",
   schedulePreset: "daily",
-  runNow: true
+  runNow: true,
+  setupGoal: "briefing"
 }
 
 const presetToCron: Record<Exclude<QuickSetupSchedulePreset, "none">, string> = {
@@ -55,11 +58,21 @@ export const toQuickSetupSourcePayload = (
 })
 
 export const toQuickSetupJobPayload = (
-  values: Pick<QuickSetupValues, "monitorName" | "schedulePreset">,
+  values: Pick<QuickSetupValues, "monitorName" | "schedulePreset" | "setupGoal">,
   sourceId: number
-): WatchlistJobCreate => ({
-  name: String(values.monitorName || "").trim(),
-  scope: { sources: [sourceId] },
-  active: true,
-  ...resolveQuickSetupSchedule(values.schedulePreset || "daily")
-})
+): WatchlistJobCreate => {
+  const payload: WatchlistJobCreate = {
+    name: String(values.monitorName || "").trim(),
+    scope: { sources: [sourceId] },
+    active: true,
+    ...resolveQuickSetupSchedule(values.schedulePreset || "daily")
+  }
+
+  if ((values.setupGoal || "briefing") === "briefing") {
+    payload.output_prefs = {
+      template_name: "briefing_md"
+    }
+  }
+
+  return payload
+}

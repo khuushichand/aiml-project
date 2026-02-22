@@ -34,6 +34,7 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { RunDetailResponse, ScrapedItem } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
+import { mapWatchlistsError } from "../shared/watchlists-error"
 import { classifyRunFailure, getRunFailureHint } from "./run-notifications"
 
 interface RunDetailDrawerProps {
@@ -59,7 +60,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const { t } = useTranslation(["watchlists", "common"])
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<RunDetailResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ReturnType<typeof mapWatchlistsError> | null>(null)
   const [itemsLoading, setItemsLoading] = useState(false)
   const [items, setItems] = useState<ScrapedItem[]>([])
   const [itemsTotal, setItemsTotal] = useState(0)
@@ -75,6 +76,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const [retryingRun, setRetryingRun] = useState(false)
   const [sourceNamesById, setSourceNamesById] = useState<Record<number, string>>({})
   const wsRef = useRef<WebSocket | null>(null)
+  const translationRef = useRef(t)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttemptRef = useRef(0)
   const manuallyClosedRef = useRef(false)
@@ -183,25 +185,40 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   }, [data?.status])
 
   useEffect(() => {
+    translationRef.current = t
+  }, [t])
+
+  const loadRunDetails = useCallback(async () => {
+    if (!runId) return
+    const translate = translationRef.current
+    setLoading(true)
+    setError(null)
+    setStreamError(null)
+    setCancelState("idle")
+    try {
+      const result = await getRunDetails(runId)
+      setData(result)
+    } catch (err) {
+      console.error("Failed to fetch run details:", err)
+      setError(
+        mapWatchlistsError(err, {
+          t: translate,
+          context: translate("watchlists:runs.detail.context", "run details"),
+          fallbackMessage: translate(
+            "watchlists:runs.detail.loadError",
+            "Failed to load details"
+          ),
+          operationLabel: translate("watchlists:errors.operation.load", "load")
+        })
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [runId])
+
+  useEffect(() => {
     if (open && runId) {
-      setLoading(true)
-      setError(null)
-      setStreamError(null)
-      setCancelState("idle")
-      getRunDetails(runId)
-        .then((result) => {
-          setData(result)
-        })
-        .catch((err) => {
-          console.error("Failed to fetch run details:", err)
-          setError(
-            err?.message ||
-              t("watchlists:runs.detail.loadError", "Failed to load details")
-          )
-        })
-        .finally(() => {
-          setLoading(false)
-        })
+      void loadRunDetails()
     } else {
       setData(null)
       setError(null)
@@ -209,7 +226,7 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       setStreamError(null)
       setLastStreamEventAt(null)
     }
-  }, [open, runId])
+  }, [open, runId, loadRunDetails])
 
   useEffect(() => {
     let active = true
@@ -986,7 +1003,21 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
           <Spin size="large" />
         </div>
       ) : error ? (
-        <div className="text-center py-12 text-danger">{error}</div>
+        <Alert
+          type={error.severity}
+          showIcon
+          message={error.title}
+          description={error.description}
+          action={(
+            <Button
+              size="small"
+              type="primary"
+              onClick={() => void loadRunDetails()}
+            >
+              {t("watchlists:errors.retry", "Retry")}
+            </Button>
+          )}
+        />
       ) : data ? (
         <Tabs items={tabItems} />
       ) : null}

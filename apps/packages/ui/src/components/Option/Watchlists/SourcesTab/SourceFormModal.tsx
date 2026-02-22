@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 import { testWatchlistSource, testWatchlistSourceDraft } from "@/services/watchlists"
 import type { JobPreviewResult } from "@/types/watchlists"
 import type { WatchlistSource, SourceType } from "@/types/watchlists"
+import { mapWatchlistsError } from "../shared/watchlists-error"
 
 interface SourceFormModalProps {
   open: boolean
@@ -170,14 +171,21 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
       }
       console.error("Source test failed:", err)
       const fallback = t("watchlists:sources.form.testSourceError", "Source test failed")
-      const detailed =
-        err && typeof err === "object" && "message" in err && typeof err.message === "string"
-          ? err.message
-          : fallback
+      const mapped = mapWatchlistsError(err, {
+        t,
+        context: t("watchlists:sources.form.testSourceContext", "feed preflight"),
+        fallbackMessage: fallback,
+        operationLabel: t("watchlists:errors.operation.test", "test")
+      })
       setTestResult(null)
-      setTestError(detailed)
-      setTestErrorHint(resolveTestSourceErrorHint(detailed, t))
-      message.error(fallback)
+      setTestError(mapped.title)
+      const contextualHint = resolveTestSourceErrorHint(mapped.rawMessage, t)
+      setTestErrorHint(`${mapped.description} ${contextualHint}`.trim())
+      if (mapped.severity === "warning") {
+        message.warning(mapped.title)
+      } else {
+        message.error(mapped.title)
+      }
     } finally {
       setTestingSource(false)
     }
@@ -301,8 +309,17 @@ export const SourceFormModal: React.FC<SourceFormModalProps> = ({
             <Alert
               type="error"
               showIcon
-              message={t("watchlists:sources.form.testSourceError", "Source test failed")}
-              description={testErrorHint ? `${testError} ${testErrorHint}` : testError}
+              message={testError}
+              description={testErrorHint || testError}
+              action={(
+                <Button
+                  size="small"
+                  onClick={() => void handleTestSource()}
+                  loading={testingSource}
+                >
+                  {t("watchlists:errors.retry", "Retry")}
+                </Button>
+              )}
             />
           )}
         </div>

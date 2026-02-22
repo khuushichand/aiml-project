@@ -15,7 +15,8 @@ describe("watchlists overview quick setup helpers", () => {
       sourceType: "rss",
       monitorName: "",
       schedulePreset: "daily",
-      runNow: true
+      runNow: true,
+      setupGoal: "briefing"
     })
   })
 
@@ -78,7 +79,8 @@ describe("watchlists overview quick setup helpers", () => {
       toQuickSetupJobPayload(
         {
           monitorName: " Morning Monitor ",
-          schedulePreset: "daily"
+          schedulePreset: "daily",
+          setupGoal: "triage"
         },
         42
       )
@@ -90,7 +92,26 @@ describe("watchlists overview quick setup helpers", () => {
       timezone: "UTC"
     })
 
+    expect(
+      toQuickSetupJobPayload(
+        {
+          monitorName: " Morning Monitor ",
+          schedulePreset: "daily",
+          setupGoal: "briefing"
+        },
+        42
+      )
+    ).toEqual({
+      name: "Morning Monitor",
+      scope: { sources: [42] },
+      active: true,
+      schedule_expr: "0 8 * * *",
+      timezone: "UTC",
+      output_prefs: {
+        template_name: "briefing_md"
+      }
+    })
+
     timezoneSpy.mockRestore()
   })
 })
-

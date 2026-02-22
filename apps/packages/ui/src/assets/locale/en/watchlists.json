@@ -14,7 +14,16 @@
     "outputs": "Reports",
     "templates": "Templates",
     "settings": "Settings",
-    "moreViews": "More views"
+    "moreViews": "More views",
+    "attentionBadgeAria": "{{count}} attention items"
+  },
+  "quickActions": {
+    "label": "Jump to",
+    "sources": "Set up feeds",
+    "jobs": "Configure monitors",
+    "runs": "Check activity",
+    "items": "Review articles",
+    "outputs": "View reports"
   },
   "overview": {
     "description": "At-a-glance watchlist health, activity, and failure signals.",
@@ -30,9 +39,17 @@
       "degradedTitle": "System requires attention",
       "degradedDescription": "Some sources or recent runs show failures. Open failed runs to investigate."
     },
+    "attention": {
+      "title": "Attention needed",
+      "description": "Open the highest-risk surfaces directly from here.",
+      "sources": "Feeds need review ({{count}})",
+      "runs": "Failed activity runs ({{count}})",
+      "outputs": "Reports with delivery issues ({{count}})",
+      "jobs": "Monitors need schedule fixes ({{count}})"
+    },
     "onboarding": {
       "title": "Quick setup",
-      "pipeline": "Add Feed -> Create Monitor -> Review Results",
+      "pipeline": "Add Feed -> Configure Monitor -> Check Activity -> Review Articles -> View Reports",
       "steps": {
         "addFeed": {
           "title": "Add your first feed",
@@ -44,7 +61,7 @@
         },
         "reviewResults": {
           "title": "Review results",
-          "description": "Open Articles for content and Activity for run diagnostics."
+          "description": "Open Activity for run health, Articles for captured content, and Reports for generated briefings."
         }
       },
       "cta": {
@@ -66,7 +83,12 @@
           "sourceType": "Feed type",
           "monitorName": "Monitor name",
           "schedule": "Schedule",
+          "setupGoal": "Setup goal",
           "runNow": "Run immediately"
+        },
+        "goal": {
+          "briefing": "Generate briefing reports",
+          "triage": "Feed review only"
         },
         "placeholders": {
           "sourceName": "e.g., Daily Tech Feed",
@@ -90,6 +112,7 @@
           "feed": "Feed",
           "monitor": "Monitor",
           "schedule": "Schedule",
+          "goal": "Goal",
           "runNow": "Run now"
         },
         "reviewDescription": "Confirm your setup, then create your feed and monitor.",
@@ -97,6 +120,7 @@
           "finish": "Create setup"
         },
         "created": "Quick setup complete. Feed and monitor created.",
+        "createdBriefing": "Quick setup complete. Feed and monitor created for briefing reports.",
         "createdAndRunning": "Quick setup complete. Your first run has started.",
         "error": "Failed to complete quick setup."
       }
@@ -126,7 +150,7 @@
         "unread": "Unread"
       },
       "runs": {
-        "title": "Run Queue",
+        "title": "Activity",
         "running": "Running",
         "pending": "Pending {{count}}"
       }
@@ -149,44 +173,52 @@
     "finish": "Finish",
     "progress": "Step {{current}} of {{total}}",
     "completedTitle": "Guided tour complete",
-    "completedDescription": "Next: monitor Activity for run health and Articles for review triage.",
+    "completedDescription": "Next: monitor Activity for run health, review Articles for captured content, and open Reports for generated briefings.",
     "openActivity": "Open Activity",
     "openArticles": "Open Articles",
     "steps": {
       "sources": {
         "title": "1. Add feeds",
-        "description": "Add RSS/site sources so monitors have content to fetch."
+        "description": "Feeds are inputs for monitors. Add RSS/site sources before scheduling runs."
       },
       "jobs": {
         "title": "2. Create monitors",
-        "description": "Define monitor schedules and scopes for your feeds."
+        "description": "Monitors turn feed inputs into scheduled runs and downstream outputs."
       },
       "runs": {
         "title": "3. Check activity",
-        "description": "Use Activity to inspect run status, logs, and failures."
+        "description": "Activity shows run status, logs, and failures for each monitor."
       },
       "items": {
         "title": "4. Review articles",
-        "description": "Triaging article output keeps your feed review queue clean."
+        "description": "Articles are captured content from successful runs, ready for triage."
       },
       "outputs": {
         "title": "5. Deliver reports",
-        "description": "Use Reports for generated briefings and output verification."
+        "description": "Reports contain generated briefings and delivery outcomes."
       }
     }
   },
   "notifications": {
     "viewRun": "View run",
+    "openActivity": "Open Activity",
     "runCompletedTitle": "Run completed",
     "runCompletedDescription": "Run #{{id}} completed successfully.",
+    "runCompletedGroupedTitle": "Runs completed",
+    "runCompletedGroupedDescription": "{{count}} runs completed successfully.",
     "runFailedTitle": "Run failed",
     "runFailedDescription": "Run #{{id}} failed. {{hint}}",
+    "runFailedGroupedTitle": "Multiple runs failed",
+    "runFailedGroupedDescription": "{{count}} runs failed. {{hint}}",
+    "runStalledTitle": "Run appears stalled",
+    "runStalledDescription": "{{count}} runs appear stalled. {{hint}}",
     "failureHints": {
       "auth": "Source may require authentication. Verify credentials or access rules.",
       "rateLimit": "Source is rate-limiting requests. Reduce schedule frequency and retry.",
       "timeout": "The source request timed out. Retry, or lower concurrency for this source.",
       "dns": "Source host could not be resolved. Verify the source URL and DNS availability.",
       "tls": "TLS/SSL validation failed. Verify certificate chain or endpoint URL.",
+      "stalled": "Run appears stalled after {{minutes}} minutes. Open Activity to inspect logs, then cancel or retry.",
       "network": "Source could not be reached. Check connectivity and endpoint availability.",
       "unknownEmpty": "Open run details to inspect logs and retry.",
       "unknown": "Open run details to inspect logs and adjust source or filter settings."
@@ -195,7 +227,10 @@
   "errors": {
     "retry": "Retry",
     "operation": {
-      "load": "load"
+      "load": "load",
+      "save": "save",
+      "test": "test",
+      "retry": "retry"
     },
     "title": "Could not {{operation}} {{context}}.",
     "details": "Details: {{message}}",
@@ -203,6 +238,8 @@
       "auth": "Verify your login/API key permissions for {{context}}, then retry.",
       "rateLimit": "Reduce monitor frequency or wait briefly before retrying.",
       "timeout": "Retry now. If this continues, reduce scope or schedule intensity.",
+      "dns": "Verify the source host resolves correctly and retry.",
+      "tls": "Verify TLS certificate settings for the endpoint and retry.",
       "network": "Check server connection and try again.",
       "server": "Retry in a moment. If this keeps failing, check server logs.",
       "notFound": "Refresh the list and confirm the requested records still exist.",
@@ -219,9 +256,9 @@
       "overview": "Overview guidance",
       "sources": "Feeds setup",
       "jobs": "Monitor scheduling",
-      "runs": "Activity diagnostics",
+      "runs": "Activity guidance",
       "items": "Article review",
-      "outputs": "Report outputs",
+      "outputs": "Reports guidance",
       "templates": "Template authoring",
       "settings": "Workspace settings"
     },
@@ -269,10 +306,12 @@
     "updated": "Feed updated",
     "deleted": "Feed deleted",
     "undoDeleteTitle": "Feed deleted",
-    "undoDeleteDescription": "Undo restores this feed for {{seconds}} seconds.",
+    "undoDeleteDescription": "Undo restores this feed's tags, groups, and active state for {{seconds}} seconds.",
     "undoBulkDeleteTitle": "{{count}} feeds deleted",
-    "undoBulkDeleteDescription": "Undo restores deleted feeds for {{seconds}} seconds.",
-    "undoBulkRestorePartialError": "{{restored}} restored, {{failed}} failed to restore",
+    "undoBulkDeleteDescription": "Undo restores deleted feeds, tags, groups, and active states for {{seconds}} seconds.",
+    "undoBulkDeleteVariableWindowHint": "Some feeds expire sooner; use Undo before this timer ends.",
+    "undoBulkRestorePartialError": "{{restored}} restored, {{failed}} failed to restore. Refresh Feeds and retry while the undo timer is active.",
+    "undoRestoreError": "Could not restore this feed. Refresh Feeds and retry while the undo timer is active.",
     "enabled": "Feed enabled",
     "disabled": "Feed disabled",
     "deleteConfirm": "Delete this feed?",
@@ -447,7 +486,8 @@
     "updated": "Monitor updated",
     "deleted": "Monitor deleted",
     "undoDeleteTitle": "Monitor deleted",
-    "undoDeleteDescription": "Undo restores this monitor for {{seconds}} seconds.",
+    "undoDeleteDescription": "Undo restores this monitor's schedule, feed scope, and delivery settings for {{seconds}} seconds.",
+    "undoRestoreError": "Could not restore this monitor. Refresh Monitors and retry while the undo timer is active.",
     "enabled": "Monitor enabled",
     "disabled": "Monitor disabled",
     "runTriggered": "Run triggered",
@@ -482,11 +522,31 @@
       "scope": "Feeds to Include",
       "scopeRequired": "Please select at least one feed, group, or tag",
       "scopeRemediation": "Select at least one feed, group, or tag before saving.",
+      "modeLabel": "Setup mode",
+      "modeBasic": "Basic",
+      "modeAdvanced": "Advanced",
+      "modeHelpBasic": "Basic mode hides optional filters and delivery fine-tuning so you can set up a monitor faster.",
+      "modeHelpAdvanced": "Advanced mode exposes all scheduling, filtering, retention, and delivery controls.",
+      "modeHiddenSettingsNotice": "Advanced settings are preserved and will still apply, but they are hidden in Basic mode.",
       "scheduleTooFrequent": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
+      "scheduleRequiredForBasic": "Set a schedule before continuing to review.",
       "schedule": "Schedule",
       "emailRecipientsInvalidInline": "Invalid addresses: {{emails}}",
       "emailRecipientsInvalidSubmit": "Fix invalid email recipients before saving.",
       "emailRecipientsRemediation": "Remove or correct invalid recipient addresses.",
+      "audioBriefing": "Audio briefing",
+      "audioVoice": "Voice",
+      "audioSpeed": "Speed",
+      "audioTargetMinutes": "Target duration (minutes)",
+      "audioHint": "Enable spoken briefings alongside text outputs. Keep defaults for fastest setup.",
+      "showAudioAdvanced": "Show advanced audio options",
+      "hideAudioAdvanced": "Hide advanced audio options",
+      "audioBackgroundTrack": "Background track URI",
+      "audioBackgroundTrackPlaceholder": "file:///path/to/bed.mp3",
+      "audioVoiceMap": "Voice map (JSON)",
+      "audioVoiceMapPlaceholder": "{ \"HOST\": \"af_heart\", \"REPORTER\": \"am_adam\" }",
+      "audioVoiceMapInvalid": "Voice map must be valid JSON with marker-to-voice string pairs.",
+      "audioAdvancedHint": "Use advanced options only if you need soundtrack mixing or custom speaker-to-voice assignments.",
       "filters": "Filters",
       "presetMeceMd": "Structured review (Markdown)",
       "retentionDefault": "Default retention",
@@ -516,6 +576,20 @@
         "notScheduled": "Not scheduled",
         "filtersConfigured": "{{count}} filters configured",
         "noFilters": "No filters configured"
+      },
+      "steps": {
+        "scope": "Scope",
+        "schedule": "Schedule",
+        "output": "Output",
+        "review": "Review",
+        "back": "Back",
+        "next": "Next",
+        "reviewTitle": "Review monitor setup",
+        "reviewScope": "Scope",
+        "reviewSchedule": "Schedule",
+        "reviewOutput": "Output template",
+        "reviewAudio": "Audio briefing",
+        "reviewHint": "Use Create/Save to finalize this monitor."
       }
     },
     "noFeeds": "No feeds selected",
@@ -546,9 +620,13 @@
   "filters": {
     "noFilters": "No filters configured. All items will be included.",
     "addFilter": "Add Filter",
+    "previewImpact": "Preview impact",
     "keywordsPlaceholder": "Enter keywords",
     "authorsPlaceholder": "Enter author names",
     "regexPlaceholder": "Regular expression pattern",
+    "regexFlags": "Flags",
+    "regexExamples": "Examples: sponsored|promo, (?i)breaking, \\bAI\\b",
+    "regexInvalid": "Regex pattern is invalid: {{error}}",
     "matchAny": "Match any",
     "matchAll": "Match all",
     "fieldTitle": "Title",
@@ -563,6 +641,19 @@
       "summary": "{{ingestable}} ingestable, {{filtered}} filtered from {{total}} sample items.",
       "empty": "No sample candidates available.",
       "unavailable": "Sample preview unavailable."
+    },
+    "summary": {
+      "matchAny": "any term",
+      "matchAll": "all terms",
+      "keyword": "{{action}} items containing {{keywords}} ({{matchLabel}}).",
+      "keywordEmpty": "{{action}} items with no keyword terms yet.",
+      "author": "{{action}} items by {{authors}}.",
+      "authorEmpty": "{{action}} items with no author list yet.",
+      "regex": "{{action}} when {{field}} matches {{pattern}}.",
+      "regexMissingPattern": "(missing pattern)",
+      "dateRange": "{{action}} items published from {{since}} to {{until}}.",
+      "anyDate": "any date",
+      "fallback": "{{action}} using {{type}} filter."
     },
     "help": "Filters determine which items are included, excluded, or flagged during monitor runs. Include filters require at least one match."
   },
@@ -606,6 +697,16 @@
     },
     "advancedLabel": "Advanced cron expression",
     "advancedHint": "Enable only if presets cannot express the cadence you need.",
+    "cronFieldOrderHint": "Field order: minute hour day-of-month month day-of-week.",
+    "cronFieldCountError": "Use exactly 5 cron fields: minute hour day-of-month month day-of-week.",
+    "cronInvalidTokenError": "Cron tokens can only include letters, numbers, *, /, -, ?, and comma.",
+    "examplesTitle": "Quick examples",
+    "examplesHint": "Choose one, then adjust values if you need a different cadence.",
+    "examples": {
+      "daily0900": "Daily 09:00",
+      "weekdays0800": "Weekdays 08:00",
+      "every6hours": "Every 6 hours"
+    },
     "tooFrequent": "Schedule is too frequent. Minimum interval is every {{minutes}} minutes.",
     "tooFrequentRemediation": "Increase schedule interval to meet the minimum cadence.",
     "helpSimple": "Pick a schedule preset above. You can switch to Advanced cron for uncommon timing patterns.",
@@ -632,6 +733,12 @@
     "activeFiltersJob": "Monitor: {{name}}",
     "activeFiltersStatus": "Status: {{status}}",
     "metricsHint": "Showing core columns. Use advanced mode for run metrics.",
+    "attention": {
+      "title": "Reliability attention required",
+      "description": "{{failed}} failed run{{failedPlural}} and {{stalled}} stalled run{{stalledPlural}} need review.",
+      "viewFailedRun": "View newest failed run",
+      "filterFailed": "Show failed runs"
+    },
     "autoRefreshing": "Auto-refreshing",
     "lastRefreshed": "Last refreshed {{time}}",
     "exportOptions": "Export options",
@@ -796,7 +903,7 @@
     }
   },
   "outputs": {
-    "title": "Outputs",
+    "title": "Reports",
     "description": "Generated briefings and reports from your watchlist monitors.",
     "totalItems": "{{total}} outputs",
     "fetchError": "Failed to load outputs",
@@ -814,6 +921,9 @@
     "deliveryOverflowCount": "+{{count}} more",
     "noContent": "No content available",
     "openInNewTab": "Open in new tab",
+    "storagePath": "Stored file",
+    "audioPlayerLabel": "Audio playback",
+    "audioPlayerUnsupported": "Your browser does not support audio playback.",
     "rendered": "Rendered",
     "source": "Source",
     "regenerate": "Regenerate",
@@ -864,6 +974,32 @@
     "contentPlaceholder": "Enter Jinja2 template...",
     "namePlaceholder": "my-briefing-template",
     "descriptionPlaceholder": "Optional description...",
+    "modeLabel": "Editing mode",
+    "modeBasic": "Basic",
+    "modeAdvanced": "Advanced",
+    "modeHelpBasic": "Basic mode keeps editing focused on name, format, content, and preview.",
+    "modeHelpAdvanced": "Advanced mode unlocks snippets, variable docs, and version tools.",
+    "modeHiddenToolsNotice": "Advanced template tools are hidden in Basic mode. Your content and version context are preserved.",
+    "modeVersionToolsHidden": "Version tools are available in Advanced mode.",
+    "modeBasicEditorHint": "Basic mode uses a simplified editor. Switch to Advanced for snippets, variable docs, and validation markers.",
+    "recipe": {
+      "title": "Recipe builder",
+      "recipeType": "Template recipe",
+      "apply": "Apply recipe",
+      "applied": "Template recipe applied.",
+      "briefingMd": "Briefing (Markdown)",
+      "briefingMdDescription": "Daily digest layout with summary and per-item entries.",
+      "newsletterHtml": "Newsletter (HTML)",
+      "newsletterHtmlDescription": "Email-friendly HTML brief with linked story sections.",
+      "meceMd": "MECE analysis (Markdown)",
+      "meceMdDescription": "Groups developments into distinct categories for analysis.",
+      "options": {
+        "includeExecutiveSummary": "Include executive summary section",
+        "includeLinks": "Include source links",
+        "includePublishedAt": "Include published timestamp",
+        "includeTags": "Include item tags"
+      }
+    },
     "columns": {
       "name": "Name",
       "description": "Description",

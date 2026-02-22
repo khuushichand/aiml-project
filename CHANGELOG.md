@@ -27,6 +27,35 @@ and this project adheres to Some kind of Versioning
   - `Docs/Plans/IMPLEMENTATION_PLAN_persona_unsaved_draft_locale_rollout_stage23_2026_02_22.md`
   - `Docs/Plans/IMPLEMENTATION_PLAN_persona_memory_namespace_fallback_stage24_2026_02_22.md`
   - `Docs/Plans/IMPLEMENTATION_PLAN_persona_namespace_legacy_backfill_stage25_2026_02_22.md`
+- Watchlists UX IA/onboarding improvements:
+  - Aligned user-facing Watchlists terminology for Activity/Reports across tabs, overview cards, and help labels.
+  - Added always-visible Watchlists task shortcuts (`Set up feeds`, `Configure monitors`, `Check activity`, `Review articles`, `View reports`) for direct navigation.
+  - Expanded guided quick setup with goal selection (`Generate briefing reports` vs `Feed review only`) and destination routing to Reports when briefing setup completes without run-now.
+  - Refreshed guided-tour copy to explicitly explain feed -> monitor -> activity -> articles -> reports pipeline relationships.
+  - Added onboarding telemetry capture for quick setup and guided tour funnels to measure step completion and drop-off.
+- Watchlists briefing/audio delivery UX improvements:
+  - Added audio briefing controls in monitor configuration for voice, speed, and target duration with safe range normalization.
+  - Added monitor authoring modes (`Basic` vs `Advanced`) to reduce first-run form complexity while preserving advanced state in payloads.
+  - Added template editor authoring modes (`Basic` vs `Advanced`) to separate focused editing from expert tools (snippets/docs/version tools).
+  - Added Basic-mode template recipe builder with structured presets (`briefing_md`, `newsletter_html`, `mece_md`) and one-click recipe application.
+  - Added explicit warning when advanced monitor settings are hidden by switching back to Basic mode.
+  - Added advanced filter scaffolding with per-rule plain-language summaries, regex examples/flags, and inline regex validation feedback.
+  - Added early `Preview impact` action in filter authoring to expose sample ingestion outcomes sooner in the workflow.
+  - Added advanced cron scaffolding with five-field guidance, invalid-format hints, and one-click schedule examples (`Daily 09:00`, `Weekdays 08:00`, `Every 6 hours`).
+  - Added monitor/template authoring telemetry for start, mode-switch, save, Basic-step completion, and recipe-application adoption tracking.
+  - Added a unified Watchlists overview health model with cross-tab attention badges (Feeds/Activity/Reports) and direct "attention needed" deep links from Overview.
+  - Extended watchlists output prefs typing to include audio briefing fields used by backend workflow orchestration.
+  - Improved Outputs artifact visibility with explicit Markdown/HTML/Audio badges in table rows.
+  - Added binary-safe audio output download support to prevent corrupted MP3 delivery.
+  - Added in-drawer audio playback for generated audio outputs alongside existing text/HTML preview flows.
+  - Hardened live RSS E2E briefing tests to current Watchlists response contracts (`run.stats.*`, source-preview `total/items`) and validated UC2 real-feed flow end-to-end.
+  - Added regression coverage for audio monitor payload behavior, output artifact metadata classification, and drawer audio preview rendering.
+- Watchlists reliability/remediation UX improvements:
+  - Standardized monitor/source/run error remediation copy via shared `mapWatchlistsError` usage in source test preflight, run detail load failures, and monitor save fallback handling.
+  - Added DNS/TLS-specific remediation mapping and locale keys to reduce ambiguous failure handling.
+  - Added direct retry affordances on source preflight and run-detail load failure surfaces with regression coverage.
+  - Added grouped run notification fan-in with dedupe and deep-link payloads to prevent repeated toast spam during multi-run failure bursts.
+  - Added stalled-run detection in notification polling and a persistent Runs-tab reliability attention banner with direct run/filter actions.
 
 ### Changed
 

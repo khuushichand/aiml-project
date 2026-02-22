@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
   return {
     fetchWatchlistRunsMock: vi.fn(),
     recordWatchlistsIaExperimentTelemetryMock: vi.fn(),
+    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     notificationDestroyMock: vi.fn(),
     state
   }
@@ -98,7 +99,8 @@ vi.mock("@/hooks/useAntdNotification", () => ({
   useAntdNotification: () => ({
     destroy: mocks.notificationDestroyMock,
     success: vi.fn(),
-    error: vi.fn()
+    error: vi.fn(),
+    warning: vi.fn()
   })
 }))
 
@@ -110,6 +112,11 @@ vi.mock("@/services/watchlists", () => ({
   fetchWatchlistRuns: (...args: any[]) => mocks.fetchWatchlistRunsMock(...args),
   recordWatchlistsIaExperimentTelemetry: (...args: any[]) =>
     mocks.recordWatchlistsIaExperimentTelemetryMock(...args)
+}))
+
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
 }))
 
 vi.mock("@/store/watchlists", () => ({
@@ -153,6 +160,7 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     mocks.state.activeTab = "sources"
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
+    mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = false
     localStorage.removeItem("beta-dismissed:watchlists")
     localStorage.removeItem("watchlists:guided-tour:v1")
@@ -198,13 +206,26 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     fireEvent.click(screen.getByTestId("watchlists-start-guide"))
     expect(screen.getByText("Watchlists guided tour")).toBeInTheDocument()
     expect(screen.getByText("Step 1 of 5")).toBeInTheDocument()
+    expect(
+      screen.getByText("Feeds are inputs for monitors. Add RSS/site sources before scheduling runs.")
+    ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument()
+    expect(
+      screen.getByText("Monitors turn feed inputs into scheduled runs and downstream outputs.")
+    ).toBeInTheDocument()
 
     const persisted = JSON.parse(localStorage.getItem("watchlists:guided-tour:v1") || "{}")
     expect(persisted.status).toBe("in_progress")
     expect(persisted.step).toBe(1)
+    expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "guided_tour_started"
+    })
+    expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "guided_tour_step_viewed",
+      step: 1
+    })
 
     unmount()
     render(<WatchlistsPlaygroundPage />)
@@ -213,6 +234,10 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     fireEvent.click(screen.getByTestId("watchlists-resume-guide"))
     expect(screen.getByText("Watchlists guided tour")).toBeInTheDocument()
     expect(screen.getByText("Step 2 of 5")).toBeInTheDocument()
+    expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "guided_tour_resumed",
+      step: 2
+    })
   })
 
   it("marks guided tour complete and shows completion notice", () => {
@@ -228,5 +253,8 @@ describe("WatchlistsPlaygroundPage help surfaces", () => {
     expect(screen.getByText("Guided tour complete")).toBeInTheDocument()
     const persisted = JSON.parse(localStorage.getItem("watchlists:guided-tour:v1") || "{}")
     expect(persisted.status).toBe("completed")
+    expect(mocks.trackWatchlistsOnboardingTelemetryMock).toHaveBeenCalledWith({
+      type: "guided_tour_completed"
+    })
   })
 })

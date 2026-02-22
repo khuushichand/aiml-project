@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 import type { WatchlistSource } from "@/types/watchlists"
 import {
+  resolveBulkSourceUndoWindow,
+  resolveSourceUndoWindowSeconds,
   restoreDeletedSources,
   toSourceRestoreId
 } from "../source-undo"
@@ -53,5 +55,32 @@ describe("source undo helpers", () => {
 
     expect(restore).toHaveBeenCalledTimes(2)
     expect(summary).toEqual({ restored: 0, failed: 2 })
+  })
+
+  it("resolves undo window seconds and falls back on invalid values", () => {
+    expect(resolveSourceUndoWindowSeconds(18)).toBe(18)
+    expect(resolveSourceUndoWindowSeconds("12")).toBe(12)
+    expect(resolveSourceUndoWindowSeconds(0)).toBe(10)
+    expect(resolveSourceUndoWindowSeconds(undefined)).toBe(10)
+    expect(resolveSourceUndoWindowSeconds(-5, 22)).toBe(22)
+  })
+
+  it("picks the shortest backend undo window for bulk deletes", () => {
+    const summary = resolveBulkSourceUndoWindow([
+      { restore_window_seconds: 20 },
+      { restore_window_seconds: 12 },
+      { restore_window_seconds: "15" }
+    ])
+
+    expect(summary).toEqual({ seconds: 12, hasMixedWindows: true })
+  })
+
+  it("uses fallback undo window when bulk responses omit valid windows", () => {
+    const summary = resolveBulkSourceUndoWindow(
+      [{ restore_window_seconds: 0 }, { restore_window_seconds: undefined }],
+      25
+    )
+
+    expect(summary).toEqual({ seconds: 25, hasMixedWindows: false })
   })
 })

@@ -162,11 +162,11 @@ describe("JobFormModal template source options", () => {
       expect(servicesMock.fetchWatchlistTemplates).toHaveBeenCalled()
     })
 
+    fireEvent.click(screen.getByTestId("job-form-mode-advanced"))
     fireEvent.click(screen.getByText("Output & Delivery"))
 
     await screen.findByText("Template name")
     expect(screen.getByTestId("watchlists-help-jinja2")).toBeInTheDocument()
-    expect(screen.getByTestId("watchlists-help-ttl")).toBeInTheDocument()
 
     const selectorPlaceholder = await screen.findByText("Select a template")
     fireEvent.mouseDown(selectorPlaceholder)

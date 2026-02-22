@@ -35,6 +35,7 @@ import {
 } from "@/services/watchlists"
 import {
   fetchWatchlistsOverviewData,
+  getOverviewTabBadges,
   type WatchlistsOverviewData
 } from "@/services/watchlists-overview"
 import { formatRelativeTime } from "@/utils/dateFormatters"
@@ -44,12 +45,17 @@ import {
   toQuickSetupJobPayload,
   toQuickSetupSourcePayload
 } from "./quick-setup"
+import {
+  trackWatchlistsOnboardingTelemetry,
+  type WatchlistsQuickSetupStep
+} from "@/utils/watchlists-onboarding-telemetry"
 
 const OVERVIEW_REFRESH_INTERVAL_MS = 30_000
 const QUICK_SETUP_MAX_STEP = 2
+const QUICK_SETUP_STEP_KEYS: WatchlistsQuickSetupStep[] = ["feed", "monitor", "review"]
 const QUICK_SETUP_STEP_FIELDS: Array<Array<keyof QuickSetupValues>> = [
   ["sourceName", "sourceUrl", "sourceType"],
-  ["monitorName", "schedulePreset", "runNow"],
+  ["monitorName", "schedulePreset", "setupGoal", "runNow"],
   []
 ]
 
@@ -66,6 +72,8 @@ export const OverviewTab: React.FC = () => {
   const [quickSetupForm] = Form.useForm<QuickSetupValues>()
 
   const setActiveTab = useWatchlistsStore((s) => s.setActiveTab)
+  const setRunsStatusFilter = useWatchlistsStore((s) => s.setRunsStatusFilter)
+  const setOverviewHealth = useWatchlistsStore((s) => s.setOverviewHealth)
   const openRunDetail = useWatchlistsStore((s) => s.openRunDetail)
   const openSourceForm = useWatchlistsStore((s) => s.openSourceForm)
   const openJobForm = useWatchlistsStore((s) => s.openJobForm)
@@ -79,6 +87,9 @@ export const OverviewTab: React.FC = () => {
     try {
       const result = await fetchWatchlistsOverviewData()
       setData(result)
+      if (typeof setOverviewHealth === "function") {
+        setOverviewHealth(result.health, result.fetchedAt)
+      }
       setError(null)
     } catch (err) {
       console.error("Failed to load watchlists overview:", err)
@@ -87,7 +98,7 @@ export const OverviewTab: React.FC = () => {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [t])
+  }, [setOverviewHealth, t])
 
   useEffect(() => {
     void loadOverview(true)
@@ -132,10 +143,26 @@ export const OverviewTab: React.FC = () => {
     setActiveTab("runs")
   }, [setActiveTab])
 
+  const handleOpenFailedRuns = useCallback(() => {
+    if (typeof setRunsStatusFilter === "function") {
+      setRunsStatusFilter("failed")
+    }
+    setActiveTab("runs")
+  }, [setActiveTab, setRunsStatusFilter])
+
+  const handleOpenAttentionOutputs = useCallback(() => {
+    setActiveTab("outputs")
+  }, [setActiveTab])
+
+  const handleOpenAttentionSources = useCallback(() => {
+    setActiveTab("sources")
+  }, [setActiveTab])
+
   const openQuickSetup = useCallback(() => {
     quickSetupForm.setFieldsValue(QUICK_SETUP_DEFAULT_VALUES)
     setQuickSetupStep(0)
     setQuickSetupOpen(true)
+    void trackWatchlistsOnboardingTelemetry({ type: "quick_setup_opened" })
   }, [quickSetupForm])
 
   const closeQuickSetup = useCallback(() => {
@@ -144,11 +171,31 @@ export const OverviewTab: React.FC = () => {
     quickSetupForm.resetFields()
   }, [quickSetupForm])
 
+  const getQuickSetupStepKey = useCallback(
+    (step: number): WatchlistsQuickSetupStep => {
+      const clamped = Math.max(0, Math.min(step, QUICK_SETUP_MAX_STEP))
+      return QUICK_SETUP_STEP_KEYS[clamped]
+    },
+    []
+  )
+
+  const cancelQuickSetup = useCallback(() => {
+    void trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_cancelled",
+      step: getQuickSetupStepKey(quickSetupStep)
+    })
+    closeQuickSetup()
+  }, [closeQuickSetup, getQuickSetupStepKey, quickSetupStep])
+
   const handleQuickSetupNext = useCallback(async () => {
     const fields = QUICK_SETUP_STEP_FIELDS[quickSetupStep] || []
     if (fields.length > 0) {
       await quickSetupForm.validateFields(fields)
     }
+    void trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_step_completed",
+      step: getQuickSetupStepKey(quickSetupStep)
+    })
     if (quickSetupStep === 0) {
       const sourceName = String(quickSetupForm.getFieldValue("sourceName") || "").trim()
       const monitorName = String(quickSetupForm.getFieldValue("monitorName") || "").trim()
@@ -159,13 +206,18 @@ export const OverviewTab: React.FC = () => {
       }
     }
     setQuickSetupStep((prev) => Math.min(prev + 1, QUICK_SETUP_MAX_STEP))
-  }, [quickSetupForm, quickSetupStep, t])
+  }, [getQuickSetupStepKey, quickSetupForm, quickSetupStep, t])
 
   const handleQuickSetupBack = useCallback(() => {
     setQuickSetupStep((prev) => Math.max(prev - 1, 0))
   }, [])
 
   const completeQuickSetup = useCallback(async () => {
+    const currentStep = getQuickSetupStepKey(quickSetupStep)
+    void trackWatchlistsOnboardingTelemetry({
+      type: "quick_setup_step_completed",
+      step: currentStep
+    })
     try {
       const values = {
         ...QUICK_SETUP_DEFAULT_VALUES,
@@ -193,6 +245,11 @@ export const OverviewTab: React.FC = () => {
               "watchlists:overview.onboarding.quickSetup.createdAndRunning",
               "Quick setup complete. Your first run has started."
             )
+          : values.setupGoal === "briefing"
+            ? t(
+                "watchlists:overview.onboarding.quickSetup.createdBriefing",
+                "Quick setup complete. Feed and monitor created for briefing reports."
+              )
           : t(
               "watchlists:overview.onboarding.quickSetup.created",
               "Quick setup complete. Feed and monitor created."
@@ -205,11 +262,35 @@ export const OverviewTab: React.FC = () => {
       if (runId != null) {
         setActiveTab("runs")
         openRunDetail(runId)
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_completed",
+          goal: values.setupGoal,
+          runNow: true,
+          destination: "runs"
+        })
+      } else if (values.setupGoal === "briefing") {
+        setActiveTab("outputs")
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_completed",
+          goal: values.setupGoal,
+          runNow: false,
+          destination: "outputs"
+        })
       } else {
         setActiveTab("jobs")
+        void trackWatchlistsOnboardingTelemetry({
+          type: "quick_setup_completed",
+          goal: values.setupGoal,
+          runNow: false,
+          destination: "jobs"
+        })
       }
     } catch (err) {
       console.error("Failed to complete quick setup:", err)
+      void trackWatchlistsOnboardingTelemetry({
+        type: "quick_setup_failed",
+        step: currentStep
+      })
       message.error(
         t(
           "watchlists:overview.onboarding.quickSetup.error",
@@ -219,10 +300,20 @@ export const OverviewTab: React.FC = () => {
     } finally {
       setQuickSetupSubmitting(false)
     }
-  }, [closeQuickSetup, loadOverview, openRunDetail, quickSetupForm, setActiveTab, t])
+  }, [
+    closeQuickSetup,
+    getQuickSetupStepKey,
+    loadOverview,
+    openRunDetail,
+    quickSetupForm,
+    quickSetupStep,
+    setActiveTab,
+    t
+  ])
 
   const quickSetupValues = Form.useWatch([], quickSetupForm) as Partial<QuickSetupValues> | undefined
   const quickSetupIsLastStep = quickSetupStep >= QUICK_SETUP_MAX_STEP
+  const overviewBadges = getOverviewTabBadges(data?.health)
 
   if (loading && !data) {
     return (
@@ -358,6 +449,65 @@ export const OverviewTab: React.FC = () => {
             }
           />
 
+          {data.health.attention.total > 0 && (
+            <Card
+              size="small"
+              title={t("watchlists:overview.attention.title", "Attention needed")}
+            >
+              <p className="mb-3 text-sm text-text-muted">
+                {t(
+                  "watchlists:overview.attention.description",
+                  "Open the highest-risk surfaces directly from here."
+                )}
+              </p>
+              <Space wrap>
+                {overviewBadges.sources > 0 && (
+                  <Button
+                    danger
+                    onClick={handleOpenAttentionSources}
+                    data-testid="watchlists-overview-attention-sources"
+                  >
+                    {t("watchlists:overview.attention.sources", "Feeds need review ({{count}})", {
+                      count: overviewBadges.sources
+                    })}
+                  </Button>
+                )}
+                {overviewBadges.runs > 0 && (
+                  <Button
+                    danger
+                    onClick={handleOpenFailedRuns}
+                    data-testid="watchlists-overview-attention-runs"
+                  >
+                    {t("watchlists:overview.attention.runs", "Failed activity runs ({{count}})", {
+                      count: overviewBadges.runs
+                    })}
+                  </Button>
+                )}
+                {overviewBadges.outputs > 0 && (
+                  <Button
+                    danger
+                    onClick={handleOpenAttentionOutputs}
+                    data-testid="watchlists-overview-attention-outputs"
+                  >
+                    {t("watchlists:overview.attention.outputs", "Reports with delivery issues ({{count}})", {
+                      count: overviewBadges.outputs
+                    })}
+                  </Button>
+                )}
+                {data.jobs.attention > 0 && (
+                  <Button
+                    onClick={handleOpenJobs}
+                    data-testid="watchlists-overview-attention-jobs"
+                  >
+                    {t("watchlists:overview.attention.jobs", "Monitors need schedule fixes ({{count}})", {
+                      count: data.jobs.attention
+                    })}
+                  </Button>
+                )}
+              </Space>
+            </Card>
+          )}
+
           {data.sources.total > 0 && data.jobs.total > 0 && (
             <Alert
               showIcon
@@ -478,7 +628,7 @@ export const OverviewTab: React.FC = () => {
                   ) : (
                     <CheckCircle2 className="h-4 w-4 text-success" />
                   )}
-                  {t("watchlists:overview.cards.runs.title", "Run Queue")}
+                  {t("watchlists:overview.cards.runs.title", "Activity")}
                 </span>
               )}
               extra={(
@@ -556,13 +706,13 @@ export const OverviewTab: React.FC = () => {
       <Modal
         open={quickSetupOpen}
         title={t("watchlists:overview.onboarding.quickSetup.title", "Guided quick setup")}
-        onCancel={quickSetupSubmitting ? undefined : closeQuickSetup}
+        onCancel={quickSetupSubmitting ? undefined : cancelQuickSetup}
         destroyOnHidden
         maskClosable={!quickSetupSubmitting}
         footer={[
           <Button
             key="cancel"
-            onClick={closeQuickSetup}
+            onClick={cancelQuickSetup}
             disabled={quickSetupSubmitting}
           >
             {t("common:cancel", "Cancel")}
@@ -751,6 +901,30 @@ export const OverviewTab: React.FC = () => {
                 </Form.Item>
 
                 <Form.Item
+                  label={t("watchlists:overview.onboarding.quickSetup.fields.setupGoal", "Setup goal")}
+                  name="setupGoal"
+                >
+                  <Select
+                    options={[
+                      {
+                        value: "briefing",
+                        label: t(
+                          "watchlists:overview.onboarding.quickSetup.goal.briefing",
+                          "Generate briefing reports"
+                        )
+                      },
+                      {
+                        value: "triage",
+                        label: t(
+                          "watchlists:overview.onboarding.quickSetup.goal.triage",
+                          "Feed review only"
+                        )
+                      }
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item
                   label={t("watchlists:overview.onboarding.quickSetup.fields.runNow", "Run immediately")}
                   name="runNow"
                   valuePropName="checked"
@@ -795,6 +969,17 @@ export const OverviewTab: React.FC = () => {
                         : quickSetupValues?.schedulePreset === "weekdays"
                           ? t("watchlists:overview.onboarding.quickSetup.schedule.weekdays", "Weekdays at 08:00")
                           : t("watchlists:overview.onboarding.quickSetup.schedule.none", "Manual only")}
+                  </p>
+                  <p>
+                    <span className="font-medium">
+                      {t("watchlists:overview.onboarding.quickSetup.review.goal", "Goal")}:
+                    </span>{" "}
+                    {quickSetupValues?.setupGoal === "triage"
+                      ? t("watchlists:overview.onboarding.quickSetup.goal.triage", "Feed review only")
+                      : t(
+                          "watchlists:overview.onboarding.quickSetup.goal.briefing",
+                          "Generate briefing reports"
+                        )}
                   </p>
                   <p>
                     <span className="font-medium">

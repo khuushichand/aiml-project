@@ -3,6 +3,8 @@ import { formatErrorMessage } from "@/utils/format-error-message"
 type ErrorSeverity = "warning" | "error"
 type ErrorKind =
   | "network"
+  | "dns"
+  | "tls"
   | "timeout"
   | "auth"
   | "rate_limit"
@@ -101,6 +103,22 @@ const classifyError = (status: number | null, rawMessage: string): ErrorKind => 
   }
 
   if (
+    normalized.includes("dnsresolutionerror") ||
+    normalized.includes("name resolution") ||
+    normalized.includes("dns")
+  ) {
+    return "dns"
+  }
+
+  if (
+    normalized.includes("tls") ||
+    normalized.includes("ssl") ||
+    normalized.includes("certificate")
+  ) {
+    return "tls"
+  }
+
+  if (
     normalized.includes("timeout") ||
     normalized.includes("timed out") ||
     normalized.includes("aborterror")
@@ -163,6 +181,20 @@ const getNextStep = (
     return t(
       "watchlists:errors.next.timeout",
       "Retry now. If this continues, reduce scope or schedule intensity.",
+      { context }
+    )
+  }
+  if (kind === "dns") {
+    return t(
+      "watchlists:errors.next.dns",
+      "Verify the source host resolves correctly and retry.",
+      { context }
+    )
+  }
+  if (kind === "tls") {
+    return t(
+      "watchlists:errors.next.tls",
+      "Verify TLS certificate settings for the endpoint and retry.",
       { context }
     )
   }
@@ -230,4 +262,3 @@ export const mapWatchlistsError = (
     rawMessage
   }
 }
-

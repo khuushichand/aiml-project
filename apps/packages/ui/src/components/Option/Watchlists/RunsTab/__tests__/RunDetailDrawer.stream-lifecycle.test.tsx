@@ -99,9 +99,10 @@ vi.mock("antd", () => {
   )
 
   return {
-    Alert: ({ title, description, action, children }: any) => (
+    Alert: ({ title, message, description, action, children }: any) => (
       <div>
         {title ? <div>{title}</div> : null}
+        {message ? <div>{message}</div> : null}
         {description ? <div>{description}</div> : null}
         {action}
         {children}

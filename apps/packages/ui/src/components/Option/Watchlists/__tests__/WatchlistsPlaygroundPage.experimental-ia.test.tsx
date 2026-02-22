@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
   return {
     fetchWatchlistRunsMock: vi.fn(),
     recordWatchlistsIaExperimentTelemetryMock: vi.fn(),
+    trackWatchlistsOnboardingTelemetryMock: vi.fn(),
     notificationDestroyMock: vi.fn(),
     state
   }
@@ -86,7 +87,8 @@ vi.mock("@/hooks/useAntdNotification", () => ({
   useAntdNotification: () => ({
     destroy: mocks.notificationDestroyMock,
     success: vi.fn(),
-    error: vi.fn()
+    error: vi.fn(),
+    warning: vi.fn()
   })
 }))
 
@@ -98,6 +100,11 @@ vi.mock("@/services/watchlists", () => ({
   fetchWatchlistRuns: (...args: any[]) => mocks.fetchWatchlistRunsMock(...args),
   recordWatchlistsIaExperimentTelemetry: (...args: any[]) =>
     mocks.recordWatchlistsIaExperimentTelemetryMock(...args)
+}))
+
+vi.mock("@/utils/watchlists-onboarding-telemetry", () => ({
+  trackWatchlistsOnboardingTelemetry: (...args: any[]) =>
+    mocks.trackWatchlistsOnboardingTelemetryMock(...args)
 }))
 
 vi.mock("@/store/watchlists", () => ({
@@ -140,6 +147,7 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     vi.clearAllMocks()
     mocks.fetchWatchlistRunsMock.mockResolvedValue({ items: [], total: 0, has_more: false })
     mocks.recordWatchlistsIaExperimentTelemetryMock.mockResolvedValue({ accepted: true })
+    mocks.trackWatchlistsOnboardingTelemetryMock.mockResolvedValue(undefined)
     mocks.state.activeTab = "sources"
     localStorage.removeItem(IA_STORAGE_KEY)
     ;(window as { __TLDW_WATCHLISTS_IA_EXPERIMENT__?: unknown }).__TLDW_WATCHLISTS_IA_EXPERIMENT__ = true
@@ -174,6 +182,18 @@ describe("WatchlistsPlaygroundPage experimental IA", () => {
     render(<WatchlistsPlaygroundPage />)
 
     expect(screen.getByTestId("watchlists-tab-templates")).toBeInTheDocument()
+  })
+
+  it("keeps task shortcuts visible and opens hidden tabs from those shortcuts", () => {
+    render(<WatchlistsPlaygroundPage />)
+
+    fireEvent.click(screen.getByTestId("watchlists-task-open-jobs"))
+    fireEvent.click(screen.getByTestId("watchlists-task-open-items"))
+    fireEvent.click(screen.getByTestId("watchlists-task-open-outputs"))
+
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("jobs")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("items")
+    expect(mocks.state.setActiveTab).toHaveBeenCalledWith("outputs")
   })
 
   it("records tab transition telemetry when experiment mode is active", () => {
